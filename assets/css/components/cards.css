@@ -1,0 +1,69 @@
+/* ===== CARDS Y CONTENEDORES ===== */
+.main-card {
+  border-radius: 1.5rem;
+  background-color: white;
+  margin-top: 1rem;
+  margin-left: 0.5rem;
+  margin-right: 0.5rem;
+}
+
+.card-content {
+  border-radius: 1rem;
+  border: 2px solid var(--color-blue-500);
+  box-shadow: var(--shadow-sm);
+}
+
+.pagination-container {
+  margin-top: 1rem;
+  padding-bottom: 1rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.controls-container {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.toggle-container {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.toggle-label {
+  font-size: 0.75rem;
+  color: var(--color-gray-500);
+}
+
+/* Menú contextual */
+.context-menu {
+  position: fixed;
+  background-color: white;
+  box-shadow: var(--shadow-lg);
+  border-radius: 0.375rem;
+  border: 1px solid var(--color-gray-200);
+  z-index: 50;
+  width: 12rem;
+}
+
+.context-menu-item {
+  width: 100%;
+  text-align: left;
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  color: var(--color-gray-700);
+  background: none;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.context-menu-item:hover {
+  background-color: var(--color-blue-50);
+  color: var(--color-blue-600);
+}

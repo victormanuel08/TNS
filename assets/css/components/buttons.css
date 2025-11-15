@@ -1,0 +1,121 @@
+/* ===== BOTONES FLOTANTES ===== */
+.floating-button-container {
+  position: fixed;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 40;
+  height: 8rem;
+  width: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.3s ease;
+}
+
+.floating-button-container.left {
+  left: 0.5rem;
+}
+
+.floating-button-container.right {
+  right: 0.5rem;
+}
+
+.floating-button-container.hidden {
+  opacity: 0;
+}
+
+.floating-button-container.visible {
+  opacity: 1;
+}
+
+.floating-buttons-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+/* Botones circulares */
+.circle-button {
+  width: 3rem;
+  height: 3rem;
+  border-radius: 9999px;
+  background-color: var(--color-primary-600);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--shadow-lg);
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.circle-button:hover {
+  background-color: var(--color-primary-700);
+  transform: translateY(-1px);
+}
+
+.circle-button:active {
+  transform: translateY(0);
+}
+
+/* Tooltips para botones */
+.circle-button .tooltip {
+  position: absolute;
+  left: 100%;
+  margin-left: 0.5rem;
+  padding: 0.25rem 0.5rem;
+  background-color: var(--color-gray-800);
+  color: white;
+  font-size: 0.75rem;
+  border-radius: 0.25rem;
+  opacity: 0;
+  white-space: nowrap;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+.circle-button:hover .tooltip {
+  opacity: 1;
+}
+
+/* Panel de selección de módulos */
+.module-panel {
+  position: absolute;
+  left: 3.5rem;
+  top: 0;
+  width: 16rem;
+  background-color: white;
+  padding: 1rem;
+  border-radius: 0.5rem;
+  box-shadow: var(--shadow-xl);
+  border: 1px solid var(--color-gray-200);
+  z-index: 50;
+}
+
+/* Transiciones */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.1s ease, transform 0.1s ease;
+}
+
+.fade-enter-from {
+  opacity: 0;
+  transform: scale(0.95);
+}
+
+.fade-enter-to {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.fade-leave-from {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.fade-leave-to {
+  opacity: 0;
+  transform: scale(0.95);
+}

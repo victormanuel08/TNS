@@ -1,0 +1,26 @@
+/* Tema Profesional (Contadores) */
+.theme-professional {
+  --table-font-size: 0.8rem;
+  --table-header-font-size: 0.75rem;
+  --table-padding: 0.25rem 0.5rem;
+  --button-size: 3rem;
+  --shadow-intensity: 0.1;
+}
+
+.theme-professional .dynamic-table {
+  font-size: var(--table-font-size);
+}
+
+.theme-professional .table-header th {
+  font-size: var(--table-header-font-size);
+  padding: var(--table-padding);
+}
+
+.theme-professional .circle-button {
+  width: var(--button-size);
+  height: var(--button-size);
+}
+
+.theme-professional .main-card {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, calc(var(--shadow-intensity) * 1));
+}
