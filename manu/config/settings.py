@@ -13,26 +13,28 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 # Inicialización de entorno
 env = environ.Env()
-#environ.Env.read_env(os.path.join(BASE_DIR, '.env'))
+env_file = BASE_DIR / '.env'
+if env_file.exists():
+    environ.Env.read_env(env_file)
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-z@d&2&4f-kk_8dj0&&)!!*115+hr49yp%j0&&4a$pjiwxt4)@!'
+SECRET_KEY = env('DJANGO_SECRET_KEY', default='unsafe-default-key')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = env.bool('DJANGO_DEBUG', default=False)
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = env.list('DJANGO_ALLOWED_HOSTS', default=['localhost', '127.0.0.1'])
 
-CORS_ALLOW_ALL_ORIGINS = False
-CORS_ALLOWED_ORIGINS = [
-    "https://tudominio.com",  # Solo tu dominio interno
+CORS_ALLOW_ALL_ORIGINS = env.bool('CORS_ALLOW_ALL_ORIGINS', default=False)
+CORS_ALLOWED_ORIGINS = env.list('CORS_ALLOWED_ORIGINS', default=[
+    "https://tudominio.com",
     "https://www.tudominio.com",
     "http://localhost:8000",
-]
+])
 
 # Application definition
 INSTALLED_APPS = [
@@ -102,12 +104,12 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": "manu",
-        "USER": "postgres",
-        "PASSWORD": "postgres", 
-        "HOST": "127.0.0.1",
-        "PORT": "5432",
+        "ENGINE": env('DB_ENGINE', default='django.db.backends.postgresql'),
+        "NAME": env('DB_NAME', default='manu'),
+        "USER": env('DB_USER', default='postgres'),
+        "PASSWORD": env('DB_PASSWORD', default='postgres'),
+        "HOST": env('DB_HOST', default='127.0.0.1'),
+        "PORT": env('DB_PORT', default='5432'),
     }
 }
 
@@ -177,12 +179,13 @@ MEDIA_ROOT = BASE_DIR / 'media'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-FIELD_ENCRYPTION_KEY = '43EhL08hcvPp_GYrvlGyXNbqzWrgL4lUFZs2v4EC2S8='
+FIELD_ENCRYPTION_KEY = env('FIELD_ENCRYPTION_KEY', default='change-me')
 
-DEEPSEEK_API_KEY = 'sk-f0ba5a27ac694372aa63ee974237a9b2'
+DEEPSEEK_API_KEY = env('DEEPSEEK_API_KEY', default='')
 
-CELERY_BROKER_URL = 'redis://localhost:6380/0'
-CELERY_RESULT_BACKEND = 'redis://localhost:6380/0'
+REDIS_URL = env('REDIS_URL', default='redis://localhost:6380/0')
+CELERY_BROKER_URL = REDIS_URL
+CELERY_RESULT_BACKEND = REDIS_URL
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
