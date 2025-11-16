@@ -1,18 +1,20 @@
 # sistema_analitico/views.py
 # 🔹 Librerías estándar
 import logging
+import os
 import pandas as pd
 import re
 import secrets
 from datetime import datetime, timedelta
 from decimal import Decimal
+import firebirdsql
 
 # 🔹 Django y DRF
 from django.db.models import Count, Sum, Avg, Max, Min, Q, F, Value
 from django.db.models.functions import TruncMonth, TruncYear, TruncQuarter, Coalesce
 from django.utils import timezone
 
-from rest_framework import viewsets, status
+from rest_framework import serializers, viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -21,16 +23,268 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 # 🔹 Modelos, serializadores y servicios internos
-from .models import Servidor, EmpresaServidor, MovimientoInventario, UsuarioEmpresa
+from .models import (
+    Servidor,
+    EmpresaServidor,
+    MovimientoInventario,
+    UsuarioEmpresa,
+    UserTenantProfile,
+)
 from .serializers import *
 from .services.data_manager import DataManager
 from .services.ml_engine import MLEngine
 from .services.natural_response_orchestrator import NaturalResponseOrchestrator
 from .services.system_tester import SystemTester
 from .services.permisos import TienePermisoEmpresa, HasValidAPIKey
+from .services.tns_bridge import TNSBridge
 
 # 🔹 Logger
 logger = logging.getLogger(__name__)
+FIREBIRD_CHARSET = 'WIN1252'
+
+def _normalize_nit(value: str) -> str:
+    return re.sub(r"\D", "", value or "")
+
+
+def _extract_subdomain_from_request(request):
+    header = request.META.get('HTTP_X_SUBDOMAIN')
+    if header:
+        return str(header).strip().lower()
+
+    query_param = None
+    if hasattr(request, 'query_params'):
+        query_param = request.query_params.get('subdomain')
+    if not query_param and isinstance(getattr(request, 'data', None), dict):
+        query_param = request.data.get('subdomain')
+    if query_param:
+        return str(query_param).strip().lower()
+
+    host = request.get_host() or ''
+    host = host.split(':')[0]
+    if not host:
+        return None
+    parts = [part for part in host.split('.') if part]
+    if len(parts) > 2:
+        return parts[0].lower()
+    if len(parts) == 2 and parts[0].lower() not in ('www', 'localhost'):
+        return parts[0].lower()
+    return None
+
+
+def _clean_nit(value: str) -> str:
+    """Normaliza un NIT eliminando DV y separadores."""
+    if not value:
+        return ""
+    nit_str = str(value).replace('.', '').replace(' ', '')
+    base = nit_str.split('-')[0]
+    return re.sub(r"\D", "", base)
+
+
+def _decode_firebird_value(value):
+    if isinstance(value, bytes):
+        try:
+            return value.decode(FIREBIRD_CHARSET, errors='replace')
+        except Exception:
+            return value.decode('latin-1', errors='replace')
+    return value
+
+
+def _rows_to_dicts(cursor, rows):
+    columns = [col[0].strip() for col in cursor.description or []]
+    results = []
+    for row in rows:
+        entry = {}
+        for idx, column in enumerate(columns):
+            entry[column] = _decode_firebird_value(row[idx])
+        results.append(entry)
+    return results
+
+
+def _resolve_admin_db_path(empresa):
+    config = empresa.configuracion if isinstance(empresa.configuracion, dict) else {}
+    config_path = config.get('admin_db_path') or config.get('admin_db')
+    return config_path or empresa.servidor.ruta_maestra
+
+
+def _connect_admin_db(empresa):
+    database_path = _resolve_admin_db_path(empresa)
+    if not database_path:
+        raise serializers.ValidationError('El servidor no tiene ruta configurada para ADMIN.gdb')
+    os.environ['ISC_CP'] = FIREBIRD_CHARSET
+    servidor = empresa.servidor
+    return firebirdsql.connect(
+        host=servidor.host,
+        database=database_path,
+        user=servidor.usuario,
+        password=servidor.password,
+        port=servidor.puerto or 3050,
+        charset=FIREBIRD_CHARSET
+    )
+
+
+def _query_admin_empresas(empresa, target_nit):
+    nit_clean = _clean_nit(target_nit)
+    conn = _connect_admin_db(empresa)
+    try:
+        cursor = conn.cursor()
+        try:
+            cursor.execute("""
+                SELECT 1 FROM RDB$RELATIONS
+                WHERE RDB$RELATION_NAME = 'EMPRESAS'
+                AND RDB$SYSTEM_FLAG = 0
+            """)
+            if not cursor.fetchone():
+                raise serializers.ValidationError('La tabla EMPRESAS no existe en la base ADMIN')
+            cursor.execute("""
+                SELECT CODIGO, NOMBRE, NIT, ANOFIS, REPRES, ARCHIVO
+                FROM EMPRESAS
+                WHERE 
+                    REPLACE(REPLACE(SUBSTRING(NIT FROM 1 FOR POSITION('-' IN NIT || '-') - 1), '.', ''), ' ', '') = ?
+                    OR REPLACE(REPLACE(NIT, '.', ''), ' ', '') = ?
+                ORDER BY ANOFIS DESC
+            """, (nit_clean, nit_clean))
+            empresas = _rows_to_dicts(cursor, cursor.fetchall())
+        finally:
+            cursor.close()
+    finally:
+        conn.close()
+    return {
+        'count': len(empresas),
+        'nit_buscado': nit_clean,
+        'empresas': empresas
+    }
+
+
+def _run_validation_procedure(cursor, username, password):
+    cursor.execute("SELECT * FROM TNS_WS_VERIFICAR_USUARIO(?, ?)", (password, username))
+    row = cursor.fetchone()
+    if not row:
+        raise serializers.ValidationError('TNS_WS_VERIFICAR_USUARIO no retorn? datos')
+    columns = [col[0].strip() for col in cursor.description or []]
+    return {columns[idx]: _decode_firebird_value(row[idx]) for idx in range(len(columns))}
+
+
+def _build_validate_payload(row):
+    fields = [
+        'OVERSIONDB', 'ODESCRIPUSER', 'OIMPOBSERVFACT', 'OMANEJAREDESPACHO',
+        'OASENTARSINCUPO', 'OOCULTARVENCIMIENTOPEDIDO', 'OBLOQUEARFACTURACION',
+        'OBLOQUEARRECIBOCAJA', 'OIGNORARSALDOCARTERA', 'OAPARTADO',
+        'OUSERNAME', 'OSUCCESS', 'OMENSAJE'
+    ]
+    payload = {}
+    for field in fields:
+        value = row.get(field)
+        if value is None:
+            payload[field] = 'VACIO'
+        else:
+            text_value = str(value).strip()
+            payload[field] = text_value if text_value else 'VACIO'
+    return payload
+
+
+def _build_modulos_payload(rows):
+    modulos_prohibidos = set()
+    for row in rows:
+        descripcion = str(row.get('DESCRIPCION') or '').strip()
+        modulo = str(row.get('MODULO') or '').strip()
+        if descripcion.startswith('No Permitir Ingreso al Modulo de'):
+            modulos_prohibidos.add(modulo)
+    modulos = {}
+    for row in rows:
+        modulo = str(row.get('MODULO') or '').strip()
+        tabla = str(row.get('TABLA') or '').strip()
+        if not modulo or not tabla or modulo in modulos_prohibidos:
+            continue
+        if modulo not in modulos:
+            modulos[modulo] = {'TABLA': {}}
+        if tabla not in modulos[modulo]['TABLA']:
+            modulos[modulo]['TABLA'][tabla] = []
+        permiso = {
+            'CODIGO': row.get('CODIGO'),
+            'DESCRIPCION': str(row.get('DESCRIPCION') or '').strip(),
+            'TIPO': (str(row.get('TIPO') or '').strip() or 'VACIO')
+        }
+        modulos[modulo]['TABLA'][tabla].append(permiso)
+    return modulos
+
+
+def _fetch_user_permissions(cursor, username):
+    cursor.execute("""
+        SELECT DU.CODIGO, O.DESCRIPCION, O.MODULO, O.TABLA, O.TIPO
+        FROM DEUSUARIOS DU
+        INNER JOIN OPERACION O ON O.CODIGO = DU.CODIGO
+        INNER JOIN USUARIOS U ON U.USUID = DU.USUID
+        WHERE U.NOMBRE = ?
+        ORDER BY O.MODULO, O.TABLA, O.DESCRIPCION
+    """, (username,))
+    rows = _rows_to_dicts(cursor, cursor.fetchall())
+    return _build_modulos_payload(rows)
+
+
+
+def _attach_api_key(request):
+    api_key = request.META.get('HTTP_API_KEY')
+    if not api_key:
+        auth_header = request.META.get('HTTP_AUTHORIZATION', '')
+        if auth_header.startswith('Api-Key '):
+            api_key = auth_header.replace('Api-Key ', '')
+    if not api_key:
+        return False
+    try:
+        from apps.sistema_analitico.models import APIKeyCliente
+        key = APIKeyCliente.objects.get(api_key__iexact=api_key.strip(), activa=True)
+        if key.esta_expirada():
+            return False
+        empresas = key.empresas_asociadas.all()
+        if not empresas.exists():
+            key.actualizar_empresas_asociadas()
+            empresas = key.empresas_asociadas.all()
+        key.incrementar_contador()
+        request.cliente_api = key
+        request.empresas_autorizadas = empresas
+        return True
+    except Exception:
+        return False
+
+
+def _empresa_queryset_for_request(request):
+    qs = EmpresaServidor.objects.select_related('servidor')
+    if hasattr(request, 'cliente_api') and request.cliente_api:
+        qs = qs.filter(nit=_normalize_nit(request.cliente_api.nit))
+    else:
+        user = getattr(request, 'user', None)
+        if not user or user.is_anonymous:
+            raise serializers.ValidationError('Autenticacion requerida o API key valida.')
+        if not user.is_superuser:
+            qs = qs.filter(
+                usuarios_permitidos__usuario=user,
+                usuarios_permitidos__puede_ver=True,
+            )
+    return qs
+
+
+def _get_empresa_for_request(request, data):
+    empresa_id = data.get('empresa_servidor_id')
+    nit = data.get('nit')
+    anio = data.get('anio_fiscal')
+    qs = _empresa_queryset_for_request(request)
+    try:
+        if empresa_id:
+            return qs.get(id=empresa_id)
+        if nit:
+            filters = {'nit': _normalize_nit(nit)}
+            if anio:
+                filters['anio_fiscal'] = anio
+            return qs.get(**filters)
+    except EmpresaServidor.DoesNotExist:
+        raise serializers.ValidationError('Empresa no encontrada o sin permisos.')
+    raise serializers.ValidationError('Debes indicar empresa_servidor_id o nit.')
+
+
+class APIKeyAwareViewSet:
+    def initial(self, request, *args, **kwargs):
+        _attach_api_key(request)
+        return super().initial(request, *args, **kwargs)
 
 
 class ServidorViewSet(viewsets.ModelViewSet):
@@ -3404,12 +3658,60 @@ class CustomTokenObtainPairView(TokenObtainPairView):
         if response.status_code == 200:
             from django.contrib.auth.models import User
             user = User.objects.get(username=request.data['username'])
+
+            subdomain = _extract_subdomain_from_request(request)
+            profile = getattr(user, 'tenant_profile', None)
+            if (
+                not profile
+                or not subdomain
+                or profile.subdomain.lower() != subdomain
+            ):
+                return Response(
+                    {'detail': 'Subdominio no autorizado'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+            empresas_payload = []
+            if user.is_superuser:
+                empresas = EmpresaServidor.objects.select_related('servidor').all()
+                for empresa in empresas:
+                    empresas_payload.append({
+                        'empresa_servidor_id': empresa.id,
+                        'nombre': empresa.nombre,
+                        'nit': empresa.nit,
+                        'anio_fiscal': empresa.anio_fiscal,
+                        'codigo': empresa.codigo,
+                        'preferred_template': 'app',
+                        'servidor': empresa.servidor.nombre,
+                    })
+            else:
+                relaciones = UsuarioEmpresa.objects.filter(usuario=user).select_related('empresa_servidor', 'empresa_servidor__servidor')
+                for relacion in relaciones:
+                    empresa = relacion.empresa_servidor
+                    empresas_payload.append({
+                        'empresa_servidor_id': empresa.id,
+                        'nombre': empresa.nombre,
+                        'nit': empresa.nit,
+                        'anio_fiscal': empresa.anio_fiscal,
+                        'codigo': empresa.codigo,
+                        'preferred_template': relacion.preferred_template,
+                        'servidor': empresa.servidor.nombre,
+                    })
+
+            default_template = profile.preferred_template or 'app'
+            default_empresa_id = empresas_payload[0]['empresa_servidor_id'] if empresas_payload else None
+
             response.data['user'] = {
                 'id': user.id,
                 'username': user.username,
                 'email': user.email,
                 'is_superuser': user.is_superuser,
-                'puede_gestionar_api_keys': user.puede_gestionar_api_keys()
+                'puede_gestionar_api_keys': user.puede_gestionar_api_keys(),
+                'empresas': empresas_payload,
+                'default_template': default_template,
+                'default_empresa_id': default_empresa_id,
+                'subdomain': profile.subdomain,
+                'preferred_template': profile.preferred_template,
             }
         return response
 
@@ -3581,3 +3883,99 @@ class TestingViewSet(viewsets.ViewSet):
             return Response({'error': str(e)}, status=500)
         
         
+
+
+
+class TNSViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
+    permission_classes = [AllowAny]
+
+    def _build_bridge(self, request, validated_data):
+        empresa = _get_empresa_for_request(request, validated_data)
+        bridge = TNSBridge(empresa)
+        return bridge
+
+    @action(detail=False, methods=['post'])
+    def query(self, request):
+        serializer = TNSQuerySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        bridge = self._build_bridge(request, serializer.validated_data)
+        try:
+            rows = bridge.run_query(
+                serializer.validated_data['sql'],
+                serializer.validated_data.get('params'),
+            )
+            return Response({'rows': rows})
+        finally:
+            bridge.close()
+
+    @action(detail=False, methods=['post'])
+    def procedure(self, request):
+        serializer = TNSProcedureSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        bridge = self._build_bridge(request, serializer.validated_data)
+        params = serializer.validated_data.get('params') or {}
+        try:
+            result = bridge.call_procedure(serializer.validated_data['procedure'], params)
+            return Response({'result': result})
+        finally:
+            bridge.close()
+
+    @action(detail=False, methods=['post'])
+    def emit_invoice(self, request):
+        serializer = TNSFacturaSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        bridge = self._build_bridge(request, serializer.validated_data)
+        try:
+            numero = bridge.emit_invoice(serializer.validated_data)
+            return Response({'numero': numero})
+        finally:
+            bridge.close()
+
+    @action(detail=False, methods=['get'])
+    def tables(self, request):
+        serializer = TNSBaseSerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+        bridge = self._build_bridge(request, serializer.validated_data)
+        try:
+            return Response({'tables': bridge.list_tables()})
+        finally:
+            bridge.close()
+
+
+@action(detail=False, methods=['get'], url_path='admin_empresas')
+def admin_empresas(self, request):
+    serializer = TNSAdminEmpresasSerializer(data=request.query_params)
+    serializer.is_valid(raise_exception=True)
+    empresa = _get_empresa_for_request(request, serializer.validated_data)
+    data = _query_admin_empresas(empresa, serializer.validated_data['search_nit'])
+    return Response(data)
+
+@action(detail=False, methods=['post'], url_path='validate_user')
+def validate_user(self, request):
+    serializer = TNSUserValidationSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    bridge = self._build_bridge(request, serializer.validated_data)
+    try:
+        bridge.connect()
+        cursor = bridge.conn.cursor()
+        try:
+            validation_row = _run_validation_procedure(
+                cursor,
+                serializer.validated_data['username'],
+                serializer.validated_data['password']
+            )
+            validate_payload = _build_validate_payload(validation_row)
+            success_raw = validation_row.get('OSUCCESS')
+            success_flag = str(success_raw).strip().lower() if success_raw is not None else ''
+            is_success = success_flag in ('1', 'true', 't', 'si', 'yes')
+            if is_success:
+                modules_payload = _fetch_user_permissions(cursor, serializer.validated_data['username'])
+            else:
+                modules_payload = {}
+            return Response({'VALIDATE': validate_payload, 'MODULOS': modules_payload})
+        finally:
+            cursor.close()
+    except firebirdsql.Error as exc:
+        raise serializers.ValidationError(f'Error al consultar Firebird: {exc}')
+    finally:
+        bridge.close()

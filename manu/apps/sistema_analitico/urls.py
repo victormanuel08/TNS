@@ -13,6 +13,7 @@ router.register('ml', views.MLViewSet, basename='ml')
 router.register('consulta-natural', views.ConsultaNaturalViewSet, basename='consulta-natural')
 router.register('testing', views.TestingViewSet, basename='testing')
 router.register('api-keys', views.APIKeyManagementViewSet, basename='api-keys')
+router.register('tns', views.TNSViewSet, basename='tns')
 
 urlpatterns = [
     path('api/', include(router.urls)),

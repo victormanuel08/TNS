@@ -1,0 +1,917 @@
+{
+  "info": {
+    "_postman_id": "e87e8c1a-3c76-46b6-9efb-tnsfull",
+    "name": "TNSFULL API",
+    "description": "Colecci?n Postman con los endpoints principales de autenticaci?n, scraping, documentos, sistema/ML, consulta natural y puente TNS.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000"
+    },
+    {
+      "key": "jwt_token",
+      "value": ""
+    },
+    {
+      "key": "api_key",
+      "value": ""
+    },
+    {
+      "key": "session_id",
+      "value": "1"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Autenticaci?n",
+      "item": [
+        {
+          "name": "Login JWT",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/login/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login",
+                ""
+              ],
+              "query": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"admin\",\n  \"password\": \"secret\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Refresh token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/refresh/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "refresh",
+                ""
+              ],
+              "query": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh\": \"<refresh_token>\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/logout/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "logout",
+                ""
+              ],
+              "query": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh_token\": \"<refresh_token>\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Scraping DIAN",
+      "item": [
+        {
+          "name": "Crear sesi?n",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/dian/api/sessions/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "dian",
+                "api",
+                "sessions",
+                ""
+              ],
+              "query": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://catalogo-vpfe.dian.gov.co/User/AuthToken?pk=...\",\n  \"tipo\": \"Sent\",\n  \"nit\": \"900123456\",\n  \"fecha_desde\": \"2025-01-01\",\n  \"fecha_hasta\": \"2025-01-31\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Quick scrape",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/dian/api/sessions/quick_scrape/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "dian",
+                "api",
+                "sessions",
+                "quick_scrape",
+                ""
+              ],
+              "query": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://catalogo-vpfe.dian.gov.co/User/AuthToken?pk=...\",\n  \"tipo\": \"Sent\",\n  \"nit\": \"900123456\",\n  \"fecha_desde\": \"2025-01-01\",\n  \"fecha_hasta\": \"2025-01-31\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Iniciar scraping",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/dian/api/sessions/{{session_id}}/start_scraping/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "dian",
+                "api",
+                "sessions",
+                "{{session_id}}",
+                "start_scraping",
+                ""
+              ],
+              "query": []
+            }
+          }
+        },
+        {
+          "name": "Test connection",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/dian/api/sessions/test_connection/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "dian",
+                "api",
+                "sessions",
+                "test_connection",
+                ""
+              ],
+              "query": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://catalogo-vpfe.dian.gov.co/User/AuthToken?pk=...\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Descargar JSON",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/dian/api/sessions/{{session_id}}/download_json/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "dian",
+                "api",
+                "sessions",
+                "{{session_id}}",
+                "download_json",
+                ""
+              ],
+              "query": []
+            }
+          }
+        },
+        {
+          "name": "Descargar Excel",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/dian/api/sessions/{{session_id}}/download_excel/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "dian",
+                "api",
+                "sessions",
+                "{{session_id}}",
+                "download_excel",
+                ""
+              ],
+              "query": []
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Documentos procesados",
+      "item": [
+        {
+          "name": "Listar documentos",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/dian/api/documents/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "dian",
+                "api",
+                "documents",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "session_id",
+                  "value": "{{session_id}}"
+                },
+                {
+                  "key": "nit",
+                  "value": "900123456"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Exportar documentos",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/dian/api/documents/export/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "dian",
+                "api",
+                "documents",
+                "export",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "session_id",
+                  "value": "{{session_id}}"
+                },
+                {
+                  "key": "format",
+                  "value": "excel"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Sistema",
+      "item": [
+        {
+          "name": "Inicializar sistema",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/assistant/api/sistema/inicializar_sistema/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "assistant",
+                "api",
+                "sistema",
+                "inicializar_sistema",
+                ""
+              ],
+              "query": []
+            }
+          }
+        },
+        {
+          "name": "Descubrir empresas",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/assistant/api/sistema/descubrir_empresas/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "assistant",
+                "api",
+                "sistema",
+                "descubrir_empresas",
+                ""
+              ],
+              "query": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"servidor_id\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Extraer datos",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/assistant/api/sistema/extraer_datos/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "assistant",
+                "api",
+                "sistema",
+                "extraer_datos",
+                ""
+              ],
+              "query": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"empresa_servidor_id\": 1,\n  \"fecha_inicio\": \"2025-01-01\",\n  \"fecha_fin\": \"2025-01-31\",\n  \"forzar_reextraccion\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Machine Learning",
+      "item": [
+        {
+          "name": "Entrenar modelos",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/assistant/api/ml/entrenar_modelos/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "assistant",
+                "api",
+                "ml",
+                "entrenar_modelos",
+                ""
+              ],
+              "query": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"empresa_servidor_id\": 1,\n  \"fecha_inicio\": \"2023-01-01\",\n  \"fecha_fin\": \"2023-12-31\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Predecir demanda",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/assistant/api/ml/predecir_demanda/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "assistant",
+                "api",
+                "ml",
+                "predecir_demanda",
+                ""
+              ],
+              "query": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"modelo_id\": \"empresa_900123456\",\n  \"meses\": 6\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Recomendaciones de compra",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/assistant/api/ml/recomendaciones_compras/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "assistant",
+                "api",
+                "ml",
+                "recomendaciones_compras",
+                ""
+              ],
+              "query": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"modelo_id\": \"empresa_900123456\",\n  \"meses\": 6,\n  \"nivel_servicio\": 0.95\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Consulta natural",
+      "item": [
+        {
+          "name": "Pregunta inteligente",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              },
+              {
+                "key": "Api-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/assistant/api/consulta-natural/pregunta_inteligente/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "assistant",
+                "api",
+                "consulta-natural",
+                "pregunta_inteligente",
+                ""
+              ],
+              "query": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"consulta\": \"?Qu? art?culos debo comprar el pr?ximo mes?\",\n  \"empresa_servidor_id\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. Puente TNS",
+      "item": [
+        {
+          "name": "Query SQL",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/assistant/api/tns/query/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "assistant",
+                "api",
+                "tns",
+                "query",
+                ""
+              ],
+              "query": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"empresa_servidor_id\": 1,\n  \"sql\": \"SELECT FIRST 10 * FROM CLIENTES WHERE NIT = ?\",\n  \"params\": [\n    \"900123456\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Stored Procedure",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/assistant/api/tns/procedure/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "assistant",
+                "api",
+                "tns",
+                "procedure",
+                ""
+              ],
+              "query": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"empresa_servidor_id\": 1,\n  \"procedure\": \"TNS_SP_CLIENTE\",\n  \"params\": {\n    \"NIT\": \"900123456\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Emitir factura",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/assistant/api/tns/emit_invoice/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "assistant",
+                "api",
+                "tns",
+                "emit_invoice",
+                ""
+              ],
+              "query": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"empresa_servidor_id\": 1,\n  \"codcomp\": \"FV\",\n  \"codprefijo\": \"FE\",\n  \"formapago\": \"CO\",\n  \"nittri\": \"13279115\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Listar tablas",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/assistant/api/tns/tables/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "assistant",
+                "api",
+                "tns",
+                "tables",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "empresa_servidor_id",
+                  "value": "1"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Admin empresas",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/assistant/api/tns/admin_empresas/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "assistant",
+                "api",
+                "tns",
+                "admin_empresas",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "empresa_servidor_id",
+                  "value": "1"
+                },
+                {
+                  "key": "search_nit",
+                  "value": "900123456"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Validar usuario TNS",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/assistant/api/tns/validate_user/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "assistant",
+                "api",
+                "tns",
+                "validate_user",
+                ""
+              ],
+              "query": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"empresa_servidor_id\": 1,\n  \"username\": \"ADMIN\",\n  \"password\": \"secreto\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

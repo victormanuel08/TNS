@@ -3,6 +3,9 @@
     <ClientOnly v-if="showDevSelector">
       <DevModeSelector />
     </ClientOnly>
+    <ClientOnly>
+      <EmpresaSelectorModal />
+    </ClientOnly>
     <NuxtLayout>
       <NuxtPage />
     </NuxtLayout>

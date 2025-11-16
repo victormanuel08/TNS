@@ -1,69 +1,36 @@
+import type { Ref } from 'vue'
 import type { CompanyInfo } from './useSubdomain'
 
+type CompanyRef = Ref<CompanyInfo | null>
+
 export const useCompany = () => {
-  const company = useState<CompanyInfo | null>('current-company', () => null)
-  const manualLoading = useState('company-manual-loading', () => false)
+  const tenant = useTenantStore()
 
-  const { getCompanyInfo } = useSubdomain()
-
-  const { data, pending, refresh } = useAsyncData(
-    'company',
-    () => getCompanyInfo(),
+  const { pending, refresh } = useAsyncData(
+    'tenant-company',
+    () => tenant.ensureTenantLoaded(),
     {
       lazy: false,
       server: true,
-      default: () => company.value
+      default: () => tenant.company.value
     }
   )
 
-  watch(
-    data,
-    (value) => {
-      if (value) {
-        company.value = value
-      }
-    },
-    { immediate: true }
-  )
+  const loading = computed(() => pending.value || tenant.loading.value)
 
-  const loadCompany = async () => {
-    manualLoading.value = true
-    try {
-      await refresh()
-      return company.value
-    } catch (error) {
-      console.error('Error loading company:', error)
-      return null
-    } finally {
-      manualLoading.value = false
-    }
-  }
+  const company = computed<CompanyRef['value']>(() => tenant.company.value)
 
-  const loading = computed(() => pending.value || manualLoading.value)
+  const companyImage = computed(() => tenant.company.value?.imageUrl || null)
 
-  const currentMode = computed(() => {
-    return company.value?.mode || 'ecommerce'
-  })
-
-  const companyName = computed(() => {
-    return company.value?.name || 'Empresa'
-  })
-
-  const companyImage = computed(() => {
-    return company.value?.imageUrl || null
-  })
-
-  const isCompanyActive = computed(() => {
-    return company.value?.is_active ?? true
-  })
+  const isCompanyActive = computed(() => tenant.company.value?.is_active ?? true)
 
   return {
-    company: readonly(company),
+    company,
     loading,
-    currentMode,
-    companyName,
+    currentMode: tenant.currentMode,
+    companyName: tenant.companyName,
     companyImage,
     isCompanyActive,
-    loadCompany
+    loadCompany: refresh
   }
 }

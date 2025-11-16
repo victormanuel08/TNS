@@ -2,7 +2,14 @@
 from django.contrib import admin
 from django.utils.html import format_html
 from django.contrib.auth.models import User
-from .models import Servidor, EmpresaServidor, MovimientoInventario, UsuarioEmpresa, APIKeyCliente
+from .models import (
+    Servidor,
+    EmpresaServidor,
+    MovimientoInventario,
+    UsuarioEmpresa,
+    APIKeyCliente,
+    UserTenantProfile,
+)
 
 # ========== ADMIN CONFIGURACIÓN GLOBAL ==========
 admin.site.site_header = "🚀 Sistema Analítico - Panel de Control"
@@ -236,6 +243,12 @@ class APIKeyClienteAdmin(admin.ModelAdmin):
     
     def get_exclude(self, request, obj=None):
         return None
+
+
+@admin.register(UserTenantProfile)
+class UserTenantProfileAdmin(admin.ModelAdmin):
+    list_display = ['user', 'subdomain', 'preferred_template']
+    search_fields = ['user__username', 'subdomain']
 
 # ========== FILTRO PERSONALIZADO PARA FECHAS ==========
 class RangoFechasFilter(admin.SimpleListFilter):

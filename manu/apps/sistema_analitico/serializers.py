@@ -21,7 +21,7 @@ class UsuarioEmpresaSerializer(serializers.ModelSerializer):
     class Meta:
         model = UsuarioEmpresa
         fields = ['id', 'usuario', 'empresa_servidor', 'usuario_username', 'empresa_nombre', 
-                 'puede_ver', 'puede_editar', 'fecha_asignacion']
+                 'puede_ver', 'puede_editar', 'preferred_template', 'fecha_asignacion']
 
 class MovimientoInventarioSerializer(serializers.ModelSerializer):
     empresa_nombre = serializers.CharField(source='empresa_servidor.nombre', read_only=True)
@@ -81,3 +81,47 @@ class APIKeyClienteSerializer(serializers.ModelSerializer):
     
     def get_expirada(self, obj):
         return obj.esta_expirada()
+
+
+class TNSBaseSerializer(serializers.Serializer):
+    empresa_servidor_id = serializers.IntegerField(required=False)
+    nit = serializers.CharField(required=False)
+    anio_fiscal = serializers.IntegerField(required=False)
+
+    def validate(self, attrs):
+        if not attrs.get('empresa_servidor_id') and not attrs.get('nit'):
+            raise serializers.ValidationError('Debes enviar empresa_servidor_id o nit.')
+        return attrs
+
+
+class TNSQuerySerializer(TNSBaseSerializer):
+    sql = serializers.CharField()
+    params = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+
+
+class TNSProcedureSerializer(TNSBaseSerializer):
+    procedure = serializers.CharField()
+    params = serializers.DictField(child=serializers.CharField(), required=False, default=dict)
+
+
+class TNSFacturaSerializer(TNSBaseSerializer):
+    codcomp = serializers.CharField(required=False)
+    codprefijo = serializers.CharField(required=False)
+    fecha = serializers.DateField(required=False)
+    periodo = serializers.IntegerField(required=False)
+    formapago = serializers.CharField(required=False)
+    plazodias = serializers.IntegerField(required=False)
+    usuario = serializers.CharField(required=False)
+    banco = serializers.CharField(required=False)
+    nittri = serializers.CharField(required=False)
+    numdocu = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    vid = serializers.CharField(required=False)
+
+
+class TNSAdminEmpresasSerializer(TNSBaseSerializer):
+    search_nit = serializers.CharField()
+
+
+class TNSUserValidationSerializer(TNSBaseSerializer):
+    username = serializers.CharField()
+    password = serializers.CharField()

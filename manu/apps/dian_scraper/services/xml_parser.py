@@ -63,14 +63,31 @@ class UBLXMLParser:
         
         return doc
     
-    def _get_text(self, element, path: str) -> Optional[str]:
-        try:
-            for ns_prefix, ns_uri in self.namespaces.items():
-                path = path.replace(f'{ns_prefix}:', f'{{{ns_uri}}}')
-            found = element.find(path)
-            return found.text if found is not None else None
-        except:
+    def _resolve_path(self, path: str, descendant: bool = False) -> str:
+        segments = []
+        for part in path.split('/'):
+            if ':' in part:
+                prefix, tag = part.split(':', 1)
+                ns_uri = self.namespaces.get(prefix)
+                part = f'{{{ns_uri}}}{tag}' if ns_uri else tag
+            segments.append(part)
+        resolved = '/'.join(segments)
+        return f'.//{resolved}' if descendant else resolved
+
+    def _find_element(self, element, path: str, descendant: bool = False):
+        if element is None:
             return None
+        try:
+            search_path = self._resolve_path(path, descendant=descendant)
+            return element.find(search_path)
+        except Exception:
+            return None
+
+    def _get_text(self, element, path: str, descendant: bool = False) -> Optional[str]:
+        target = self._find_element(element, path, descendant=descendant)
+        if target is not None and target.text:
+            return target.text.strip()
+        return None
     
     def _parse_amount(self, element, path: str) -> Decimal:
         text = self._get_text(element, path)
@@ -81,28 +98,23 @@ class UBLXMLParser:
     
     def _parse_party_info(self, root, party_path: str) -> PartyInfo:
         party_info = PartyInfo()
-        party_elem = root.find(f'.//{party_path.replace(":", "}")}')
-        
+        party_elem = self._find_element(root, party_path, descendant=True)
+
         if party_elem is not None:
-            # NIT
-            tax_scheme = party_elem.find('.//{urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2}PartyTaxScheme')
-            if tax_scheme is not None:
-                company_id = tax_scheme.find('{urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2}CompanyID')
-                party_info.nit = company_id.text if company_id is not None else None
-            
-            # Nombre
-            party_name = party_elem.find('.//{urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2}PartyName')
-            if party_name is not None:
-                name_elem = party_name.find('{urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2}Name')
-                party_info.name = name_elem.text if name_elem is not None else None
-            
-            # Si no hay nombre en PartyName, buscar en PartyLegalEntity
-            if not party_info.name:
-                legal_entity = party_elem.find('.//{urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2}PartyLegalEntity')
-                if legal_entity is not None:
-                    reg_name = legal_entity.find('{urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2}RegistrationName')
-                    party_info.name = reg_name.text if reg_name is not None else None
-        
+            company_id = self._get_text(party_elem, 'cac:PartyTaxScheme/cbc:CompanyID', descendant=True)
+            if not company_id:
+                company_id = self._get_text(party_elem, 'cac:PartyLegalEntity/cbc:CompanyID', descendant=True)
+            if not company_id:
+                company_id = self._get_text(party_elem, 'cac:PartyIdentification/cbc:ID', descendant=True)
+            party_info.nit = company_id
+
+            name_value = self._get_text(party_elem, 'cac:PartyName/cbc:Name', descendant=True)
+            if not name_value:
+                name_value = self._get_text(party_elem, 'cac:PartyLegalEntity/cbc:RegistrationName', descendant=True)
+            if not name_value:
+                name_value = self._get_text(party_elem, 'cac:PartyTaxScheme/cbc:RegistrationName', descendant=True)
+            party_info.name = name_value or party_info.nit
+
         return party_info
     
     def _get_payment_method(self, root) -> Optional[str]:

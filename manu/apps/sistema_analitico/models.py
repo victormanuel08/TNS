@@ -52,11 +52,21 @@ class EmpresaServidor(models.Model):
         
 class UsuarioEmpresa(models.Model):
     """Relación directa entre usuarios y empresas"""
+    TEMPLATE_CHOICES = [
+        ('app', 'Aplicación Pro'),
+        ('restaurant', 'Restaurante / POS'),
+        ('retail', 'Retail / Autopago'),
+        ('pos', 'Punto de venta'),
+        ('pro', 'Vista profesional'),
+        ('autopago', 'Kiosco Autopago'),
+    ]
+
     usuario = models.ForeignKey(User, on_delete=models.CASCADE, related_name='empresas_permitidas')
     empresa_servidor = models.ForeignKey(EmpresaServidor, on_delete=models.CASCADE, related_name='usuarios_permitidos')
     
     puede_ver = models.BooleanField(default=True)
     puede_editar = models.BooleanField(default=False)
+    preferred_template = models.CharField(max_length=20, choices=TEMPLATE_CHOICES, default='app')
     
     fecha_asignacion = models.DateTimeField(auto_now_add=True)
     
@@ -66,6 +76,28 @@ class UsuarioEmpresa(models.Model):
     
     def __str__(self):
         return f"{self.usuario.username} - {self.empresa_servidor.nombre}"
+
+
+class UserTenantProfile(models.Model):
+    TEMPLATE_CHOICES = UsuarioEmpresa.TEMPLATE_CHOICES
+
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name='tenant_profile'
+    )
+    subdomain = models.CharField(max_length=50, unique=True)
+    preferred_template = models.CharField(
+        max_length=20,
+        choices=TEMPLATE_CHOICES,
+        default='app'
+    )
+
+    class Meta:
+        db_table = 'user_tenant_profiles'
+
+    def __str__(self):
+        return f"{self.user.username} -> {self.subdomain}"
 
 class MovimientoInventario(models.Model):
     TIPO_DOCUMENTO_CHOICES = [

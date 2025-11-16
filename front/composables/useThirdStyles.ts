@@ -1,17 +1,35 @@
+import { watch } from 'vue'
+
 export const useThirdStyles = () => {
-  const { company } = useCompany()
+  const tenant = useTenantStore()
 
   const applyThirdStyles = () => {
-    if (!process.client || !company.value) return
+    if (!process.client) return
 
     const root = document.documentElement
-    const primary = company.value.primary_color || '#3B82F6'
-    const secondary = company.value.secondary_color || '#1E40AF'
-    const fontFamily = company.value.font_family || 'Inter, sans-serif'
+    const primary =
+      tenant.company.value?.primary_color || tenant.preferences.value.primaryColor
+    const secondary =
+      tenant.company.value?.secondary_color ||
+      tenant.preferences.value.secondaryColor
+    const fontFamily =
+      tenant.company.value?.font_family || tenant.preferences.value.fontFamily
 
     root.style.setProperty('--primary-color', primary)
     root.style.setProperty('--secondary-color', secondary)
     root.style.setProperty('--font-family', fontFamily)
+  }
+
+  if (process.client) {
+    watch(
+      () => [
+        tenant.company.value?.primary_color,
+        tenant.preferences.value.primaryColor,
+        tenant.preferences.value.secondaryColor
+      ],
+      () => applyThirdStyles(),
+      { immediate: true }
+    )
   }
 
   return { applyThirdStyles }
