@@ -85,3 +85,12 @@ ENV/
 env/
 env.bak/
 venv.bak/
+
+# Modelos de machine learning (no versionar binarios pesados)
+manu/modelos_ml/*.joblib
+
+# Carpetas/archivos antiguos o sensibles que no deben ir al VPS
+OLDDATAFONO/
+PASARELADEPAGO/
+BCE/
+apidatafonocredibanco/

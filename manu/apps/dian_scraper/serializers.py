@@ -57,18 +57,29 @@ class ScrapingSessionSerializer(serializers.ModelSerializer):
         return re.sub(r'\D', '', value)
 
     def _resolve_nit(self, request, attrs) -> str:
-        if hasattr(request, 'cliente_api') and request.cliente_api:
-            return self._normalize_nit(request.cliente_api.nit)
-
         nit = attrs.get('nit') or request.data.get('nit')
         if not nit:
+            if hasattr(request, 'cliente_api') and request.cliente_api:
+                return self._normalize_nit(request.cliente_api.nit)
             raise serializers.ValidationError({'nit': 'Este campo es obligatorio.'})
         return self._normalize_nit(nit)
 
     def _validate_permissions(self, request, nit: str):
         if hasattr(request, 'cliente_api') and request.cliente_api:
-            api_nit = self._normalize_nit(request.cliente_api.nit)
-            if api_nit != nit:
+            normalized = self._normalize_nit(nit)
+            empresas = getattr(request, 'empresas_autorizadas', None)
+            if empresas is not None:
+                try:
+                    # empresas puede ser QuerySet o lista evaluada
+                    allowed = empresas.filter(nit=normalized).exists()
+                except AttributeError:
+                    allowed = any(getattr(emp, 'nit', None) == normalized for emp in empresas)
+            else:
+                allowed = False
+            if not empresas or not allowed:
+                api_nit = self._normalize_nit(request.cliente_api.nit)
+                allowed = api_nit == normalized
+            if not allowed:
                 raise serializers.ValidationError('La API Key no tiene acceso al NIT solicitado.')
             return
 

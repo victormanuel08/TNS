@@ -12,21 +12,39 @@ from .prophet_forecaster import ProphetForecaster
 from .xgboost_predictor import XGBoostPredictor
 from .inventory_optimizer import InventoryOptimizer
 
+# MLflow es opcional
+try:
+    from .mlflow_integrator import MLflowIntegrator
+    MLFLOW_AVAILABLE = True
+except ImportError:
+    MLFLOW_AVAILABLE = False
+    MLflowIntegrator = None
+
 logger = logging.getLogger(__name__)
 
 class MLEngine:
-    def __init__(self, models_dir=None):      
+    def __init__(self, models_dir=None, enable_mlflow=True):      
         if models_dir is None:
             self.models_dir = os.path.join(settings.BASE_DIR, 'modelos_ml')
         else:
             self.models_dir = models_dir        
-    
+        
         os.makedirs(self.models_dir, exist_ok=True)
         logger.info(f"📁 Directorio de modelos: {self.models_dir}")
         
         self.prophet = ProphetForecaster()
         self.xgboost = XGBoostPredictor()
         self.optimizer = InventoryOptimizer()
+        
+        # Inicializar MLflow si está disponible y habilitado
+        self.mlflow = None
+        if enable_mlflow and MLFLOW_AVAILABLE and MLflowIntegrator:
+            try:
+                self.mlflow = MLflowIntegrator()
+                logger.info("✅ MLflow integrado y disponible")
+            except Exception as e:
+                logger.warning(f"⚠️ Error inicializando MLflow: {e}")
+                self.mlflow = None
         
         self.modelos_entrenados = {}
         self._cargar_modelos_existentes()
@@ -208,6 +226,22 @@ class MLEngine:
             self.modelos_entrenados[modelo_id] = modelo_data
             logger.info(f"✅ Modelo cargado en memoria: {modelo_id}")
 
+            # Registrar en MLflow si está disponible
+            mlflow_run_id = None
+            if self.mlflow:
+                try:
+                    mlflow_run_id = self.mlflow.log_model_training(
+                        modelo_id=modelo_id,
+                        nit_empresa=nit,
+                        modelo_data=modelo_data,
+                        resultados_entrenamiento=resultados,
+                        df_entrenamiento=df
+                    )
+                    if mlflow_run_id:
+                        logger.info(f"📊 Modelo registrado en MLflow - Run ID: {mlflow_run_id}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Error registrando en MLflow (no crítico): {e}")
+
             return {
                 'estado': 'modelos_entrenados',
                 'modelo_id': modelo_id,
@@ -215,7 +249,9 @@ class MLEngine:
                 'empresas_incluidas': empresas_ids,
                 'resultados': resultados,
                 'filas_entrenamiento': len(df),
-                'ruta_guardado': modelo_path
+                'ruta_guardado': modelo_path,
+                'mlflow_run_id': mlflow_run_id,  # ID del run en MLflow
+                'mlflow_ui_url': f"{self.mlflow.tracking_uri}/#/experiments/0/runs/{mlflow_run_id}" if mlflow_run_id and self.mlflow else None
             }
 
         except Exception as e:
@@ -366,7 +402,7 @@ class MLEngine:
 
             logger.info(f"✅ Recomendaciones generadas: {len(recomendaciones)} artículos")
 
-            return {
+            resultado = {
                 'recomendaciones': recomendaciones,
                 'total_articulos': len(recomendaciones),
                 'inversion_estimada': round(inversion_total, 2),
@@ -376,6 +412,31 @@ class MLEngine:
                 'empresa_servidor_id': empresa_servidor_id,
                 'nit_empresa': nit
             }
+
+            # Registrar predicción en MLflow si está disponible
+            if self.mlflow:
+                try:
+                    mlflow_run_id = self.mlflow.log_prediction(
+                        modelo_id=modelo_id,
+                        nit_empresa=nit,
+                        tipo_prediccion='recomendaciones',
+                        predicciones=recomendaciones,
+                        metadata={
+                            'meses': meses,
+                            'nivel_servicio': nivel_servicio,
+                            'predictor_principal': 'analisis_historico_avanzado',
+                            'total_articulos': len(recomendaciones),
+                            'inversion_total': inversion_total
+                        }
+                    )
+                    if mlflow_run_id:
+                        resultado['mlflow_run_id'] = mlflow_run_id
+                        resultado['mlflow_ui_url'] = f"{self.mlflow.tracking_uri}/#/experiments/0/runs/{mlflow_run_id}"
+                        logger.info(f"📊 Recomendaciones registradas en MLflow - Run ID: {mlflow_run_id}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Error registrando en MLflow (no crítico): {e}")
+
+            return resultado
 
         except Exception as e:
             logger.error(f"❌ Error generando recomendaciones: {e}")
@@ -503,7 +564,7 @@ class MLEngine:
                         confianza_xgboost = "media"
                         logger.info(f"✅ Fallback histórico generó {len(predicciones_xgboost)} predicciones")
             
-            return {
+            resultado = {
                 'predicciones_prophet': predicciones_prophet,
                 'predicciones_xgboost': predicciones_xgboost,
                 'predictor_principal': predictor_principal,
@@ -523,6 +584,39 @@ class MLEngine:
                     'caracteristicas_entrenamiento': caracteristicas_entrenamiento
                 }
             }
+
+            # Registrar predicción en MLflow si está disponible
+            if self.mlflow:
+                try:
+                    # Combinar predicciones para loguear
+                    todas_predicciones = []
+                    if isinstance(predicciones_prophet, list):
+                        todas_predicciones.extend(predicciones_prophet)
+                    if isinstance(predicciones_xgboost, list):
+                        todas_predicciones.extend(predicciones_xgboost)
+                    
+                    mlflow_run_id = self.mlflow.log_prediction(
+                        modelo_id=modelo_id,
+                        nit_empresa=nit,
+                        tipo_prediccion='demanda',
+                        predicciones=todas_predicciones,
+                        metadata={
+                            'meses': meses,
+                            'predictor_principal': predictor_principal,
+                            'confianza_prophet': confianza_prophet,
+                            'confianza_xgboost': confianza_xgboost,
+                            'total_predicciones': len(todas_predicciones),
+                            **resultado['metadata_modelo']
+                        }
+                    )
+                    if mlflow_run_id:
+                        resultado['mlflow_run_id'] = mlflow_run_id
+                        resultado['mlflow_ui_url'] = f"{self.mlflow.tracking_uri}/#/experiments/0/runs/{mlflow_run_id}"
+                        logger.info(f"📊 Predicción registrada en MLflow - Run ID: {mlflow_run_id}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Error registrando en MLflow (no crítico): {e}")
+
+            return resultado
                 
         except Exception as e:
             logger.error(f"❌ Error prediciendo demanda: {e}")

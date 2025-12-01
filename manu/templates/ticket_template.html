@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Ticket Factura {{ document.prefix }}-{{ document.number }}</title>
+    <style>
+        body {
+            font-family: 'Arial Narrow', Arial, sans-serif;
+            font-size: 12px;
+            line-height: 1.2;
+            margin: 2mm;
+            padding: 0;
+            width: 76mm;
+            max-width: 76mm;
+            background: white;
+        }
+        
+        .ticket-container {
+            width: 100%;
+        }
+        
+        .logo-section {
+            text-align: center;
+            margin-bottom: 2mm;
+            padding-bottom: 2mm;
+            border-bottom: 1px dashed #ccc;
+        }
+        
+        .logo-image {
+            max-width: 50mm;
+            max-height: 25mm;
+            display: block;
+            margin: 0 auto;
+        }
+        
+        .header {
+            text-align: center;
+            border-bottom: 2px dashed #333;
+            padding-bottom: 3mm;
+            margin-bottom: 3mm;
+        }
+        
+        .company-name {
+            font-weight: bold;
+            font-size: 14px;
+            margin-bottom: 1.5mm;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .company-info {
+            font-size: 11px;
+            margin-bottom: 0.5mm;
+        }
+        
+        .document-title {
+            font-weight: bold;
+            font-size: 13px;
+            text-align: center;
+            margin: 3mm 0;
+            text-transform: uppercase;
+            background-color: #f5f5f5;
+            padding: 2mm;
+            border-radius: 2mm;
+            border: 1px solid #ddd;
+        }
+        
+        .document-info {
+            background: #f0f0f0;
+            padding: 3mm;
+            margin: 2mm 0;
+            border-radius: 2mm;
+            font-size: 11px;
+            border: 1px solid #ddd;
+        }
+        
+        .client-info {
+            margin: 3mm 0;
+            font-size: 11px;
+            padding: 2mm;
+            background-color: #f9f9f9;
+            border-radius: 2mm;
+            border: 1px solid #eee;
+        }
+        
+        .client-info .text-bold {
+            font-size: 12px;
+            margin-bottom: 1mm;
+        }
+        
+        .items-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 3mm 0;
+            font-size: 11px;
+            border: 1px solid #ddd;
+        }
+        
+        .items-table th {
+            border-bottom: 2px solid #333;
+            padding: 1.5mm;
+            text-align: left;
+            font-weight: bold;
+            background-color: #f5f5f5;
+        }
+        
+        .items-table td {
+            padding: 1mm 1.5mm;
+            border-bottom: 1px dashed #ccc;
+            vertical-align: top;
+        }
+        
+        .taxes-table {
+            width: 100%;
+            font-size: 11px;
+            margin: 2mm 0;
+            border: 1px solid #ddd;
+            border-collapse: collapse;
+        }
+        
+        .taxes-table th {
+            padding: 1mm;
+            text-align: left;
+            background-color: #f5f5f5;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        .taxes-table td {
+            padding: 1mm;
+            border-bottom: 1px dashed #ccc;
+        }
+        
+        .totals-section {
+            margin-top: 3mm;
+            border-top: 2px dashed #333;
+            padding-top: 3mm;
+        }
+        
+        .total-line {
+            display: flex;
+            justify-content: space-between;
+            margin: 1mm 0;
+            padding: 0.5mm 0;
+            font-size: 12px;
+        }
+        
+        .total-final {
+            font-weight: bold;
+            border-top: 2px solid #333;
+            padding-top: 2mm;
+            margin-top: 2mm;
+            font-size: 13px;
+        }
+        
+        .qr-section {
+            text-align: center;
+            margin: 3mm 0;
+            padding: 2mm;
+            background-color: #f9f9f9;
+            border-radius: 3mm;
+            border: 1px solid #ddd;
+        }
+        
+        .qr-image {
+            width: 65mm;
+            height: 65mm;
+            display: block;
+            margin: 0 auto;
+            border: 1px solid #ccc;
+            padding: 1mm;
+            background-color: white;
+        }
+        
+        .cufe-section {
+            margin-top: 2mm;
+            padding: 3mm;
+            background: #f8f8f8;
+            border-radius: 2mm;
+            font-size: 10px;
+            word-break: break-all;
+            border: 1px solid #eee;
+            line-height: 1.3;
+        }
+        
+        .footer {
+            text-align: center;
+            margin-top: 4mm;
+            font-size: 10px;
+            border-top: 2px dashed #333;
+            padding-top: 3mm;
+            line-height: 1.3;
+        }
+        
+        .text-center { text-align: center; }
+        .text-right { text-align: right; }
+        .text-bold { font-weight: bold; }
+        .text-small { font-size: 10px; }
+        
+        .item-code { 
+            font-size: 10px; 
+            color: #666;
+        }
+        .item-description {
+            font-weight: bold;
+        }
+        
+        .payment-info {
+            margin-top: 3mm;
+            padding: 2mm;
+            background-color: #f9f9f9;
+            border-radius: 2mm;
+            border: 1px solid #eee;
+            font-size: 11px;
+        }
+        
+        .notes-section {
+            margin-top: 2mm;
+            padding: 2mm;
+            background-color: #f9f9f9;
+            border-radius: 2mm;
+            border: 1px solid #eee;
+            font-size: 11px;
+        }
+        
+        .amount-in-words {
+            margin-top: 2mm;
+            padding: 2mm;
+            background-color: #f0f8ff;
+            border-radius: 2mm;
+            border: 1px solid #d1e7ff;
+            font-size: 10px;
+            text-align: center;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="ticket-container">
+        <!-- Logo de la Empresa -->
+        {% if logo_base64 %}
+        <div class="logo-section">
+            <img src="{{ logo_base64 }}" class="logo" alt="Logo">
+        </div>
+        {% endif %}
+        
+        <!-- Encabezado de la Empresa -->
+        <div class="header">
+            <div class="company-name">{{ request_api.company_name|default:"EMPRESA" }}</div>
+            <div class="company-info">NIT: {{ request_api.company_nit|default:"" }}</div>
+            {% if request_api.company_address %}
+            <div class="company-info">{{ request_api.company_address }}</div>
+            {% endif %}
+            {% if request_api.company_phone %}
+            <div class="company-info">Tel: {{ request_api.company_phone }}</div>
+            {% endif %}
+            {% if request_api.company_email %}
+            <div class="company-info">{{ request_api.company_email }}</div>
+            {% endif %}
+        </div>
+        
+        <!-- Título del Documento -->
+        <div class="document-title">
+            FACTURA ELECTRÓNICA DE VENTA
+        </div>
+        
+        <!-- Información de la Factura -->
+        <div class="document-info">
+            <div class="text-center text-bold">No: {{ request_api.prefix }}-{{ request_api.number }}</div>
+            <div class="text-center">Fecha: {{ request_api.date }} {{ request_api.time }}</div>
+            <div class="text-center">Validación DIAN: {{ document.date_issue }}</div>
+        </div>
+        
+        <!-- Información del Cliente -->
+        <div class="client-info">
+            <div class="text-bold">CLIENTE:</div>
+            <div>{{ request_api.customer.name }}</div>
+            <div>NIT/CC: {{ request_api.customer.identification_number }}-{{ request_api.customer.dv }}</div>
+            <div>Dirección: {{ request_api.customer.address }}</div>
+            <div>Tel: {{ request_api.customer.phone }}</div>
+            <div>Email: {{ request_api.customer.email }}</div>
+        </div>
+        
+        <!-- Tabla de Items -->
+        <table class="items-table">
+            <thead>
+                <tr>
+                    <th width="10%">Cant</th>
+                    <th width="60%">Descripción</th>
+                    <th width="30%" class="text-right">Valor</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in request_api.invoice_lines %}
+                <tr>
+                    <td class="text-center">{{ item.invoiced_quantity }}</td>
+                    <td>
+                        <div class="item-description">{{ item.description }}</div>
+                        <div class="item-code">Cód: {{ item.code }}</div>
+                    </td>
+                    <td class="text-right">${{ item.line_extension_amount }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        
+        <!-- Impuestos (solo si hay impuestos) -->
+        {% if request_api.tax_totals %}
+        <table class="taxes-table">
+            <thead>
+                <tr>
+                    <th>Tipo</th>
+                    <th>Base</th>
+                    <th>%</th>
+                    <th class="text-right">Valor</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for tax in request_api.tax_totals %}
+                <tr>
+                    <td>{{ tax.tax_name }}</td>
+                    <td>${{ tax.taxable_amount }}</td>
+                    <td>{{ tax.percent }}%</td>
+                    <td class="text-right">${{ tax.tax_amount }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+        
+        <!-- Totales -->
+        <div class="totals-section">
+            <div class="total-line">
+                <span>Subtotal:</span>
+                <span>${{ request_api.legal_monetary_totals.tax_exclusive_amount }}</span>
+            </div>
+            <div class="total-line">
+                <span>Impuestos:</span>
+                <span>${{ document.total_tax }}</span>
+            </div>
+            <div class="total-line total-final">
+                <span class="text-bold">TOTAL A PAGAR:</span>
+                <span class="text-bold">${{ request_api.legal_monetary_totals.payable_amount }}</span>
+            </div>
+            
+            <div class="amount-in-words">
+                SON: {{ total_en_letras }}
+            </div>
+        </div>
+        
+        <!-- Información de Pago -->
+        <div class="payment-info text-small">
+            <div><strong>Forma de Pago:</strong> 
+                {% if request_api.payment_form.payment_form_id == 1 %} Contado {% else %} Crédito {% endif %}
+            </div>
+            <div><strong>Medio de Pago:</strong> 
+                {% if request_api.payment_form.payment_method_id == 47 %} Transferencia Débito Bancaria {% else %} Otro {% endif %}
+            </div>
+        </div>
+        
+        <!-- Notas -->
+        {% if request_api.notes %}
+        <div class="notes-section text-small">
+            <div><strong>Notas:</strong> {{ request_api.notes }}</div>
+        </div>
+        {% endif %}
+        
+        <!-- QR DIAN (solo si hay CUFE) -->
+        {% if qr_base64 %}
+        <div class="qr-section">
+            <div class="text-bold text-center">CÓDIGO QR DIAN</div>
+            <img src="data:image/png;base64,{{ qr_base64 }}" alt="QR Factura DIAN" class="qr-image">
+            <div class="text-small text-center">Escanea para validar con la DIAN</div>
+        </div>
+        {% endif %}
+        
+        <!-- CUFE (siempre se muestra, "Emitiendo..." si no hay CUFE) -->
+        <div class="cufe-section">
+            <div class="text-bold">CUFE:</div>
+            <div>{{ document.cufe }}</div>
+        </div>
+        
+        <!-- Pie de Página -->
+        <div class="footer">
+            <div class="text-bold">REPRESENTACIÓN GRÁFICA DE FACTURA ELECTRÓNICA</div>
+            {% if request_api.resolution_number %}
+            <div>Resolución: {{ request_api.resolution_number }}</div>
+            {% endif %}
+            <div>Prefijo: {{ request_api.prefix }}</div>
+            <div>Generado el: {{ generation_date }}</div>
+            <div style="margin-top: 2mm;">¡Gracias por su compra!</div>
+        </div>
+    </div>
+</body>
+</html>
+

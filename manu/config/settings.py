@@ -47,7 +47,8 @@ INSTALLED_APPS = [
     'rest_framework',
     'encrypted_model_fields',
     'apps.sistema_analitico',
-    'apps.dian_scraper'
+    'apps.dian_scraper',
+    'apps.fudo_scraper'
 ]
 
 MIDDLEWARE = [
@@ -139,6 +140,12 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
+    'DEFAULT_RENDERER_CLASSES': [
+        'rest_framework.renderers.JSONRenderer',
+    ],
+    'DEFAULT_PARSER_CLASSES': [
+        'rest_framework.parsers.JSONParser',
+    ],
 }
 
 # JWT Configuration
@@ -192,3 +199,27 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
+
+# Configuración API DIAN
+API_DIAN_ROUTE = env('API_DIAN_ROUTE', default='http://45.149.204.184:81')
+TOKEN_API_DIAN_BASIC = env('TOKEN_API_DIAN_BASIC', default='78b8f740085ff4bb2cb704fe887638804125024f087259b5a81010ecb11e82e6')
+
+# Configuración WireGuard VPN
+WG_SERVER_HOST = env('WG_SERVER_HOST', default='')  # IP o hostname del servidor Linux con WireGuard
+WG_SERVER_USER = env('WG_SERVER_USER', default='root')  # Usuario SSH (root o usuario con sudo)
+WG_SERVER_PASSWORD = env('WG_SERVER_PASSWORD', default='')  # Password SSH (o usar clave privada)
+WG_SERVER_SSH_PORT = env.int('WG_SERVER_SSH_PORT', default=22)  # Puerto SSH
+WG_SSH_KEY_PATH = env('WG_SSH_KEY_PATH', default='')  # Ruta a clave SSH privada (alternativa a password)
+WG_INTERFACE = env('WG_INTERFACE', default='wg0')  # Nombre de la interfaz WireGuard
+WG_CONFIG_DIR = env('WG_CONFIG_DIR', default='/etc/wireguard')  # Directorio de configuración
+WG_SERVER_IP = env('WG_SERVER_IP', default='10.8.0.1')  # IP del servidor en la red VPN
+WG_SERVER_PORT = env.int('WG_SERVER_PORT', default=51820)  # Puerto del servidor WireGuard
+WG_SERVER_PUBLIC_KEY_PATH = env('WG_SERVER_PUBLIC_KEY_PATH', default='/etc/wireguard/public.key')  # Ruta a clave pública del servidor
+WG_SERVER_ENDPOINT = env('WG_SERVER_ENDPOINT', default='')  # Endpoint público (ej: servidor.com:51820)
+
+# Configuración SSH para gestión de servicios del servidor (puede ser diferente al servidor WireGuard)
+SERVER_SSH_HOST = env('SERVER_SSH_HOST', default='')  # IP o hostname del servidor VPS donde están los servicios
+SERVER_SSH_USER = env('SERVER_SSH_USER', default='root')  # Usuario SSH (recomendado: usuario con sudo, también puede ser root)
+SERVER_SSH_PASSWORD = env('SERVER_SSH_PASSWORD', default='')  # Password SSH (o usar clave privada)
+SERVER_SSH_PORT = env.int('SERVER_SSH_PORT', default=22)  # Puerto SSH
+SERVER_SSH_KEY_PATH = env('SERVER_SSH_KEY_PATH', default='')  # Ruta a clave SSH privada (alternativa a password)

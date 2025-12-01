@@ -61,8 +61,13 @@ export const useApiClient = () => {
     }
 
     const isFormData = options.body instanceof FormData
+    // Si es FormData, NO establecer Content-Type - el navegador lo hace automáticamente con el boundary correcto
     if (!isFormData && !headers['Content-Type'] && options.body) {
       headers['Content-Type'] = 'application/json'
+    }
+    // Si es FormData y se pasó Content-Type en headers, eliminarlo para que el navegador lo establezca
+    if (isFormData && headers['Content-Type']) {
+      delete headers['Content-Type']
     }
 
     const queryString = buildQueryString(options.query)
@@ -81,12 +86,24 @@ export const useApiClient = () => {
   const get = async <T>(path: string, query?: QueryRecord) =>
     request<T>(path, { method: 'GET', query })
 
-  const post = async <T, TBody = any>(path: string, body?: TBody) =>
-    request<T>(path, { method: 'POST', body })
+  const post = async <T, TBody = any>(path: string, body?: TBody, options?: { headers?: Record<string, string> }) =>
+    request<T>(path, { method: 'POST', body, headers: options?.headers })
+
+  const put = async <T, TBody = any>(path: string, body?: TBody, options?: { headers?: Record<string, string> }) =>
+    request<T>(path, { method: 'PUT', body, headers: options?.headers })
+
+  const patch = async <T, TBody = any>(path: string, body?: TBody, options?: { headers?: Record<string, string> }) =>
+    request<T>(path, { method: 'PATCH', body, headers: options?.headers })
+
+  const del = async <T>(path: string, query?: QueryRecord) =>
+    request<T>(path, { method: 'DELETE', query })
 
   return {
     request,
     get,
-    post
+    post,
+    put,
+    patch,
+    delete: del
   }
 }

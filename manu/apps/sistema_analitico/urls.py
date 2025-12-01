@@ -14,7 +14,21 @@ router.register('consulta-natural', views.ConsultaNaturalViewSet, basename='cons
 router.register('testing', views.TestingViewSet, basename='testing')
 router.register('api-keys', views.APIKeyManagementViewSet, basename='api-keys')
 router.register('tns', views.TNSViewSet, basename='tns')
+router.register('branding', views.BrandingViewSet, basename='branding')
+router.register('ecommerce-config', views.EcommerceConfigViewSet, basename='ecommerce-config')
+router.register('cajas-autopago', views.CajaAutopagoViewSet, basename='cajas-autopago')
+router.register('dian-processor', views.DianProcessorViewSet, basename='dian-processor')
+router.register('vpn/configs', views.VpnConfigViewSet, basename='vpn-configs')
+router.register('server', views.ServerManagementViewSet, basename='server-management')
+router.register('notas-rapidas', views.NotaRapidaViewSet, basename='notas-rapidas')
 
 urlpatterns = [
     path('api/', include(router.urls)),
+    path('api/resolve-domain/', views.resolve_domain_view, name='resolve-domain'),
+    path('api/public-catalog/', views.public_catalog_view, name='public-catalog'),
+    path('api/public-catalog/images/', views.public_images_view, name='public-images'),
+    path('api/formas-pago-ecommerce/', views.formas_pago_ecommerce_view, name='formas-pago-ecommerce'),
+    path('api/pasarelas-disponibles/', views.pasarelas_disponibles_view, name='pasarelas-disponibles'),
+    path('api/procesar-pago-ecommerce/', views.procesar_pago_ecommerce_view, name='procesar-pago-ecommerce'),
+    path('api/pasarela-response/', views.pasarela_response_view, name='pasarela-response'),
 ]

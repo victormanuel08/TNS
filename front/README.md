@@ -98,3 +98,9 @@ Durante el desarrollo puedes emular `subdominio.dominio.com` de tres formas:
 1. **Query param**: en modo dev `http://localhost:3000/?subdomain=restaurant` fuerza el subdominio (se guarda en `localStorage`).
 2. **Archivo hosts**: añade `127.0.0.1 app.localhost` (u otro) y abre `http://app.localhost:3000`.
 3. **Proxy local**: si prefieres Traefik/Caddy, enruta `*.test.local` al puerto 3000 y el store detectará el subdominio automáticamente.
+
+PS C:\Users\USUARIO\repos\TNSFULL> cd .\manu\                
+PS C:\Users\USUARIO\repos\TNSFULL\manu> .\env\Scripts\activate
+(env) PS C:\Users\USUARIO\repos\TNSFULL\manu> celery -A config worker -l info -P solo
+PS C:\Redis> .\redis-server.exe --port 6380
+PS C:\Users\USUARIO\repos\TNSFULL\front> npx nuxt dev --port 3001 --host

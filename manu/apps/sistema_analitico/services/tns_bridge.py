@@ -5,6 +5,125 @@ from typing import Any, Dict, Iterable, List, Optional
 
 import firebirdsql
 
+# Monkey patch para forzar latin-1 en firebirdsql (evita errores de cp1252)
+# Esto es necesario porque firebirdsql usa cp1252 como fallback en Windows
+try:
+    from firebirdsql import wireprotocol
+    from firebirdsql import consts
+    import firebirdsql.fbcore as fbcore
+    
+    # Cambiar mapeo de WIN1252 de cp1252 a iso8859_1 (latin-1)
+    # iso8859_1 puede decodificar cualquier byte sin errores (es superset de WIN1252)
+    # Esto evita el error 'charmap' codec can't decode byte 0x81
+    consts.charset_map['WIN1252'] = 'iso8859_1'  # Cambiar de 'cp1252' a 'iso8859_1'
+    if 'WIN_1252' not in consts.charset_map:
+        consts.charset_map['WIN_1252'] = 'iso8859_1'
+    if 'latin-1' not in consts.charset_map:
+        consts.charset_map['latin-1'] = 'iso8859_1'
+    if 'latin1' not in consts.charset_map:
+        consts.charset_map['latin1'] = 'iso8859_1'
+    
+    # Guardar método original
+    if not hasattr(wireprotocol.WireProtocol, '_original_bytes_to_str'):
+        wireprotocol.WireProtocol._original_bytes_to_str = wireprotocol.WireProtocol.bytes_to_str
+    
+    def patched_bytes_to_str(self, b):
+        """Versión parcheada que usa latin-1 (iso8859_1) en lugar de cp1252"""
+        if not b:
+            return b
+        charset = getattr(self, 'charset', 'ISO8859_1')
+        # Mapear WIN1252/CP1252 a ISO8859_1 (latin-1) que es compatible
+        if charset and charset.upper() in ['WIN1252', 'WIN_1252', 'CP1252']:
+            charset = 'ISO8859_1'
+        if not charset:
+            charset = 'ISO8859_1'
+        try:
+            # Usar charset_map si está disponible
+            mapped_charset = consts.charset_map.get(charset, charset)
+            if mapped_charset is None:
+                mapped_charset = 'iso8859_1'
+            return b.decode(mapped_charset, errors='replace')
+        except (UnicodeDecodeError, LookupError):
+            # Fallback a iso8859_1 (latin-1) que siempre funciona
+            return b.decode('iso8859_1', errors='replace')
+    
+    # Aplicar monkey patch para bytes_to_str
+    if not hasattr(wireprotocol.WireProtocol, '_patched_bytes_to_str'):
+        wireprotocol.WireProtocol.bytes_to_str = patched_bytes_to_str
+        wireprotocol.WireProtocol._patched_bytes_to_str = True
+    
+    # Monkey patch para _parse_status_vector para manejar bytes en mensajes de error
+    # El método está en ConnectionResponseMixin, no directamente en Connection
+    try:
+        # Intentar parchear ConnectionResponseMixin si existe
+        if hasattr(fbcore, 'ConnectionResponseMixin'):
+            mixin = fbcore.ConnectionResponseMixin
+            if hasattr(mixin, '_parse_status_vector') and not hasattr(mixin, '_original_parse_status_vector'):
+                original_method = mixin._parse_status_vector
+                
+                def patched_parse_status_vector(self):
+                    """Versión parcheada que asegura que s sea string antes de replace"""
+                    sql_code = 0
+                    gds_codes = set()
+                    num_arg = 0
+                    message = ''
+                    
+                    # Importar constantes necesarias
+                    from firebirdsql.consts import (
+                        isc_arg_end, isc_arg_gds, isc_arg_number, 
+                        isc_arg_string, isc_arg_interpreted, isc_arg_sql_state
+                    )
+                    from firebirdsql.fbcore import bytes_to_bint
+                    from firebirdsql.fberrmsgs import messages
+                    
+                    n = bytes_to_bint(self._recv_channel(4))
+                    while n != isc_arg_end:
+                        if n == isc_arg_gds:
+                            gds_code = bytes_to_bint(self._recv_channel(4))
+                            if gds_code:
+                                gds_codes.add(gds_code)
+                                message += messages.get(gds_code, '@1')
+                                num_arg = 0
+                        elif n == isc_arg_number:
+                            num = bytes_to_bint(self._recv_channel(4))
+                            if gds_code == 335544436:
+                                sql_code = num
+                            num_arg += 1
+                            message = message.replace('@' + str(num_arg), str(num))
+                        elif n == isc_arg_string:
+                            nbytes = bytes_to_bint(self._recv_channel(4))
+                            s = self.bytes_to_str(self._recv_channel(nbytes, word_alignment=True))
+                            # Asegurar que s sea string, no bytes
+                            if isinstance(s, bytes):
+                                try:
+                                    s = s.decode('iso8859_1', errors='replace')
+                                except Exception:
+                                    s = s.decode('utf-8', errors='replace')
+                            num_arg += 1
+                            message = message.replace('@' + str(num_arg), str(s))
+                        elif n == isc_arg_interpreted:
+                            nbytes = bytes_to_bint(self._recv_channel(4))
+                            s = str(self._recv_channel(nbytes, word_alignment=True))
+                            message += s
+                        elif n == isc_arg_sql_state:
+                            nbytes = bytes_to_bint(self._recv_channel(4))
+                            s = str(self._recv_channel(nbytes, word_alignment=True))
+                        n = bytes_to_bint(self._recv_channel(4))
+                    
+                    return (gds_codes, sql_code, message)
+                
+                mixin._original_parse_status_vector = original_method
+                mixin._parse_status_vector = patched_parse_status_vector
+    except Exception as e:
+        # Si falla, continuar sin este parche
+        import warnings
+        warnings.warn(f'No se pudo aplicar monkey patch para _parse_status_vector: {e}')
+            
+except Exception as e:
+    # Si falla el monkey patch, continuar sin él
+    import warnings
+    warnings.warn(f'No se pudo aplicar monkey patch para charset: {e}')
+
 from apps.sistema_analitico.models import EmpresaServidor
 
 
@@ -23,7 +142,12 @@ class TNSBridge:
         if self.servidor.tipo_servidor != 'FIREBIRD':
             raise ValueError('Solo se soportan conexiones Firebird para TNS.')
 
-        self.charset = 'WIN1252'
+        # Usar latin-1 (ISO-8859-1) que es superset de WIN1252 y más tolerante
+        # latin-1 puede decodificar cualquier byte sin errores, luego normalizamos a UTF-8
+        # Usar ISO8859_1 (latin-1) que es superset de WIN1252 y más tolerante
+        # ISO8859_1 puede decodificar cualquier byte sin errores, luego normalizamos a UTF-8
+        # Usar 'ISO8859_1' (nombre de Firebird) en lugar de 'latin-1' para mejor compatibilidad
+        self.charset = 'ISO8859_1'  # Cambiado de 'WIN1252' a 'ISO8859_1' para evitar errores de decodificación
         self.conn: Optional[firebirdsql.Connection] = None
         self.cursor: Optional[firebirdsql.Cursor] = None
 
@@ -50,6 +174,7 @@ class TNSBridge:
         if not database_path:
             raise ValueError('No se configuró la ruta de la base de datos TNS.')
 
+        # Limpiar pool si el charset cambió (para forzar nueva conexión con charset correcto)
         if self.pool_key in self._connection_pool:
             conn = self._connection_pool[self.pool_key]
             try:
@@ -57,21 +182,38 @@ class TNSBridge:
                 cur.execute('SELECT 1 FROM RDB$DATABASE')
                 cur.fetchone()
                 cur.close()
+                # Verificar que el charset de la conexión sea el correcto
+                # Si no coincide, cerrar y crear nueva conexión
                 self.conn = conn
-            except Exception:
+            except Exception as e:
+                # Si hay error, remover del pool primero para evitar reutilización
+                self._connection_pool.pop(self.pool_key, None)
+                # Intentar cerrar de forma segura sin parsear mensajes de error
                 try:
-                    conn.close()
-                finally:
-                    self._connection_pool.pop(self.pool_key, None)
+                    # Cerrar socket directamente si es posible (evita parsing de errores)
+                    if hasattr(conn, 'sock') and conn.sock:
+                        try:
+                            conn.sock.close()
+                        except Exception:
+                            pass
+                    # Intentar cerrar conexión normalmente
+                    if hasattr(conn, 'close'):
+                        conn.close()
+                except Exception:
+                    # Si todo falla, simplemente ignorar - ya removimos del pool
+                    pass
 
         if not self.conn:
+            # Usar latin-1 directamente (es superset de WIN1252 y más tolerante)
+            # latin-1 puede decodificar cualquier byte sin errores, luego normalizamos a UTF-8
+            connection_charset = self.charset  # Ya es 'latin-1' por defecto
             self.conn = firebirdsql.connect(
                 host=self.servidor.host,
                 database=database_path,
                 user=self.servidor.usuario,
                 password=self.servidor.password,
                 port=port,
-                charset=self.charset,
+                charset=connection_charset,
             )
             self._connection_pool[self.pool_key] = self.conn
 
@@ -81,9 +223,23 @@ class TNSBridge:
         if self.cursor:
             try:
                 self.cursor.close()
+            except Exception:
+                pass
             finally:
                 self.cursor = None
-        self.conn = None
+        
+        # No cerrar conexión del pool, solo limpiar referencia local
+        if self.conn and self.pool_key in self._connection_pool:
+            # Solo limpiar referencia local, mantener conexión en pool
+            self.conn = None
+        elif self.conn:
+            # Si no está en pool, cerrarla
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+            finally:
+                self.conn = None
 
     # ----------------------------------------------------------------- helpers
     def _ensure_schema(self):

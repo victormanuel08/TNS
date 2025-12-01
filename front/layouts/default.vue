@@ -1,23 +1,11 @@
 <template>
   <div :class="layoutClasses" class="default-layout">
-    <header class="default-header">
-      <div class="header-content">
-        <div>
-          <p class="company-label">Empresa activa</p>
-          <h1>{{ companyName }}</h1>
-        </div>
-        <div class="mode-badge">
-          <span>Modo</span>
-          <strong>{{ currentModeLabel }}</strong>
-        </div>
-      </div>
-    </header>
-
+    <!-- Header eliminado para no mostrar 'Empresa activa / Modo ...' y aprovechar mejor el espacio -->
     <main class="default-main">
       <slot />
     </main>
 
-    <footer class="default-footer">
+    <footer v-if="currentMode !== 'ecommerce'" class="default-footer">
       <p>Sistema contable - {{ new Date().getFullYear() }}</p>
     </footer>
   </div>
@@ -104,6 +92,21 @@ const layoutClasses = computed(() => {
 .default-main {
   flex: 1;
   padding: 2rem;
+}
+
+/* Para modo ecommerce, eliminar padding y márgenes */
+.default-layout.mode-ecommerce {
+  padding: 0 !important;
+  margin: 0 !important;
+  width: 100vw !important;
+  max-width: 100vw !important;
+}
+
+.default-layout.mode-ecommerce .default-main {
+  padding: 0 !important;
+  margin: 0 !important;
+  width: 100% !important;
+  max-width: 100% !important;
 }
 
 .default-footer {

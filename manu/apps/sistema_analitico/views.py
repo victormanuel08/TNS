@@ -5,6 +5,9 @@ import os
 import pandas as pd
 import re
 import secrets
+import time
+import requests
+import base64
 from datetime import datetime, timedelta
 from decimal import Decimal
 import firebirdsql
@@ -18,17 +21,32 @@ from rest_framework import serializers, viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.authentication import BaseAuthentication
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 
 # 🔹 Modelos, serializadores y servicios internos
 from .models import (
+    VpnConfig,
     Servidor,
     EmpresaServidor,
     MovimientoInventario,
     UsuarioEmpresa,
     UserTenantProfile,
+    APIKeyCliente,
+    EmpresaPersonalizacion,
+    GrupoMaterialImagen,
+    MaterialImagen,
+    CajaAutopago,
+    NotaRapida,
+    EmpresaDominio,
+    EmpresaEcommerceConfig,
+    PasarelaPago,
+    TransaccionPago,
 )
 from .serializers import *
 from .services.data_manager import DataManager
@@ -43,7 +61,17 @@ logger = logging.getLogger(__name__)
 FIREBIRD_CHARSET = 'WIN1252'
 
 def _normalize_nit(value: str) -> str:
-    return re.sub(r"\D", "", value or "")
+    """
+    Normaliza NIT eliminando puntos, guiones y cualquier carácter no numérico.
+    Ejemplos:
+    - "13.279.115-7" -> "132791157"
+    - "13279115-7" -> "132791157"
+    - "132791157" -> "132791157"
+    """
+    if not value:
+        return ""
+    # Eliminar todos los caracteres no numéricos (puntos, guiones, espacios, etc.)
+    return re.sub(r"\D", "", str(value))
 
 
 def _extract_subdomain_from_request(request):
@@ -81,16 +109,62 @@ def _clean_nit(value: str) -> str:
 
 
 def _decode_firebird_value(value):
+    """Decodifica valores de Firebird a string UTF-8 seguro para JSON (retrocompatible)"""
+    # Si es None o no es bytes/string, retornar tal cual (retrocompatible)
+    if value is None:
+        return None
+    if not isinstance(value, (bytes, str)):
+        return value
+    
     if isinstance(value, bytes):
         try:
-            return value.decode(FIREBIRD_CHARSET, errors='replace')
-        except Exception:
-            return value.decode('latin-1', errors='replace')
-    return value
+            # Decodificar desde WIN1252 (charset de Firebird)
+            decoded = value.decode(FIREBIRD_CHARSET, errors='replace')
+        except (UnicodeDecodeError, LookupError):
+            try:
+                # Fallback a latin-1
+                decoded = value.decode('latin-1', errors='replace')
+            except Exception:
+                # Último recurso
+                decoded = value.decode('utf-8', errors='replace')
+        
+        # Solo normalizar si hay caracteres problemáticos (evitar doble encoding innecesario)
+        try:
+            # Intentar codificar a UTF-8 - si falla, hay caracteres problemáticos
+            decoded.encode('utf-8')
+            return decoded  # Ya es UTF-8 válido, retornar tal cual
+        except UnicodeEncodeError:
+            # Hay caracteres problemáticos, normalizar
+            return decoded.encode('utf-8', errors='replace').decode('utf-8')
+    else:
+        # Ya es string - solo normalizar si es necesario (retrocompatible)
+        try:
+            # Verificar si ya es UTF-8 válido
+            value.encode('utf-8')
+            return value  # Ya es UTF-8 válido, retornar tal cual (retrocompatible)
+        except UnicodeEncodeError:
+            # Tiene caracteres problemáticos, normalizar
+            return value.encode('utf-8', errors='replace').decode('utf-8')
 
 
 def _rows_to_dicts(cursor, rows):
-    columns = [col[0].strip() for col in cursor.description or []]
+    # Decodificar nombres de columnas si vienen como bytes (retrocompatible)
+    # Si ya son strings, mantener comportamiento original
+    columns = []
+    for col in cursor.description or []:
+        col_name = col[0]
+        # Solo decodificar si es bytes (retrocompatible)
+        if isinstance(col_name, bytes):
+            try:
+                col_name = col_name.decode(FIREBIRD_CHARSET, errors='replace')
+            except (UnicodeDecodeError, LookupError):
+                try:
+                    col_name = col_name.decode('latin-1', errors='replace')
+                except Exception:
+                    col_name = str(col_name, errors='replace')
+        # Si ya es string, mantener tal cual (retrocompatible)
+        columns.append(col_name.strip() if isinstance(col_name, str) else str(col_name).strip())
+    
     results = []
     for row in rows:
         entry = {}
@@ -160,7 +234,22 @@ def _run_validation_procedure(cursor, username, password):
     row = cursor.fetchone()
     if not row:
         raise serializers.ValidationError('TNS_WS_VERIFICAR_USUARIO no retorn? datos')
-    columns = [col[0].strip() for col in cursor.description or []]
+    # Decodificar nombres de columnas si vienen como bytes (retrocompatible)
+    # Si ya son strings, mantener comportamiento original
+    columns = []
+    for col in cursor.description or []:
+        col_name = col[0]
+        # Solo decodificar si es bytes (retrocompatible)
+        if isinstance(col_name, bytes):
+            try:
+                col_name = col_name.decode(FIREBIRD_CHARSET, errors='replace')
+            except (UnicodeDecodeError, LookupError):
+                try:
+                    col_name = col_name.decode('latin-1', errors='replace')
+                except Exception:
+                    col_name = str(col_name, errors='replace')
+        # Si ya es string, mantener tal cual (retrocompatible)
+        columns.append(col_name.strip() if isinstance(col_name, str) else str(col_name).strip())
     return {columns[idx]: _decode_firebird_value(row[idx]) for idx in range(len(columns))}
 
 
@@ -250,7 +339,9 @@ def _attach_api_key(request):
 def _empresa_queryset_for_request(request):
     qs = EmpresaServidor.objects.select_related('servidor')
     if hasattr(request, 'cliente_api') and request.cliente_api:
-        qs = qs.filter(nit=_normalize_nit(request.cliente_api.nit))
+        # Con API Key: usar empresas_asociadas directamente (ya están filtradas por NIT normalizado)
+        empresas_ids = request.empresas_autorizadas.values_list('id', flat=True)
+        qs = qs.filter(id__in=empresas_ids)
     else:
         user = getattr(request, 'user', None)
         if not user or user.is_anonymous:
@@ -268,17 +359,58 @@ def _get_empresa_for_request(request, data):
     nit = data.get('nit')
     anio = data.get('anio_fiscal')
     qs = _empresa_queryset_for_request(request)
+    
     try:
         if empresa_id:
-            return qs.get(id=empresa_id)
+            # Buscar por ID (ya está filtrado por empresas_asociadas si hay API Key, o por permisos si es JWT)
+            empresa = qs.get(id=empresa_id)
+            return empresa
         if nit:
-            filters = {'nit': _normalize_nit(nit)}
-            if anio:
-                filters['anio_fiscal'] = anio
-            return qs.get(**filters)
+            # Buscar por NIT: normalizar y comparar
+            nit_normalizado = _normalize_nit(nit)
+            
+            # Intentar búsqueda directa primero (más rápido si el NIT en BD ya está normalizado)
+            try:
+                empresa = qs.get(nit=nit_normalizado)
+                if anio and empresa.anio_fiscal != anio:
+                    raise EmpresaServidor.DoesNotExist()
+                return empresa
+            except (EmpresaServidor.DoesNotExist, EmpresaServidor.MultipleObjectsReturned):
+                # Si no funciona, iterar y normalizar (para casos donde el NIT en BD tiene formato diferente)
+                for empresa in qs:
+                    if _normalize_nit(empresa.nit) == nit_normalizado:
+                        if anio and empresa.anio_fiscal != anio:
+                            continue
+                        return empresa
+                raise EmpresaServidor.DoesNotExist()
     except EmpresaServidor.DoesNotExist:
         raise serializers.ValidationError('Empresa no encontrada o sin permisos.')
     raise serializers.ValidationError('Debes indicar empresa_servidor_id o nit.')
+
+
+class JWTOrAPIKeyAuthentication(BaseAuthentication):
+    """
+    Autenticación que permite JWT o API Key.
+    Si el JWT está expirado, no lanza excepción, permite que la API Key se procese.
+    """
+    def authenticate(self, request):
+        # Intentar autenticar con JWT primero
+        jwt_auth = JWTAuthentication()
+        try:
+            user, token = jwt_auth.authenticate(request)
+            if user and token:
+                return (user, token)
+        except (InvalidToken, TokenError):
+            # Token inválido o expirado, no lanzar excepción
+            # Permitir que se procese la API Key
+            pass
+        except Exception:
+            # Cualquier otro error, también ignorar
+            pass
+        
+        # Si JWT no funcionó, retornar None (sin autenticar)
+        # La API Key se procesará en APIKeyAwareViewSet.initial()
+        return None
 
 
 class APIKeyAwareViewSet:
@@ -294,6 +426,14 @@ class ServidorViewSet(viewsets.ModelViewSet):
 class EmpresaServidorViewSet(viewsets.ModelViewSet):
     queryset = EmpresaServidor.objects.all()
     serializer_class = EmpresaServidorSerializer
+    
+    def get_queryset(self):
+        queryset = EmpresaServidor.objects.select_related('servidor').all()
+        # Filtrar por servidor si se proporciona el parámetro
+        servidor_id = self.request.query_params.get('servidor', None)
+        if servidor_id:
+            queryset = queryset.filter(servidor_id=servidor_id)
+        return queryset
     
 class UsuarioEmpresaViewSet(viewsets.ModelViewSet):
     queryset = UsuarioEmpresa.objects.all()
@@ -513,7 +653,7 @@ class ConsultaNaturalViewSet(viewsets.ViewSet):
             logger.info(f"🔍 Consulta detectada: {tipo_consulta}, Parámetros: {parametros}")
 
             if tipo_consulta in ['recomendaciones_compras', 'prediccion_demanda']:
-                # ✅ MÉTODOS PREDICTIVOS - NO TOCAR (ya tienen su propia lógica)
+                # ✅ MÉTODOS PREDICTIVOS - Con integración MLflow
                 resultados = self._ejecutar_analisis_predictivo(
                     tipo_consulta, parametros, empresa_servidor_id
                 )
@@ -523,6 +663,10 @@ class ConsultaNaturalViewSet(viewsets.ViewSet):
                     resultados = self._generar_recomendaciones_historicas_mejoradas(
                         consulta, empresa_servidor_id, parametros.get('meses', 6)
                     )
+                
+                # Agregar información de MLflow a la respuesta si está disponible
+                if 'mlflow_ui_url' in resultados and resultados['mlflow_ui_url']:
+                    logger.info(f"📊 Ver predicción en MLflow: {resultados['mlflow_ui_url']}")
             else:
                 # ✅ MÉTODOS HISTÓRICOS - PASAR EL REQUEST PARA MANEJAR API KEYS
                 resultados = self._ejecutar_analisis_historico(
@@ -3661,15 +3805,18 @@ class CustomTokenObtainPairView(TokenObtainPairView):
 
             subdomain = _extract_subdomain_from_request(request)
             profile = getattr(user, 'tenant_profile', None)
-            if (
-                not profile
-                or not subdomain
-                or profile.subdomain.lower() != subdomain
-            ):
-                return Response(
-                    {'detail': 'Subdominio no autorizado'},
-                    status=status.HTTP_403_FORBIDDEN
-                )
+            
+            # Los superusers no requieren validación de subdominio
+            if not user.is_superuser:
+                if (
+                    not profile
+                    or not subdomain
+                    or profile.subdomain.lower() != subdomain
+                ):
+                    return Response(
+                        {'detail': 'Subdominio no autorizado'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
 
             empresas_payload = []
             if user.is_superuser:
@@ -3681,7 +3828,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
                         'nit': empresa.nit,
                         'anio_fiscal': empresa.anio_fiscal,
                         'codigo': empresa.codigo,
-                        'preferred_template': 'app',
+                        'preferred_template': 'pro',
                         'servidor': empresa.servidor.nombre,
                     })
             else:
@@ -3698,8 +3845,23 @@ class CustomTokenObtainPairView(TokenObtainPairView):
                         'servidor': empresa.servidor.nombre,
                     })
 
-            default_template = profile.preferred_template or 'app'
+            # Para superusers, usar template por defecto 'pro' si no hay profile
+            if user.is_superuser:
+                default_template = (profile.preferred_template if profile else None) or 'pro'
+            else:
+                default_template = profile.preferred_template or 'pro'
+            
             default_empresa_id = empresas_payload[0]['empresa_servidor_id'] if empresas_payload else None
+            print(
+                '[LOGIN]',
+                {
+                    'username': user.username,
+                    'is_superuser': user.is_superuser,
+                    'subdomain': subdomain,
+                    'empresas': len(empresas_payload),
+                    'default_empresa_id': default_empresa_id
+                }
+            )
 
             response.data['user'] = {
                 'id': user.id,
@@ -3710,8 +3872,8 @@ class CustomTokenObtainPairView(TokenObtainPairView):
                 'empresas': empresas_payload,
                 'default_template': default_template,
                 'default_empresa_id': default_empresa_id,
-                'subdomain': profile.subdomain,
-                'preferred_template': profile.preferred_template,
+                'subdomain': profile.subdomain if profile else None,
+                'preferred_template': profile.preferred_template if profile else default_template,
             }
         return response
 
@@ -3866,7 +4028,104 @@ class APIKeyManagementViewSet(viewsets.ViewSet):
         }
         
         return Response(stats)
+    
+    @action(detail=False, methods=['post'], authentication_classes=[], permission_classes=[AllowAny])
+    def validar_api_key(self, request):
+        """Valida API Key y devuelve empresas asociadas (para login frontend)"""
+        import json
         
+        # Obtener api_key del body - DRF parsea automáticamente request.data
+        try:
+            # Log para debug
+            logger.info(f"🔑 Request method: {request.method}")
+            logger.info(f"🔑 Request content_type: {request.content_type}")
+            logger.info(f"🔑 Request data: {request.data}")
+            logger.info(f"🔑 Request data type: {type(request.data)}")
+            logger.info(f"🔑 Request data keys: {list(request.data.keys()) if isinstance(request.data, dict) else 'Not a dict'}")
+            
+            # Obtener api_key
+            api_key_raw = request.data.get('api_key') if isinstance(request.data, dict) else None
+            
+            # Si no está en request.data, intentar parsear body directamente
+            if api_key_raw is None:
+                try:
+                    if hasattr(request, 'body') and request.body:
+                        body_str = request.body.decode('utf-8') if isinstance(request.body, bytes) else str(request.body)
+                        body_data = json.loads(body_str)
+                        api_key_raw = body_data.get('api_key') if isinstance(body_data, dict) else None
+                except (json.JSONDecodeError, AttributeError, UnicodeDecodeError) as e:
+                    logger.warning(f"⚠️ No se pudo parsear body: {e}")
+            
+            logger.info(f"🔑 api_key_raw: {api_key_raw}, type: {type(api_key_raw)}")
+            
+            # Convertir a string de forma segura
+            if api_key_raw is None:
+                logger.error("❌ api_key_raw es None - no se encontró en request")
+                return Response({'error': 'API Key requerida'}, status=400)
+            
+            # Si es string, usar directamente
+            if isinstance(api_key_raw, str):
+                api_key = api_key_raw.strip()
+            # Si es dict (caso raro), extraer el valor
+            elif isinstance(api_key_raw, dict):
+                api_key = str(api_key_raw.get('api_key', '')).strip()
+            # Si es lista/tupla, tomar el primer elemento
+            elif isinstance(api_key_raw, (list, tuple)):
+                api_key = str(api_key_raw[0]).strip() if api_key_raw else ''
+            # Cualquier otro tipo, convertir a string
+            else:
+                api_key = str(api_key_raw).strip()
+            
+            logger.info(f"🔑 api_key procesada: {api_key[:10] if len(api_key) > 10 else api_key}...")
+            
+            if not api_key or api_key == '' or api_key.lower() == 'none':
+                return Response({'error': 'API Key requerida'}, status=400)
+                
+        except Exception as e:
+            logger.error(f"❌ Error procesando api_key del request: {e}", exc_info=True)
+            return Response({'error': f'Error al procesar API Key: {str(e)}'}, status=400)
+        
+        try:
+            api_key_obj = APIKeyCliente.objects.get(api_key__iexact=api_key, activa=True)
+            
+            if api_key_obj.esta_expirada():
+                return Response({'error': 'API Key expirada'}, status=403)
+            
+            # Actualizar empresas asociadas si es necesario
+            empresas = api_key_obj.empresas_asociadas.all()
+            if not empresas.exists():
+                api_key_obj.actualizar_empresas_asociadas()
+                empresas = api_key_obj.empresas_asociadas.all()
+            
+            # Incrementar contador
+            api_key_obj.incrementar_contador()
+            
+            # Preparar respuesta con empresas
+            empresas_payload = []
+            for empresa in empresas.select_related('servidor'):
+                empresas_payload.append({
+                    'empresa_servidor_id': empresa.id,
+                    'nombre': empresa.nombre,
+                    'nit': empresa.nit,
+                    'anio_fiscal': empresa.anio_fiscal,
+                    'codigo': empresa.codigo,
+                    'preferred_template': 'retail',  # Default para autopago
+                    'servidor': empresa.servidor.nombre,
+                })
+            
+            return Response({
+                'valid': True,
+                'nit': api_key_obj.nit,
+                'nombre_cliente': api_key_obj.nombre_cliente,
+                'empresas': empresas_payload,
+                'total_empresas': len(empresas_payload)
+            })
+            
+        except APIKeyCliente.DoesNotExist:
+            return Response({'error': 'API Key inválida'}, status=403)
+        except Exception as e:
+            logger.error(f"Error validando API Key: {e}")
+            return Response({'error': 'Error al validar API Key'}, status=500)
     
 
 class TestingViewSet(viewsets.ViewSet):
@@ -3888,6 +4147,7 @@ class TestingViewSet(viewsets.ViewSet):
 
 class TNSViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
     permission_classes = [AllowAny]
+    authentication_classes = [JWTOrAPIKeyAuthentication]
 
     def _build_bridge(self, request, validated_data):
         empresa = _get_empresa_for_request(request, validated_data)
@@ -3910,12 +4170,41 @@ class TNSViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
 
     @action(detail=False, methods=['post'])
     def procedure(self, request):
+        """
+        Endpoint genérico para ejecutar cualquier stored procedure de TNS.
+        
+        Body:
+        {
+            "empresa_servidor_id": 1,
+            "procedure": "TNS_INS_FACTURAVTA",
+            "params": {
+                "param1": "value1",
+                "param2": "value2"
+            }
+        }
+        
+        Los params pueden ser dict (con nombres) o lista (posicional).
+        Si es dict, se convierte a lista en orden alfabético de keys.
+        Si es lista, se usa directamente.
+        """
         serializer = TNSProcedureSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         bridge = self._build_bridge(request, serializer.validated_data)
         params = serializer.validated_data.get('params') or {}
+        
         try:
-            result = bridge.call_procedure(serializer.validated_data['procedure'], params)
+            # Si params es dict, convertirlo a lista (orden alfabético de keys)
+            # Esto es necesario porque call_procedure espera una lista
+            if isinstance(params, dict):
+                # Ordenar keys alfabéticamente para mantener consistencia
+                sorted_keys = sorted(params.keys())
+                params_list = [params[key] for key in sorted_keys]
+            elif isinstance(params, list):
+                params_list = params
+            else:
+                params_list = []
+            
+            result = bridge.call_procedure(serializer.validated_data['procedure'], params_list)
             return Response({'result': result})
         finally:
             bridge.close()
@@ -3941,41 +4230,4582 @@ class TNSViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
         finally:
             bridge.close()
 
+    @action(detail=False, methods=['get'], url_path='admin_empresas')
+    def admin_empresas(self, request):
+        serializer = TNSAdminEmpresasSerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+        empresa = _get_empresa_for_request(request, serializer.validated_data)
+        data = _query_admin_empresas(
+            empresa,
+            serializer.validated_data['search_nit']
+        )
+        return Response(data)
 
-@action(detail=False, methods=['get'], url_path='admin_empresas')
-def admin_empresas(self, request):
-    serializer = TNSAdminEmpresasSerializer(data=request.query_params)
-    serializer.is_valid(raise_exception=True)
-    empresa = _get_empresa_for_request(request, serializer.validated_data)
-    data = _query_admin_empresas(empresa, serializer.validated_data['search_nit'])
-    return Response(data)
 
-@action(detail=False, methods=['post'], url_path='validate_user')
-def validate_user(self, request):
-    serializer = TNSUserValidationSerializer(data=request.data)
-    serializer.is_valid(raise_exception=True)
-    bridge = self._build_bridge(request, serializer.validated_data)
-    try:
-        bridge.connect()
-        cursor = bridge.conn.cursor()
+    @action(detail=False, methods=['post'], url_path='records')
+    def records(self, request):
+        """
+        Endpoint para consultas dinámicas de tablas TNS
+        Similar a BCE pero adaptado para manu
+        POST /api/tns/records/
+        Body: {
+            "empresa_servidor_id": 1,
+            "table_name": "KARDEX",
+            "fields": ["CODCOMP", "NUMERO", "FECHA"],
+            "foreign_keys": [...],
+            "filters": {...},
+            "order_by": [...],
+            "page": 1,
+            "page_size": 50
+        }
+        """
+        import sys
+        import traceback
+        
+        print("=" * 80)
+        print("🔍 [RECORDS] INICIO DE REQUEST")
+        print(f"   Método: {request.method}")
+        print(f"   Content-Type: {request.content_type}")
+        print(f"   Encoding: {sys.getdefaultencoding()}")
+        print(f"   File system encoding: {sys.getfilesystemencoding()}")
+        
+        from .serializers import TNSRecordsSerializer
+        from .services.tns_query_builder import TNSQueryBuilder
+        
+        # Logging para debug de codificación
         try:
-            validation_row = _run_validation_procedure(
-                cursor,
-                serializer.validated_data['username'],
-                serializer.validated_data['password']
-            )
-            validate_payload = _build_validate_payload(validation_row)
-            success_raw = validation_row.get('OSUCCESS')
-            success_flag = str(success_raw).strip().lower() if success_raw is not None else ''
-            is_success = success_flag in ('1', 'true', 't', 'si', 'yes')
-            if is_success:
-                modules_payload = _fetch_user_permissions(cursor, serializer.validated_data['username'])
+            print("   [1] Intentando parsear request.data...")
+            print(f"      Tipo de request.data: {type(request.data)}")
+            # NO acceder a request.body aquí porque DRF ya lo parseó y causa RawPostDataException
+            
+            serializer = TNSRecordsSerializer(data=request.data)
+            print("   [2] Validando serializer...")
+            serializer.is_valid(raise_exception=True)
+            print("   [3] Serializer válido ✓")
+        except Exception as ser_error:
+            print(f"   ❌ ERROR en serializer: {ser_error}")
+            print(f"      Tipo de error: {type(ser_error)}")
+            traceback.print_exc()
+            logger.error(f'Error en serializer TNSRecords: {ser_error}', exc_info=True)
+            # Si el error es de codificación, retornar error
+            if 'charmap' in str(ser_error).lower() or 'decode' in str(ser_error).lower():
+                print("   [ERROR] Error de codificación detectado")
+                return Response(
+                    {'error': f'Error de codificación en request: {str(ser_error)}. Verifique que el request esté en UTF-8.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
             else:
-                modules_payload = {}
-            return Response({'VALIDATE': validate_payload, 'MODULOS': modules_payload})
+                raise
+        
+        print("   [4] Obteniendo empresa...")
+        print(f"      empresa_servidor_id: {serializer.validated_data.get('empresa_servidor_id')}")
+        print(f"      nit: {serializer.validated_data.get('nit')}")
+        print(f"      anio_fiscal: {serializer.validated_data.get('anio_fiscal')}")
+        print(f"      ¿Tiene API Key?: {hasattr(request, 'cliente_api') and request.cliente_api is not None}")
+        if hasattr(request, 'empresas_autorizadas'):
+            print(f"      Empresas autorizadas: {list(request.empresas_autorizadas.values_list('id', flat=True)) if request.empresas_autorizadas else 'None'}")
+        
+        try:
+            empresa = _get_empresa_for_request(request, serializer.validated_data)
+            print(f"      ✓ Empresa obtenida: {empresa.nombre if empresa else 'None'} (ID: {empresa.id if empresa else 'None'})")
+        except serializers.ValidationError as ve:
+            print(f"      ❌ ValidationError: {ve}")
+            traceback.print_exc()
+            return Response(
+                {'error': str(ve)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            print(f"      ❌ ERROR obteniendo empresa: {e}")
+            print(f"         Tipo: {type(e)}")
+            traceback.print_exc()
+            logger.error(f'Error obteniendo empresa: {e}', exc_info=True)
+            return Response(
+                {'error': f'Error obteniendo empresa: {str(e)}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not empresa:
+            print("      ❌ ERROR: Empresa es None")
+            return Response(
+                {'error': 'Empresa no encontrada o sin permisos.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        print("   [5] Creando bridge...")
+        bridge = TNSBridge(empresa)
+        print(f"      Bridge charset: {bridge.charset}")
+        
+        try:
+            print("   [5.1] Conectando a Firebird...")
+            bridge.connect()
+            print("   [5.1] ✓ Conexión exitosa")
+            
+            # Función para obtener nombre real de tabla (como BCE)
+            print("   [5.2] Obteniendo esquema de base de datos...")
+            def get_real_table_name(table_name):
+                bridge._ensure_schema()
+                table_key = table_name.upper()
+                if table_key not in bridge.schema_cache:
+                    available = ", ".join(bridge.schema_cache.keys())
+                    raise ValueError(f"Tabla '{table_name}' no encontrada. Tablas disponibles: {available}")
+                return bridge.schema_cache[table_key]
+            
+            # Construir query de forma segura (EXACTAMENTE como BCE)
+            print("   [5.3] Construyendo query builder...")
+            print(f"      Tabla: {serializer.validated_data['table_name']}")
+            print(f"      Campos: {len(serializer.validated_data.get('fields', []))}")
+            print(f"      Foreign keys: {len(serializer.validated_data.get('foreign_keys', []))}")
+            
+            query_builder = TNSQueryBuilder(
+                serializer.validated_data['table_name'],
+                get_real_table_name_func=get_real_table_name
+            )
+            
+            print("   [5.4] Agregando campos, foreign keys, filtros y orden...")
+            query_builder.add_fields(serializer.validated_data.get('fields', []))
+            query_builder.add_foreign_keys(serializer.validated_data.get('foreign_keys', []))
+            query_builder.add_filters(serializer.validated_data.get('filters', {}))
+            query_builder.add_order_by(serializer.validated_data.get('order_by', []))
+            query_builder.set_pagination(
+                serializer.validated_data.get('page', 1),
+                serializer.validated_data.get('page_size', 50)
+            )
+            print("   [5.4] ✓ Query builder configurado")
+            
+            # Ejecutar query de conteo primero (como BCE)
+            print("   [5.5] Ejecutando query de conteo...")
+            count_query, count_params = query_builder.build_count_query()
+            print("=" * 80)
+            print("   [SQL COUNT] QUERY DE CONTEO COMPLETA:")
+            print("=" * 80)
+            print(count_query)
+            if count_params:
+                print(f"\n   [SQL COUNT] Parámetros: {count_params}")
+            print("=" * 80)
+            bridge.cursor.execute(count_query, count_params)
+            total_records = bridge.cursor.fetchone()[0]
+            print(f"   [5.5] ✓ Total de registros: {total_records}")
+            
+            # Ejecutar query de datos (como BCE)
+            print("   [5.6] Ejecutando query de datos...")
+            paginated_query, params = query_builder.build_query()
+            print("=" * 80)
+            print("   [SQL SELECT] QUERY DE DATOS COMPLETA:")
+            print("=" * 80)
+            print(paginated_query)
+            if params:
+                print(f"\n   [SQL SELECT] Parámetros: {params}")
+            print("=" * 80)
+            try:
+                bridge.cursor.execute(paginated_query, params)
+                print("   [5.6] ✓ Query ejecutada")
+            except (UnicodeDecodeError, ValueError) as decode_error:
+                # Si hay error de decodificación en firebirdsql, intentar con charset alternativo
+                print(f"   [5.6] ⚠ Error de decodificación: {decode_error}")
+                print(f"      Tipo: {type(decode_error)}")
+                # Cerrar cursor y reconectar con charset alternativo
+                try:
+                    bridge.cursor.close()
+                except:
+                    pass
+                bridge.close()
+                # Cambiar charset a latin-1 y reconectar
+                original_charset = bridge.charset
+                bridge.charset = 'latin-1'
+                print(f"   [5.6-RETRY] Reintentando con charset: {bridge.charset} (original: {original_charset})")
+                bridge.connect()
+                bridge.cursor.execute(paginated_query, params)
+                print("   [5.6-RETRY] ✓ Query ejecutada con charset alternativo")
+            
+            # Decodificar nombres de columnas correctamente (pueden venir como bytes)
+            print("   [6] Decodificando nombres de columnas...")
+            columns = []
+            for idx, desc in enumerate(bridge.cursor.description or []):
+                col_name = desc[0]
+                should_log = idx < 5  # Log solo las primeras 5 columnas
+                if should_log:
+                    print(f"      Columna {idx}: tipo={type(col_name)}, valor={repr(str(col_name)[:50]) if col_name else None}")
+                if isinstance(col_name, bytes):
+                    try:
+                        col_name = col_name.decode(bridge.charset, errors='replace')
+                        if should_log:
+                            print(f"         ✓ Decodificado con {bridge.charset}")
+                    except (UnicodeDecodeError, LookupError) as e:
+                        if should_log:
+                            print(f"         ⚠ Error con {bridge.charset}: {e}")
+                        try:
+                            col_name = col_name.decode('latin-1', errors='replace')
+                            if should_log:
+                                print(f"         ✓ Decodificado con latin-1")
+                        except Exception as e2:
+                            if should_log:
+                                print(f"         ⚠ Error con latin-1: {e2}")
+                            try:
+                                col_name = col_name.decode('utf-8', errors='replace')
+                                if should_log:
+                                    print(f"         ✓ Decodificado con utf-8")
+                            except Exception as e3:
+                                if should_log:
+                                    print(f"         ⚠ Error con utf-8: {e3}")
+                                col_name = str(col_name, errors='replace')
+                                if should_log:
+                                    print(f"         ✓ Convertido a string")
+                # Asegurar que sea string y UTF-8 válido
+                if isinstance(col_name, str):
+                    try:
+                        col_name.encode('utf-8')
+                    except UnicodeEncodeError as e:
+                        if should_log:
+                            print(f"         ⚠ Error encoding UTF-8: {e}, normalizando...")
+                        col_name = col_name.encode('utf-8', errors='replace').decode('utf-8')
+                columns.append(col_name.strip() if isinstance(col_name, str) else str(col_name).strip())
+            print(f"   [6] ✓ {len(columns)} columnas procesadas")
+            
+            # Procesar resultados con column_mapping (como BCE)
+            from math import ceil
+            _, column_mapping = query_builder.build_select_clause()
+            print("   [7] Procesando filas...")
+            rows = []
+            row_count = 0
+            try:
+                all_rows = bridge.cursor.fetchall()
+                print(f"      Total de filas a procesar: {len(all_rows)}")
+                for row_idx, row in enumerate(all_rows):
+                    if row_idx < 3:  # Log solo las primeras 3 filas
+                        print(f"      Procesando fila {row_idx + 1}...")
+                    row_dict = {}
+                    for idx, col in enumerate(columns):
+                        try:
+                            value = row[idx]
+                            if row_idx < 3 and idx < 3:  # Log solo primeros valores
+                                print(f"         [{col}] tipo={type(value)}, valor={repr(str(value)[:30]) if value else None}")
+                            # Usar función helper para decodificar correctamente (ya normaliza a UTF-8)
+                            value = _decode_firebird_value(value)
+                            # Mapear nombre de columna a alias original (como BCE)
+                            final_col = next((k for k, v in column_mapping.items() if v == col), col)
+                            row_dict[final_col] = value
+                        except (UnicodeDecodeError, UnicodeEncodeError) as e:
+                            # Si hay error de codificación en un campo específico, usar valor por defecto
+                            print(f"         ⚠ Error de codificación en columna {col}: {e}")
+                            logger.warning(f'Error de codificación en columna {col}: {e}')
+                            final_col = next((k for k, v in column_mapping.items() if v == col), col)
+                            row_dict[final_col] = None
+                        except Exception as e:
+                            # Otro error, usar valor por defecto
+                            print(f"         ⚠ Error procesando columna {col}: {e}")
+                            logger.warning(f'Error procesando columna {col}: {e}')
+                            final_col = next((k for k, v in column_mapping.items() if v == col), col)
+                            row_dict[final_col] = None
+                    rows.append(row_dict)
+                    row_count += 1
+                print(f"   [7] ✓ {row_count} filas procesadas")
+            except (UnicodeDecodeError, UnicodeEncodeError) as e:
+                logger.error(f'Error de codificación al procesar filas: {e}', exc_info=True)
+                # Retornar error específico
+                return Response(
+                    {'error': f'Error de codificación de caracteres: {str(e)}. Verifique la configuración de charset de Firebird.'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+            
+            page = serializer.validated_data.get('page', 1)
+            page_size = serializer.validated_data.get('page_size', 50)
+            
+            # Limpiar y normalizar todos los valores para JSON (asegurar UTF-8)
+            def clean_for_json(obj):
+                """Recursivamente limpia valores para asegurar serialización JSON segura"""
+                if isinstance(obj, dict):
+                    return {str(k): clean_for_json(v) for k, v in obj.items()}
+                elif isinstance(obj, list):
+                    return [clean_for_json(item) for item in obj]
+                elif isinstance(obj, bytes):
+                    # Decodificar bytes
+                    return _decode_firebird_value(obj)
+                elif isinstance(obj, str):
+                    # Asegurar UTF-8 válido
+                    try:
+                        # Si ya es UTF-8 válido, retornar tal cual
+                        obj.encode('utf-8')
+                        return obj
+                    except UnicodeEncodeError:
+                        # Si no es UTF-8 válido, normalizar
+                        return _decode_firebird_value(obj.encode('latin-1', errors='replace'))
+                elif obj is None:
+                    return None
+                elif isinstance(obj, (int, float, bool)):
+                    return obj
+                elif isinstance(obj, Decimal):
+                    # Convertir Decimal a float para JSON
+                    return float(obj)
+                elif hasattr(obj, 'isoformat'):  # datetime, date
+                    return obj.isoformat()
+                else:
+                    # Para otros tipos, convertir a string
+                    try:
+                        str_val = str(obj)
+                        # Asegurar que el string sea UTF-8 válido
+                        return _decode_firebird_value(str_val.encode('latin-1', errors='replace') if isinstance(str_val, str) else str_val)
+                    except Exception:
+                        return None
+            
+            # Limpiar rows antes de serializar
+            try:
+                cleaned_rows = clean_for_json(rows)
+            except Exception as clean_error:
+                logger.error(f'Error limpiando datos para JSON: {clean_error}', exc_info=True)
+                # Si falla la limpieza, intentar limpieza más básica
+                try:
+                    # Limpieza básica: solo decodificar bytes
+                    cleaned_rows = []
+                    for row in rows:
+                        cleaned_row = {}
+                        for k, v in row.items():
+                            if isinstance(v, bytes):
+                                cleaned_row[k] = _decode_firebird_value(v)
+                            else:
+                                cleaned_row[k] = v
+                        cleaned_rows.append(cleaned_row)
+                except Exception as e2:
+                    logger.error(f'Error incluso con limpieza básica: {e2}', exc_info=True)
+                    cleaned_rows = rows
+            
+            # Agregar URLs de imágenes si es consulta de MATERIAL
+            nit_normalizado = None
+            table_name = serializer.validated_data.get('table_name', '')
+            if table_name and table_name.upper() == 'MATERIAL' and empresa:
+                nit_normalizado = _normalize_nit(empresa.nit)
+                # Agregar URLs de imágenes a cada fila
+                for row in cleaned_rows:
+                    # URL de imagen del material (si existe)
+                    codigo_material = row.get('CODIGO') or row.get('codigo')
+                    if codigo_material:
+                        try:
+                            material_img = MaterialImagen.objects.get(
+                                nit_normalizado=nit_normalizado,
+                                codigo_material=str(codigo_material)
+                            )
+                            if material_img.imagen:
+                                row['imagen_url'] = request.build_absolute_uri(material_img.imagen.url)
+                            else:
+                                row['imagen_url'] = None
+                        except MaterialImagen.DoesNotExist:
+                            row['imagen_url'] = None
+                    
+                    # URL de imagen del grupo (si existe)
+                    gm_codigo = row.get('GM_CODIGO') or row.get('gm_codigo')
+                    if gm_codigo:
+                        try:
+                            grupo_img = GrupoMaterialImagen.objects.get(
+                                nit_normalizado=nit_normalizado,
+                                gm_codigo=str(gm_codigo)
+                            )
+                            if grupo_img.imagen:
+                                row['grupo_imagen_url'] = request.build_absolute_uri(grupo_img.imagen.url)
+                            else:
+                                row['grupo_imagen_url'] = None
+                        except GrupoMaterialImagen.DoesNotExist:
+                            row['grupo_imagen_url'] = None
+            
+            # Retornar formato EXACTAMENTE como BCE
+            print("   [9] Creando respuesta...")
+            try:
+                response_data = {
+                    'data': cleaned_rows,  # BCE usa 'data', no 'results'
+                    'pagination': {  # BCE usa 'pagination', no campos separados
+                        'total': total_records,
+                        'page': page,
+                        'page_size': page_size,
+                        'total_pages': ceil(total_records / page_size),
+                        'next': page * page_size < total_records,
+                        'previous': page > 1
+                    }
+                }
+                print(f"   [9] ✓ Respuesta creada: {len(cleaned_rows)} filas, total={total_records}")
+                print("   [9] Intentando serializar Response...")
+                response = Response(response_data)
+                print("   [9] ✓ Response serializado exitosamente")
+                print("=" * 80)
+                return response
+            except (UnicodeDecodeError, UnicodeEncodeError) as json_error:
+                logger.error(f'Error de codificación al serializar JSON: {json_error}', exc_info=True)
+                # Intentar limpiar más agresivamente
+                import json as json_lib
+                try:
+                    # Forzar serialización manual para identificar el problema
+                    json_str = json_lib.dumps(cleaned_rows, ensure_ascii=False, default=str)
+                    # Si llegamos aquí, el problema está en DRF Response, no en los datos
+                    return Response({
+                        'data': json_lib.loads(json_str),
+                        'pagination': {
+                            'total': total_records,
+                            'page': page,
+                            'page_size': page_size,
+                            'total_pages': ceil(total_records / page_size),
+                            'next': page * page_size < total_records,
+                            'previous': page > 1
+                        }
+                    })
+                except Exception as e2:
+                    logger.error(f'Error incluso con serialización manual: {e2}', exc_info=True)
+                    return Response(
+                        {'error': f'Error de codificación: {str(e2)}. Contacte al administrador.'},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                    )
+        except ValueError as e:
+            print(f"   ❌ ValueError: {e}")
+            print(f"      Tipo: {type(e)}")
+            traceback.print_exc()
+            logger.error(f'ValueError en records: {e}', exc_info=True)
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except serializers.ValidationError as e:
+            print(f"   ❌ ValidationError: {e}")
+            print(f"      Tipo: {type(e)}")
+            traceback.print_exc()
+            logger.error(f'ValidationError en records: {e}', exc_info=True)
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except UnicodeDecodeError as e:
+            print(f"   ❌ UnicodeDecodeError: {e}")
+            traceback.print_exc()
+            logger.error(f'Error de codificación en consulta TNS: {e}', exc_info=True)
+            return Response(
+                {'error': f'Error de codificación de caracteres: {str(e)}. Verifique que los datos estén en formato correcto.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        except Exception as e:
+            print(f"   ❌ EXCEPCIÓN GENERAL: {e}")
+            print(f"      Tipo: {type(e)}")
+            traceback.print_exc()
+            logger.error(f'Error en consulta TNS: {e}', exc_info=True)
+            # Asegurar que el mensaje de error también sea UTF-8 válido
+            error_msg = str(e)
+            try:
+                error_msg = error_msg.encode('utf-8', errors='replace').decode('utf-8')
+            except Exception:
+                error_msg = 'Error al ejecutar consulta (error de codificación)'
+            print("=" * 80)
+            return Response(
+                {'error': error_msg},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
         finally:
-            cursor.close()
-    except firebirdsql.Error as exc:
-        raise serializers.ValidationError(f'Error al consultar Firebird: {exc}')
+            try:
+                print("   [FINAL] Cerrando bridge...")
+                bridge.close()
+                print("   [FINAL] ✓ Bridge cerrado")
+            except Exception as e:
+                print(f"   [FINAL] ⚠ Error cerrando bridge: {e}")
+            print("=" * 80)
+
+    @action(detail=False, methods=['post'], url_path='validate_user', authentication_classes=[], permission_classes=[AllowAny])
+    def validate_user(self, request):
+        """
+        Valida usuario TNS. Endpoint público para permitir login desde e-commerce.
+        No requiere autenticación previa.
+        """
+        serializer = TNSUserValidationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        # Obtener empresa directamente del validated_data (no requiere autenticación)
+        empresa_servidor_id = serializer.validated_data.get('empresa_servidor_id')
+        if not empresa_servidor_id:
+            # Intentar obtener de nit y anio_fiscal si están disponibles
+            nit = serializer.validated_data.get('nit')
+            anio_fiscal = serializer.validated_data.get('anio_fiscal')
+            if nit and anio_fiscal:
+                nit_normalizado = _normalize_nit(nit)
+                try:
+                    empresa = EmpresaServidor.objects.get(nit=nit_normalizado, anio_fiscal=anio_fiscal)
+                    empresa_servidor_id = empresa.id
+                except EmpresaServidor.DoesNotExist:
+                    raise serializers.ValidationError(f'Empresa con NIT {nit} y año {anio_fiscal} no encontrada')
+            else:
+                raise serializers.ValidationError('empresa_servidor_id es requerido (o nit y anio_fiscal)')
+        else:
+            try:
+                empresa = EmpresaServidor.objects.get(id=empresa_servidor_id)
+            except EmpresaServidor.DoesNotExist:
+                raise serializers.ValidationError(f'Empresa con ID {empresa_servidor_id} no encontrada')
+        
+        bridge = TNSBridge(empresa)
+        try:
+            bridge.connect()
+            cursor = bridge.conn.cursor()
+            try:
+                validation_row = _run_validation_procedure(
+                    cursor,
+                    serializer.validated_data['username'],
+                    serializer.validated_data['password']
+                )
+                validate_payload = _build_validate_payload(validation_row)
+                success_raw = validation_row.get('OSUCCESS')
+                success_flag = (
+                    str(success_raw).strip().lower()
+                    if success_raw is not None
+                    else ''
+                )
+                is_success = success_flag in ('1', 'true', 't', 'si', 'yes')
+                if is_success:
+                    modules_payload = _fetch_user_permissions(
+                        cursor,
+                        serializer.validated_data['username']
+                    )
+                else:
+                    modules_payload = {}
+                return Response({'VALIDATE': validate_payload, 'MODULOS': modules_payload})
+            finally:
+                cursor.close()
+        except firebirdsql.Error as exc:
+            raise serializers.ValidationError(f'Error al consultar Firebird: {exc}')
+        finally:
+            bridge.close()
+
+    @action(detail=False, methods=['post'], url_path='validar-tercero', authentication_classes=[], permission_classes=[AllowAny])
+    def validar_tercero(self, request):
+        """
+        Valida un tercero por documento (cédula o NIT).
+        Endpoint público para e-commerce. Usa usuario_tns de EmpresaEcommerceConfig para seguridad.
+        1. Busca en TNS (TERCEROS)
+        2. Si no encuentra, consulta API DIAN
+        3. Crea/actualiza en TNS
+        4. Retorna datos del tercero
+        """
+        from .serializers import TNSValidarTerceroSerializer
+        from .services.tns_bridge import TNSBridge
+        from django.conf import settings
+        import requests
+        import re
+        
+        serializer = TNSValidarTerceroSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        empresa_servidor_id = serializer.validated_data.get('empresa_servidor_id')
+        document_type = serializer.validated_data.get('document_type')
+        document_number = serializer.validated_data.get('document_number')
+        telefono = serializer.validated_data.get('telefono', '').strip()
+        
+        if not empresa_servidor_id:
+            return Response(
+                {'error': 'Debes indicar empresa_servidor_id'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Obtener empresa directamente (sin validar autenticación)
+        try:
+            empresa = EmpresaServidor.objects.get(id=empresa_servidor_id)
+        except EmpresaServidor.DoesNotExist:
+            return Response(
+                {'error': f'Empresa con ID {empresa_servidor_id} no encontrada'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Obtener configuración de e-commerce para usar usuario_tns seguro
+        try:
+            config = EmpresaEcommerceConfig.objects.get(empresa_servidor_id=empresa_servidor_id)
+            usuario_tns = config.usuario_tns
+            password_tns = config.password_tns
+        except EmpresaEcommerceConfig.DoesNotExist:
+            # Si no hay configuración de e-commerce, usar credenciales de la empresa (fallback)
+            logger.warning(f"No hay configuración de e-commerce para empresa {empresa_servidor_id}, usando credenciales de empresa")
+            usuario_tns = empresa.usuario_tns
+            password_tns = empresa.password_tns
+        except Exception as e:
+            logger.error(f"Error obteniendo configuración de e-commerce: {e}")
+            return Response(
+                {'error': 'Error al obtener configuración de e-commerce'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+        if not usuario_tns or not password_tns:
+            return Response(
+                {'error': 'Credenciales TNS no configuradas para esta empresa'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Crear bridge - TNSBridge usa credenciales del Servidor para conectar a Firebird
+        # Las credenciales usuario_tns/password_tns de e-commerce se usan para validaciones TNS internas
+        bridge = TNSBridge(empresa)
+        bridge.connect()
+        
+        try:
+            # Normalizar número de documento (solo dígitos)
+            nit_normalizado = re.sub(r'[^0-9]', '', document_number)
+            
+            # 1. Buscar en TNS
+            logger.info(f"Buscando tercero en TNS con NIT normalizado: {nit_normalizado}")
+            cursor = bridge.conn.cursor()
+            cursor.execute("""
+                SELECT FIRST 1 
+                    NOMBRE, NIT, EMAIL, TELEF1
+                FROM TERCEROS
+                WHERE REPLACE(REPLACE(REPLACE(NIT, '.', ''), '-', ''), ' ', '') LIKE ?
+            """, (f'%{nit_normalizado}%',))
+            
+            tercero_tns = cursor.fetchone()
+            
+            if tercero_tns:
+                # Encontrado en TNS
+                nombre, nit, email, telefono_tns = tercero_tns
+                logger.info(f"✅ Tercero encontrado en TNS: {nombre}")
+                
+                # Si se proporcionó teléfono en la petición, actualizar en TNS
+                if telefono:
+                    cursor.execute("""
+                        UPDATE TERCEROS
+                        SET TELEF1 = ?
+                        WHERE REPLACE(REPLACE(REPLACE(NIT, '.', ''), '-', ''), ' ', '') = ?
+                    """, (telefono, nit_normalizado))
+                    bridge.conn.commit()
+                    logger.info(f"📞 Teléfono actualizado en TNS: {telefono}")
+                    telefono_final = telefono
+                else:
+                    telefono_final = telefono_tns or ''
+                
+                return Response({
+                    'encontrado_en_tns': True,
+                    'nombre': nombre or '',
+                    'nit': nit or '',
+                    'email': email or '',
+                    'telefono': telefono_final,
+                    'document_number': nit_normalizado
+                })
+            
+            logger.info(f"❌ Tercero no encontrado en TNS, consultando API DIAN...")
+            
+            # 2. No encontrado en TNS, consultar API DIAN
+            # Determinar tipo de documento para API DIAN (31=NIT, 9=Cédula)
+            doc_type_api = 31 if document_type == 'nit' else 13
+            
+            # Obtener token y URL base
+            # Primero intentar desde configuración de empresa (TOKENDIANVM)
+            cursor.execute("""
+                SELECT CAST(contenido AS VARCHAR(500)) FROM varios WHERE variab = ?
+            """, ('TOKENDIANVM',))
+            token_row = cursor.fetchone()
+            token = token_row[0] if token_row and token_row[0] else None
+            base_url = getattr(settings, 'API_DIAN_ROUTE', 'http://45.149.204.184:81')
+            
+            #cursor.execute("""
+            #    SELECT CAST(contenido AS VARCHAR(500)) FROM varios WHERE variab = ?
+            #""", ('ENDPOINTDIANVM',))
+            #endpoint_row = cursor.fetchone()
+            #base_url = endpoint_row[0] if endpoint_row and endpoint_row[0] else None
+            #
+            ## Si no hay token de empresa, usar del env
+            if not token:
+                token = getattr(settings, 'TOKEN_API_DIAN_BASIC', None)
+          
+            # Si no hay base_url, usar del env
+            if not base_url:
+                base_url = getattr(settings, 'API_DIAN_ROUTE', 'http://45.149.204.184:81')
+            
+            # Construir URL de API DIAN
+            # La base_url puede ser completa o solo la base, ajustar
+            if '/api/' in base_url:
+                api_url = f"{base_url}/customer/{doc_type_api}/{nit_normalizado}"
+            else:
+                api_url = f"{base_url}/api/customer/{doc_type_api}/{nit_normalizado}"
+            
+            # Consultar API DIAN
+            headers = {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'Authorization': f'Bearer {token}' if token else ''
+            }
+            
+            try:
+                logger.info(f"Consultando API DIAN: {api_url}")
+                dian_response = requests.get(api_url, headers=headers, timeout=10)
+                dian_response.raise_for_status()
+                dian_data = dian_response.json()
+                
+                logger.info(f"Respuesta DIAN recibida: {dian_data}")
+                
+                # Extraer datos de la respuesta DIAN
+                receiver_name = ''
+                receiver_email = ''
+                
+                # Manejar diferentes formatos de respuesta
+                if dian_data.get('ResponseDian', {}).get('GetAcquirerResponse', {}).get('GetAcquirerResult', {}):
+                    result = dian_data['ResponseDian']['GetAcquirerResponse']['GetAcquirerResult']
+                    receiver_name = result.get('ReceiverName', '') or ''
+                    receiver_email = result.get('ReceiverEmail', '') or ''
+                elif dian_data.get('GetAcquirerResult', {}):
+                    # Formato alternativo
+                    result = dian_data['GetAcquirerResult']
+                    receiver_name = result.get('ReceiverName', '') or ''
+                    receiver_email = result.get('ReceiverEmail', '') or ''
+                
+                logger.info(f"Datos extraídos - Nombre: {receiver_name}, Email: {receiver_email}")
+                
+                # 3. Verificar si existe en TNS (solo verificar, NO crear)
+                cursor.execute("""
+                    SELECT FIRST 1 TERID
+                    FROM TERCEROS
+                    WHERE REPLACE(REPLACE(REPLACE(NIT, '.', ''), '-', ''), ' ', '') = ?
+                """, (nit_normalizado,))
+                
+                tercero_existente = cursor.fetchone()
+                
+                if tercero_existente:
+                    # Si existe, actualizar solo si se proporcionó teléfono
+                    if telefono:
+                        terid = tercero_existente[0]
+                        cursor.execute("""
+                            UPDATE TERCEROS
+                            SET TELEF1 = ?
+                            WHERE TERID = ?
+                        """, (telefono, terid))
+                        bridge.conn.commit()
+                        logger.info(f"📞 Teléfono actualizado: {telefono}")
+                
+                # NO crear el tercero aquí - se creará cuando el usuario complete el formulario
+                # Solo retornar los datos encontrados en DIAN para prellenar el formulario
+                return Response({
+                    'encontrado_en_tns': bool(tercero_existente),
+                    'encontrado_en_dian': True,
+                    'necesita_completar': not bool(tercero_existente),  # Indicar que necesita completar formulario
+                    'nombre': receiver_name,
+                    'nit': nit_normalizado,
+                    'email': receiver_email,
+                    'telefono': telefono or '',
+                    'document_number': nit_normalizado
+                })
+                
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Error consultando API DIAN: {e}")
+                return Response({
+                    'encontrado_en_tns': False,
+                    'encontrado_en_dian': False,
+                    'error': f'No se encontró en TNS y error al consultar DIAN: {str(e)}',
+                    'document_number': nit_normalizado
+                }, status=status.HTTP_404_NOT_FOUND)
+                
+        except Exception as e:
+            logger.error(f"Error validando tercero: {e}", exc_info=True)
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        finally:
+            bridge.close()
+
+    @action(detail=False, methods=['post'], url_path='crear-tercero', authentication_classes=[], permission_classes=[AllowAny])
+    def crear_tercero(self, request):
+        """
+        Crea un tercero en TNS usando el procedimiento almacenado TNS_INS_TERCERO.
+        Endpoint público para e-commerce. Usa usuario_tns de EmpresaEcommerceConfig para seguridad.
+        Se llama cuando el usuario completa el formulario de datos de facturación.
+        
+        Body:
+        {
+            "empresa_servidor_id": 1,
+            "document_type": "nit",  // "cedula" o "nit"
+            "document_number": "900123456",
+            "nombre": "Empresa Ejemplo S.A.S.",
+            "email": "correo@ejemplo.com",
+            "telefono": "3001234567",
+            "nature": "juridica"  // "natural" o "juridica" - determina tipo documento (J o N)
+        }
+        """
+        from .serializers import TNSCrearTerceroSerializer
+        from .services.tns_bridge import TNSBridge
+        import re
+        
+        serializer = TNSCrearTerceroSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        empresa_servidor_id = serializer.validated_data.get('empresa_servidor_id')
+        document_type = serializer.validated_data.get('document_type')
+        document_number = serializer.validated_data.get('document_number')
+        nombre = serializer.validated_data.get('nombre')
+        email = serializer.validated_data.get('email', '').strip() or None
+        telefono = serializer.validated_data.get('telefono', '').strip() or None
+        nature = serializer.validated_data.get('nature')  # 'natural' o 'juridica'
+        
+        if not empresa_servidor_id:
+            return Response(
+                {'error': 'Debes indicar empresa_servidor_id'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Obtener empresa directamente (sin validar autenticación)
+        try:
+            empresa = EmpresaServidor.objects.get(id=empresa_servidor_id)
+        except EmpresaServidor.DoesNotExist:
+            return Response(
+                {'error': f'Empresa con ID {empresa_servidor_id} no encontrada'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Obtener configuración de e-commerce para usar usuario_tns seguro
+        try:
+            config = EmpresaEcommerceConfig.objects.get(empresa_servidor_id=empresa_servidor_id)
+            usuario_tns = config.usuario_tns
+            password_tns = config.password_tns
+        except EmpresaEcommerceConfig.DoesNotExist:
+            # Si no hay configuración de e-commerce, usar credenciales de la empresa (fallback)
+            logger.warning(f"No hay configuración de e-commerce para empresa {empresa_servidor_id}, usando credenciales de empresa")
+            usuario_tns = empresa.usuario_tns
+            password_tns = empresa.password_tns
+        except Exception as e:
+            logger.error(f"Error obteniendo configuración de e-commerce: {e}")
+            return Response(
+                {'error': 'Error al obtener configuración de e-commerce'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+        if not usuario_tns or not password_tns:
+            return Response(
+                {'error': 'Credenciales TNS no configuradas para esta empresa'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Crear bridge - TNSBridge usa credenciales del Servidor para conectar a Firebird
+        # Las credenciales usuario_tns/password_tns de e-commerce se usan para validaciones TNS internas
+        bridge = TNSBridge(empresa)
+        bridge.connect()
+        
+        try:
+            # Normalizar número de documento (solo dígitos)
+            nit_normalizado = re.sub(r'[^0-9]', '', document_number)
+            
+            # Verificar si ya existe
+            cursor = bridge.conn.cursor()
+            cursor.execute("""
+                SELECT FIRST 1 TERID
+                FROM TERCEROS
+                WHERE REPLACE(REPLACE(REPLACE(NIT, '.', ''), '-', ''), ' ', '') = ?
+            """, (nit_normalizado,))
+            
+            tercero_existente = cursor.fetchone()
+            
+            if tercero_existente:
+                # Si ya existe, actualizar datos
+                terid = tercero_existente[0]
+                update_params = [nombre]
+                update_fields = ['NOMBRE = ?']
+                
+                if email:
+                    update_fields.append('EMAIL = ?')
+                    update_params.append(email)
+                
+                if telefono:
+                    update_fields.append('TELEF1 = ?')
+                    update_params.append(telefono)
+                
+                update_params.append(terid)
+                update_sql = f"UPDATE TERCEROS SET {', '.join(update_fields)} WHERE TERID = ?"
+                cursor.execute(update_sql, update_params)
+                bridge.conn.commit()
+                
+                logger.info(f"✅ Tercero actualizado: TERID={terid}, NIT={nit_normalizado}")
+                
+                return Response({
+                    'creado': False,
+                    'actualizado': True,
+                    'terid': terid,
+                    'nit': nit_normalizado,
+                    'nombre': nombre,
+                    'email': email,
+                    'telefono': telefono
+                })
+            
+            # Determinar tipo de documento según naturaleza
+            # 'juridica' -> 'J', 'natural' -> 'N'
+            tipo_documento = 'J' if nature == 'juridica' else 'N'
+            
+            # Parámetros del procedimiento TNS_INS_TERCERO según makos.py:
+            # 1. NIT (primer parámetro)
+            # 2. Tipo de documento (segundo parámetro: J o N)
+            # 3. Documento (tercer parámetro)
+            # 4. Nombre (cuarto parámetro)
+            # 5. Dirección (quinto parámetro, NULL)
+            # 6. Estado (sexto parámetro, siempre 'N')
+            # 7. Email (séptimo parámetro)
+            params_procedimiento = (
+                nit_normalizado,  # NIT - primer parámetro
+                tipo_documento,   # Tipo de documento - segundo parámetro (J o N según nature)
+                nit_normalizado,  # Documento - tercer parámetro
+                nombre or 'Consumidor Final',  # Nombre - cuarto parámetro
+                None,             # Dirección (NULL) - quinto parámetro
+                'N',              # Estado - sexto parámetro (siempre 'N')
+                email             # Email - séptimo parámetro
+            )
+            
+            logger.info(f"Creando nuevo tercero con procedimiento TNS_INS_TERCERO: NIT={nit_normalizado}, Tipo={tipo_documento}, Nature={nature}")
+            cursor.execute("SELECT * FROM TNS_INS_TERCERO(?,?,?,?,?,?,?)", params_procedimiento)
+            resultado_tercero = cursor.fetchone()
+            
+            if not resultado_tercero:
+                logger.warning(f"El procedimiento TNS_INS_TERCERO no retornó resultado para NIT: {nit_normalizado}")
+                bridge.conn.rollback()
+                return Response(
+                    {'error': 'No se pudo crear el tercero. El procedimiento no retornó resultado.'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+            
+            logger.info(f"✅ Tercero creado correctamente mediante TNS_INS_TERCERO")
+            
+            # Si se proporcionó teléfono, actualizarlo después de crear el tercero
+            if telefono:
+                cursor.execute("""
+                    UPDATE TERCEROS
+                    SET TELEF1 = ?
+                    WHERE REPLACE(REPLACE(REPLACE(NIT, '.', ''), '-', ''), ' ', '') = ?
+                """, (telefono, nit_normalizado))
+                logger.info(f"📞 Teléfono actualizado: {telefono}")
+            
+            bridge.conn.commit()
+            
+            # Obtener el TERID del tercero creado
+            cursor.execute("""
+                SELECT FIRST 1 TERID
+                FROM TERCEROS
+                WHERE REPLACE(REPLACE(REPLACE(NIT, '.', ''), '-', ''), ' ', '') = ?
+            """, (nit_normalizado,))
+            terid_row = cursor.fetchone()
+            terid = terid_row[0] if terid_row else None
+            
+            return Response({
+                'creado': True,
+                'actualizado': False,
+                'terid': terid,
+                'nit': nit_normalizado,
+                'nombre': nombre,
+                'email': email,
+                'telefono': telefono,
+                'tipo_documento': tipo_documento
+            })
+            
+        except Exception as e:
+            logger.error(f"Error creando tercero: {e}", exc_info=True)
+            if bridge.conn:
+                bridge.conn.rollback()
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        finally:
+            bridge.close()
+
+
+class BrandingViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
+    """
+    ViewSet para gestionar branding (logo y colores) de empresas.
+    Requiere autenticación (JWT o API Key) y verifica que el usuario TNS sea ADMIN.
+    """
+    permission_classes = [AllowAny]
+    authentication_classes = [JWTOrAPIKeyAuthentication]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]  # Permitir multipart/form-data
+    
+    def _get_nit_normalizado_from_request(self, request):
+        """Obtiene el NIT normalizado desde la empresa seleccionada en el request"""
+        # Para GET, usar query_params; para POST/PATCH, usar data
+        if request.method == 'GET':
+            # Convertir QueryDict a dict normal
+            data = dict(request.query_params)
+            # QueryDict puede tener listas, tomar el primer valor
+            data = {k: v[0] if isinstance(v, list) and len(v) > 0 else v for k, v in data.items()}
+        else:
+            data = request.data if hasattr(request, 'data') else {}
+        
+        empresa = _get_empresa_for_request(request, data)
+        if not empresa:
+            raise serializers.ValidationError('Empresa no encontrada o sin permisos.')
+        return _normalize_nit(empresa.nit)
+    
+    def _check_admin_permission(self, request):
+        """Verifica que el usuario TNS validado sea ADMIN"""
+        # Obtener username del request (puede venir en data o headers)
+        username = None
+        if isinstance(request.data, dict):
+            username = request.data.get('tns_username', '')
+        if not username:
+            username = request.headers.get('X-TNS-Username', '')
+        # Si no viene en request, intentar obtenerlo de la sesión del usuario autenticado
+        # (para casos donde se valida antes)
+        if not username and hasattr(request, 'user') and request.user.is_authenticated:
+            # Intentar obtener de session storage o de algún lugar donde se guarde
+            # Por ahora, requerimos que venga explícitamente
+            pass
+        
+        if not username or username.upper() != 'ADMIN':
+            raise serializers.ValidationError('Solo usuarios ADMIN pueden gestionar branding.')
+        return True
+    
+    @action(detail=False, methods=['get', 'put', 'patch'], url_path='empresa')
+    def empresa_branding(self, request):
+        """Obtiene o actualiza el branding de una empresa"""
+        nit_normalizado = self._get_nit_normalizado_from_request(request)
+        
+        if request.method == 'GET':
+            try:
+                branding = EmpresaPersonalizacion.objects.get(nit_normalizado=nit_normalizado)
+                serializer = EmpresaPersonalizacionSerializer(branding, context={'request': request})
+                return Response(serializer.data)
+            except EmpresaPersonalizacion.DoesNotExist:
+                # Retornar valores por defecto si no existe
+                return Response({
+                    'nit_normalizado': nit_normalizado,
+                    'logo': None,
+                    'logo_url': None,
+                    'color_primario': '#DC2626',
+                    'color_secundario': '#FBBF24',
+                    'color_fondo': '#f5f5f5',
+                    'modo_teclado': 'auto',
+                    'modo_visualizacion': 'vertical',
+                    'video_por_defecto': None,
+                    'video_por_defecto_url': None,
+                    'video_del_dia_url': None
+                })
+        
+        # PUT/PATCH - Actualizar
+        self._check_admin_permission(request)
+        
+        # Normalizar request.data - MultiPartParser puede devolver listas
+        normalized_data = {}
+        for key, value in request.data.items():
+            # Si es una lista con un solo elemento, tomar el primer elemento
+            if isinstance(value, list):
+                if len(value) > 0:
+                    normalized_data[key] = value[0]
+                else:
+                    normalized_data[key] = None
+            else:
+                normalized_data[key] = value
+        
+        # El logo debe venir como archivo, no como string
+        # Si viene como lista vacía o None, no incluirlo
+        if 'logo' in normalized_data and (normalized_data['logo'] is None or normalized_data['logo'] == ''):
+            del normalized_data['logo']
+        
+        try:
+            branding = EmpresaPersonalizacion.objects.get(nit_normalizado=nit_normalizado)
+            serializer = EmpresaPersonalizacionSerializer(
+                branding, 
+                data=normalized_data, 
+                partial=request.method == 'PATCH',
+                context={'request': request}
+            )
+        except EmpresaPersonalizacion.DoesNotExist:
+            serializer = EmpresaPersonalizacionSerializer(
+                data={**normalized_data, 'nit_normalizado': nit_normalizado},
+                context={'request': request}
+            )
+        
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+    
+    @action(detail=False, methods=['get', 'put', 'patch'], url_path='grupo')
+    def grupo_imagen(self, request):
+        """Obtiene o actualiza la imagen de un grupo de material"""
+        # Para GET, usar query_params; para POST/PATCH, usar data
+        if request.method == 'GET':
+            data = dict(request.query_params)
+            data = {k: v[0] if isinstance(v, list) and len(v) > 0 else v for k, v in data.items()}
+        else:
+            data = request.data if hasattr(request, 'data') else {}
+        
+        nit_normalizado = self._get_nit_normalizado_from_request(request)
+        gm_codigo = data.get('gm_codigo') or request.query_params.get('gm_codigo') or request.data.get('gm_codigo')
+        
+        if not gm_codigo:
+            raise serializers.ValidationError('gm_codigo es requerido')
+        
+        if request.method == 'GET':
+            try:
+                imagen = GrupoMaterialImagen.objects.get(
+                    nit_normalizado=nit_normalizado,
+                    gm_codigo=gm_codigo
+                )
+                serializer = GrupoMaterialImagenSerializer(imagen, context={'request': request})
+                return Response(serializer.data)
+            except GrupoMaterialImagen.DoesNotExist:
+                return Response({'imagen_url': None})
+        
+        # PUT/PATCH - Actualizar
+        self._check_admin_permission(request)
+        
+        # Normalizar request.data - MultiPartParser puede devolver listas
+        normalized_data = {}
+        for key, value in request.data.items():
+            # Si es una lista con un solo elemento, tomar el primer elemento
+            if isinstance(value, list):
+                if len(value) > 0:
+                    normalized_data[key] = value[0]
+                else:
+                    normalized_data[key] = None
+            else:
+                normalized_data[key] = value
+        
+        # El campo imagen debe venir como archivo, no como string
+        # Si viene como lista vacía o None, no incluirlo
+        if 'imagen' in normalized_data and (normalized_data['imagen'] is None or normalized_data['imagen'] == ''):
+            del normalized_data['imagen']
+        
+        try:
+            imagen = GrupoMaterialImagen.objects.get(
+                nit_normalizado=nit_normalizado,
+                gm_codigo=gm_codigo
+            )
+            serializer = GrupoMaterialImagenSerializer(
+                imagen,
+                data=normalized_data,
+                partial=request.method == 'PATCH',
+                context={'request': request}
+            )
+        except GrupoMaterialImagen.DoesNotExist:
+            serializer = GrupoMaterialImagenSerializer(
+                data={
+                    **normalized_data,
+                    'nit_normalizado': nit_normalizado,
+                    'gm_codigo': gm_codigo
+                },
+                context={'request': request}
+            )
+        
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+
+class EcommerceConfigViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
+    """
+    ViewSet para gestionar la configuración del e-commerce de una empresa.
+    Requiere autenticación admin.
+    """
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+    
+    def _get_empresa_servidor_id_from_request(self, request):
+        """Obtiene empresa_servidor_id del request (query params o data)"""
+        empresa_servidor_id = request.query_params.get('empresa_servidor_id') or request.data.get('empresa_servidor_id')
+        if not empresa_servidor_id:
+            raise serializers.ValidationError('empresa_servidor_id es requerido')
+        return int(empresa_servidor_id)
+    
+    def _check_admin_permission(self, request):
+        """Verifica que el usuario tenga permisos de admin"""
+        if not request.user or not request.user.is_authenticated:
+            raise serializers.ValidationError('Autenticación requerida.')
+        if not (request.user.is_superuser or request.user.is_staff):
+            raise serializers.ValidationError('Solo usuarios ADMIN pueden gestionar configuración de e-commerce.')
+        return True
+    
+    @action(detail=False, methods=['get', 'put', 'patch'], url_path='empresa', authentication_classes=[], permission_classes=[AllowAny])
+    def empresa_config(self, request):
+        """
+        Obtiene o actualiza la configuración del e-commerce de una empresa.
+        GET: Público, no requiere autenticación.
+        PUT/PATCH: Requiere validación TNS interna (username ADMIN + password).
+        """
+        empresa_servidor_id = self._get_empresa_servidor_id_from_request(request)
+        
+        if request.method == 'GET':
+            try:
+                config = EmpresaEcommerceConfig.objects.get(empresa_servidor_id=empresa_servidor_id)
+                serializer = EmpresaEcommerceConfigSerializer(config)
+                return Response(serializer.data)
+            except EmpresaEcommerceConfig.DoesNotExist:
+                # Retornar valores por defecto si no existe
+                return Response({
+                    'empresa_servidor_id': empresa_servidor_id,
+                    'color_primario': '#DC2626',
+                    'color_secundario': '#FBBF24',
+                    'color_fondo': '#FFFFFF',
+                    'usar_degradado': False,
+                    'color_degradado_inicio': '#DC2626',
+                    'color_degradado_fin': '#FBBF24',
+                    'direccion_degradado': 'to right',
+                    'hero_titulo': 'Bienvenido a nuestra tienda en línea',
+                    'hero_subtitulo': 'Pedidos rápidos, sencillos y sin filas',
+                    'hero_descripcion': 'Explora nuestro menú y realiza tu pedido en pocos clics.',
+                    'about_titulo': 'Sobre nosotros',
+                    'about_texto': 'Somos una marca enfocada en ofrecer la mejor experiencia gastronómica, con ingredientes frescos y recetas únicas.',
+                    'contact_titulo': 'Contáctanos',
+                    'contact_texto': 'Para más información sobre pedidos corporativos, eventos o alianzas, contáctanos a través de nuestros canales oficiales.',
+                    'whatsapp_numero': None,
+                                'footer_texto_logo': None,
+                                'footer_links': [],
+                                'footer_sections': [],
+                                'menu_items': [],
+                                'payment_provider': None,
+                                'payment_public_key': None,
+                                'payment_secret_key': None,
+                                'payment_access_token': None,
+                                'payment_enabled': False,
+                                'payment_mode': 'test',
+                                'logo_url': None,
+                                'mostrar_menu': True,
+                                'mostrar_hero': True,
+                                'mostrar_about': True,
+                                'mostrar_contact': True,
+                                'mostrar_footer': True,
+                                'mostrar_categorias_footer': True,
+                                'estilo_tema': 'balanceado',
+                })
+        
+        # PUT/PATCH - Actualizar (requiere validación TNS interna)
+        username = request.data.get('username')
+        password = request.data.get('password')
+        
+        if not username or not password:
+            return Response(
+                {'detail': 'username y password son requeridos para actualizar la configuración'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Validar que el username sea ADMIN
+        if username.upper() != 'ADMIN':
+            return Response(
+                {'detail': 'Solo el usuario ADMIN puede actualizar la configuración'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Validar credenciales TNS internamente
+        try:
+            empresa = EmpresaServidor.objects.get(id=empresa_servidor_id)
+            bridge = TNSBridge(empresa)
+            bridge.connect()
+            cursor = bridge.conn.cursor()
+            
+            try:
+                validation_row = _run_validation_procedure(cursor, username, password)
+                success_raw = validation_row.get('OSUCCESS')
+                success_flag = (
+                    str(success_raw).strip().lower()
+                    if success_raw is not None
+                    else ''
+                )
+                is_success = success_flag in ('1', 'true', 't', 'si', 'yes')
+                
+                if not is_success:
+                    cursor.close()
+                    bridge.close()
+                    return Response(
+                        {'detail': 'Credenciales TNS inválidas'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            finally:
+                cursor.close()
+                bridge.close()
+        except EmpresaServidor.DoesNotExist:
+            return Response(
+                {'detail': f'Empresa con ID {empresa_servidor_id} no encontrada'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except firebirdsql.Error as exc:
+            return Response(
+                {'detail': f'Error al validar credenciales TNS: {str(exc)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        except Exception as exc:
+            return Response(
+                {'detail': f'Error inesperado: {str(exc)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+        # Si la validación es exitosa, proceder con el update
+        # Remover username y password del data antes de serializar
+        update_data = {k: v for k, v in request.data.items() if k not in ['username', 'password']}
+        
+        # Asegurar que empresa_servidor_id esté en update_data
+        if 'empresa_servidor_id' not in update_data:
+            update_data['empresa_servidor_id'] = empresa_servidor_id
+        
+        try:
+            config = EmpresaEcommerceConfig.objects.get(empresa_servidor_id=empresa_servidor_id)
+            serializer = EmpresaEcommerceConfigSerializer(
+                config,
+                data=update_data,
+                partial=request.method == 'PATCH',
+            )
+        except EmpresaEcommerceConfig.DoesNotExist:
+            # Crear nueva configuración
+            serializer = EmpresaEcommerceConfigSerializer(
+                data=update_data,
+            )
+        
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+    
+    @action(detail=False, methods=['get', 'put', 'patch'], url_path='material')
+    def material_imagen(self, request):
+        """Obtiene o actualiza la imagen de un material"""
+        nit_normalizado = self._get_nit_normalizado_from_request(request)
+        codigo_material = request.query_params.get('codigo_material') or request.query_params.get('codigo') or request.data.get('codigo_material')
+        
+        if not codigo_material:
+            raise serializers.ValidationError('codigo_material es requerido')
+        
+        if request.method == 'GET':
+            try:
+                imagen = MaterialImagen.objects.get(
+                    nit_normalizado=nit_normalizado,
+                    codigo_material=codigo_material
+                )
+                serializer = MaterialImagenSerializer(imagen, context={'request': request})
+                return Response(serializer.data)
+            except MaterialImagen.DoesNotExist:
+                return Response({
+                    'imagen_url': None,
+                    'caracteristicas': None,
+                    'pdf_url': None
+                })
+        
+        # PUT/PATCH - Actualizar
+        self._check_admin_permission(request)
+        
+        # Normalizar request.data - MultiPartParser puede devolver listas
+        normalized_data = {}
+        for key, value in request.data.items():
+            # Si es una lista con un solo elemento, tomar el primer elemento
+            if isinstance(value, list):
+                if len(value) > 0:
+                    normalized_data[key] = value[0]
+                else:
+                    normalized_data[key] = None
+            else:
+                normalized_data[key] = value
+        
+        # El campo imagen debe venir como archivo, no como string
+        # Si viene como lista vacía o None, no incluirlo
+        if 'imagen' in normalized_data and (normalized_data['imagen'] is None or normalized_data['imagen'] == ''):
+            del normalized_data['imagen']
+        
+        try:
+            imagen = MaterialImagen.objects.get(
+                nit_normalizado=nit_normalizado,
+                codigo_material=codigo_material
+            )
+            serializer = MaterialImagenSerializer(
+                imagen,
+                data=normalized_data,
+                partial=request.method == 'PATCH',
+                context={'request': request}
+            )
+        except MaterialImagen.DoesNotExist:
+            serializer = MaterialImagenSerializer(
+                data={
+                    **normalized_data,
+                    'nit_normalizado': nit_normalizado,
+                    'codigo_material': codigo_material
+                },
+                context={'request': request}
+            )
+        
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+
+class CajaAutopagoViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
+    """
+    ViewSet para gestionar cajas autopago.
+    Permite CRUD de cajas, filtrando por empresa según permisos del usuario.
+    """
+    serializer_class = CajaAutopagoSerializer
+    permission_classes = [AllowAny]  # Se valida por empresa en get_queryset
+    authentication_classes = [JWTOrAPIKeyAuthentication]
+    
+    def get_queryset(self):
+        """Filtrar cajas por empresas permitidas para el usuario"""
+        qs = CajaAutopago.objects.all()
+        
+        # Si hay API Key, filtrar por empresas autorizadas
+        if hasattr(self.request, 'empresas_autorizadas') and self.request.empresas_autorizadas:
+            qs = qs.filter(empresa_servidor__in=self.request.empresas_autorizadas)
+        
+        # Si hay usuario autenticado, filtrar por empresas permitidas
+        elif self.request.user.is_authenticated:
+            empresas_permitidas = EmpresaServidor.objects.filter(
+                usuarios_permitidos__usuario=self.request.user
+            ).distinct()
+            qs = qs.filter(empresa_servidor__in=empresas_permitidas)
+        
+        # Si no hay autenticación, retornar vacío
+        else:
+            qs = qs.none()
+        
+        # Filtrar por empresa_servidor_id si viene en query params
+        empresa_id = self.request.query_params.get('empresa_servidor_id')
+        if empresa_id:
+            qs = qs.filter(empresa_servidor_id=empresa_id)
+        
+        return qs.select_related('empresa_servidor', 'usuario_creador')
+    
+    def create(self, request, *args, **kwargs):
+        """
+        Crear o actualizar caja autopago.
+        Si ya existe una caja con el mismo nombre para la empresa, la actualiza.
+        """
+        empresa_servidor_id = request.data.get('empresa_servidor')
+        nombre = request.data.get('nombre')
+        
+        if empresa_servidor_id and nombre:
+            # Buscar si ya existe una caja con ese nombre para esa empresa
+            try:
+                caja_existente = CajaAutopago.objects.get(
+                    empresa_servidor_id=empresa_servidor_id,
+                    nombre=nombre
+                )
+                # Si existe, actualizar en lugar de crear
+                serializer = self.get_serializer(caja_existente, data=request.data, partial=False)
+                serializer.is_valid(raise_exception=True)
+                
+                # Obtener usuario TNS de la validación si existe
+                tns_username = None
+                if hasattr(request, 'session'):
+                    validation = request.session.get('tns_validation')
+                    if validation and isinstance(validation, dict):
+                        tns_username = validation.get('OUSERNAME') or validation.get('username')
+                
+                # Si no está en session, intentar desde request data
+                if not tns_username:
+                    tns_username = request.data.get('usuario_tns')
+                
+                serializer.save(
+                    usuario_creador=request.user if request.user.is_authenticated else None,
+                    usuario_tns=tns_username
+                )
+                
+                headers = self.get_success_headers(serializer.data)
+                return Response(serializer.data, status=status.HTTP_200_OK, headers=headers)
+            except CajaAutopago.DoesNotExist:
+                # No existe, proceder con creación normal
+                pass
+        
+        # Crear nueva caja
+        return super().create(request, *args, **kwargs)
+    
+    def perform_create(self, serializer):
+        """Al crear, guardar el usuario creador y el usuario TNS si está disponible"""
+        # Obtener usuario TNS de la validación si existe
+        tns_username = None
+        if hasattr(self.request, 'session'):
+            validation = self.request.session.get('tns_validation')
+            if validation and isinstance(validation, dict):
+                tns_username = validation.get('OUSERNAME') or validation.get('username')
+        
+        # Si no está en session, intentar desde sessionStorage (viene en headers o body)
+        if not tns_username:
+            tns_username = self.request.data.get('usuario_tns')
+        
+        serializer.save(
+            usuario_creador=self.request.user if self.request.user.is_authenticated else None,
+            usuario_tns=tns_username
+        )
+    
+    @action(detail=False, methods=['get'], url_path='por-empresa')
+    def por_empresa(self, request):
+        """Obtener todas las cajas activas de una empresa específica"""
+        empresa_id = request.query_params.get('empresa_servidor_id')
+        if not empresa_id:
+            return Response(
+                {'error': 'Debes indicar empresa_servidor_id'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Obtener todas las cajas (no solo activas) para que el frontend pueda elegir
+        cajas = self.get_queryset().filter(
+            empresa_servidor_id=empresa_id
+        )
+        serializer = self.get_serializer(cajas, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=False, methods=['get'], url_path='formas-pago')
+    def formas_pago(self, request):
+        """
+        Obtiene las formas de pago permitidas desde VARIOS (GFPPERMITIDASCAJAGC).
+        Retorna lista de formas de pago con CODIGO y DESCRIP.
+        """
+        empresa_servidor_id = request.query_params.get('empresa_servidor_id')
+        if not empresa_servidor_id:
+            return Response(
+                {'error': 'Debes indicar empresa_servidor_id'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            empresa = _get_empresa_for_request(request, {'empresa_servidor_id': empresa_servidor_id})
+        except Exception as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        from .services.tns_bridge import TNSBridge
+        bridge = TNSBridge(empresa)
+        bridge.connect()
+        
+        try:
+            cursor = bridge.conn.cursor()
+            
+            # 1. Obtener usuario TNS de la sesión o del request
+            usuario_tns = request.query_params.get('usuario_tns') or 'ADMIN'
+            
+            # GFPPERMITIDASCAJAGC se compone dinámicamente: GFPPERMITIDAS + usuario_logueado
+            variab_formas_pago = f"GFPPERMITIDAS{usuario_tns}"
+            logger.info(f"Buscando variable de formas de pago: {variab_formas_pago}")
+            
+            # Obtener GFPPERMITIDASCAJAGC de VARIOS
+            cursor.execute("""
+                SELECT CAST(contenido AS VARCHAR(500)) 
+                FROM varios 
+                WHERE variab = ?
+            """, (variab_formas_pago,))
+            
+            resultado = cursor.fetchone()
+            if not resultado or not resultado[0]:
+                return Response(
+                    {'error': f'No se encontró configuración de formas de pago ({variab_formas_pago})'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            codigos_str = resultado[0].strip()
+            # Formato: "codigo1,codigo2," (siempre termina en coma)
+            # Remover la coma final si existe
+            if codigos_str.endswith(','):
+                codigos_str = codigos_str[:-1]
+            
+            # Separar códigos
+            codigos = [c.strip() for c in codigos_str.split(',') if c.strip()]
+            
+            if not codigos:
+                return Response(
+                    {'error': 'No hay formas de pago configuradas'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # 2. Obtener descripciones de FORMAPAGO
+            placeholders = ','.join(['?' for _ in codigos])
+            cursor.execute(f"""
+                SELECT CODIGO, DESCRIP 
+                FROM FORMAPAGO 
+                WHERE CODIGO IN ({placeholders})
+            """, codigos)
+            
+            formas_pago = []
+            for row in cursor.fetchall():
+                formas_pago.append({
+                    'codigo': row[0],
+                    'descripcion': row[1] or row[0]
+                })
+            
+            return Response({
+                'formas_pago': formas_pago
+            })
+            
+        except Exception as e:
+            logger.error(f"Error obteniendo formas de pago: {e}", exc_info=True)
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        finally:
+            bridge.close()
+    
+    @action(detail=True, methods=['post'], url_path='procesar-pago')
+    def procesar_pago(self, request, pk=None):
+        """
+        Procesa un pago usando la configuración de la caja.
+        Si modo_mock=True, simula una respuesta según probabilidad_exito.
+        Si modo_mock=False, hace una petición real al servidor local del datafono.
+        """
+        import requests
+        import random
+        
+        caja = self.get_object()
+        
+        if not caja.activa:
+            return Response(
+                {'error': 'Esta caja no está activa'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Obtener datos del pago del request
+        monto = request.data.get('monto')
+        referencia = request.data.get('referencia', '')
+        descripcion = request.data.get('descripcion', '')
+        cart_items = request.data.get('cart_items', [])  # Items del carrito
+        invoice_data = request.data.get('invoice_data')  # Datos de facturación (opcional)
+        order_type = request.data.get('order_type', 'takeaway')  # 'takeaway' o 'dinein'
+        
+        if not monto:
+            return Response(
+                {'error': 'Debes indicar el monto'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Modo mock: simular respuesta
+        if caja.modo_mock:
+            # Simular delay de 2-5 segundos
+            import time
+            delay = random.uniform(2, 5)
+            time.sleep(delay)
+            
+            # Decidir éxito o fallo según probabilidad
+            exito = random.random() < caja.probabilidad_exito
+            
+            if exito:
+                # Simular respuesta exitosa
+                numero_aprobacion = f"{random.randint(100000, 999999)}"
+                return Response({
+                    'exito': True,
+                    'mensaje': 'Pago aprobado',
+                    'numero_aprobacion': numero_aprobacion,
+                    'referencia': referencia,
+                    'monto': float(monto),
+                    'modo_mock': True,
+                    'tiempo_simulado': round(delay, 2)
+                })
+            else:
+                # Simular respuesta de error
+                mensajes_error = [
+                    'Tarjeta rechazada',
+                    'Fondos insuficientes',
+                    'Tarjeta vencida',
+                    'Transacción no permitida',
+                    'Error de comunicación'
+                ]
+                return Response({
+                    'exito': False,
+                    'mensaje': random.choice(mensajes_error),
+                    'referencia': referencia,
+                    'monto': float(monto),
+                    'modo_mock': True,
+                    'tiempo_simulado': round(delay, 2)
+                }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Modo real: hacer petición al servidor local del datafono (Flask en puerto 8080)
+        try:
+            url = f"http://{caja.ip_datafono}:{caja.puerto_datafono}/api/payment"
+            
+            # Convertir monto a centavos (el servidor Flask espera amount en centavos)
+            amount_centavos = int(float(monto) * 100)
+            
+            # Usar referencia como idpospal (o generar uno único si no hay)
+            idpospal = referencia or f"PED-{int(time.time())}"
+            
+            payload = {
+                'idpospal': idpospal,
+                'amount': amount_centavos,
+                # Si la caja tiene modo_mock pero estamos en modo real, no enviar mock_success
+                # El servidor Flask usará su propio MOCK_MODE del .env
+            }
+            
+            logger.info(f"Llamando al servidor local del datafono: {url} con payload: {payload}")
+            
+            # Timeout de 30 segundos
+            response = requests.post(url, json=payload, timeout=30)
+            response.raise_for_status()
+            
+            respuesta_flask = response.json()
+            
+            # Adaptar respuesta del servidor Flask al formato esperado por el frontend
+            # El servidor Flask devuelve: {'success': True/False, 'codigo_respuesta': '00', ...}
+            exito = respuesta_flask.get('success', False)
+            codigo_respuesta = respuesta_flask.get('codigo_respuesta', '')
+            
+            # Respetar el mock_mode que viene del Flask (puede estar en modo mock aunque la caja diga modo_mock: false)
+            # Esto es porque el Flask tiene su propio MOCK_MODE en el .env
+            modo_mock_flask = respuesta_flask.get('mock_mode', False)
+            
+            # Construir mensaje más descriptivo
+            if exito and codigo_respuesta == '00':
+                mensaje = 'Pago aprobado'
+                if modo_mock_flask:
+                    mensaje += ' (Modo Mock - Prueba)'
+                else:
+                    mensaje += f'\nTarjeta: {respuesta_flask.get("franquicia", "")} {respuesta_flask.get("ultimos_digitos", "")}\nTipo: {respuesta_flask.get("tipo_cuenta", "")}'
+                
+                # ============================================
+                # PAGO EXITOSO - El frontend llamará a crear-factura después
+                # ============================================
+                # El datafono solo procesa el pago. La creación de factura se hace
+                # en un endpoint separado que el frontend llamará después del pago exitoso.
+                
+                return Response({
+                    'exito': True,
+                    'mensaje': mensaje,
+                    'numero_aprobacion': respuesta_flask.get('codigo_autorizacion', ''),
+                    'referencia': referencia,
+                    'monto': float(monto),
+                    'modo_mock': modo_mock_flask,
+                    'franquicia': respuesta_flask.get('franquicia', ''),
+                    'ultimos_digitos': respuesta_flask.get('ultimos_digitos', ''),
+                    'tipo_cuenta': respuesta_flask.get('tipo_cuenta', ''),
+                    'numero_recibo': respuesta_flask.get('numero_recibo', ''),
+                    'rrn': respuesta_flask.get('rrn', ''),
+                    'respuesta_completa': respuesta_flask
+                })
+            else:
+                # Pago rechazado
+                mensaje_error = respuesta_flask.get('medio_pago', 'Pago rechazado')
+                if modo_mock_flask:
+                    mensaje_error += ' (Modo Mock - Prueba)'
+                
+                return Response({
+                    'exito': False,
+                    'mensaje': mensaje_error,
+                    'referencia': referencia,
+                    'monto': float(monto),
+                    'modo_mock': modo_mock_flask,  # Usar el mock_mode del Flask
+                    'codigo_respuesta': codigo_respuesta,
+                    'respuesta_completa': respuesta_flask
+                }, status=status.HTTP_400_BAD_REQUEST)
+        
+        except requests.exceptions.Timeout:
+            return Response(
+                {
+                    'exito': False,
+                    'mensaje': 'Timeout: El datafono no respondió a tiempo',
+                    'modo_mock': False
+                },
+                status=status.HTTP_504_GATEWAY_TIMEOUT
+            )
+        except requests.exceptions.ConnectionError:
+            return Response(
+                {
+                    'exito': False,
+                    'mensaje': f'No se pudo conectar al datafono en {caja.ip_datafono}:{caja.puerto_datafono}',
+                    'modo_mock': False
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+        except requests.exceptions.RequestException as e:
+            return Response(
+                {
+                    'exito': False,
+                    'mensaje': f'Error al comunicarse con el datafono: {str(e)}',
+                    'modo_mock': False
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class NotaRapidaViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
+    """
+    ViewSet para gestionar notas rápidas (opciones predefinidas para notas de productos).
+    """
+    authentication_classes = [JWTOrAPIKeyAuthentication]
+    permission_classes = [AllowAny]
+    
+    @action(detail=False, methods=['get'], url_path='list')
+    def list_notas(self, request):
+        """
+        Lista todas las notas rápidas activas.
+        Filtra por empresa_servidor_id si se proporciona.
+        """
+        empresa_servidor_id = request.query_params.get('empresa_servidor_id')
+        activo = request.query_params.get('activo', 'true').lower() == 'true'
+        categoria = request.query_params.get('categoria')  # Filtrar por categoría específica
+        
+        queryset = NotaRapida.objects.filter(activo=activo)
+        
+        # Si se proporciona categoria, filtrar notas que tengan esa categoría o que no tengan categorías (disponibles para todas)
+        if categoria:
+            from django.db.models import Q
+            queryset = queryset.filter(
+                Q(categorias__contains=[categoria]) | Q(categorias__len=0)
+            )
+        
+        notas = queryset.order_by('orden', 'texto').values('id', 'texto', 'categorias', 'orden', 'activo')
+        
+        return Response({
+            'success': True,
+            'data': list(notas)
+        }, status=status.HTTP_200_OK)
+    
+    @action(detail=False, methods=['post'], url_path='crear')
+    def crear_nota(self, request):
+        """
+        Crea una nueva nota rápida.
+        """
+        texto = request.data.get('texto')
+        categorias = request.data.get('categorias', [])
+        orden = request.data.get('orden', 0)
+        activo = request.data.get('activo', True)
+        
+        if not texto:
+            return Response({
+                'success': False,
+                'error': 'El texto es requerido'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        nota = NotaRapida.objects.create(
+            texto=texto,
+            categorias=categorias if isinstance(categorias, list) else [],
+            orden=orden,
+            activo=activo
+        )
+        
+        return Response({
+            'success': True,
+            'data': {
+                'id': nota.id,
+                'texto': nota.texto,
+                'categorias': nota.categorias,
+                'orden': nota.orden,
+                'activo': nota.activo
+            }
+        }, status=status.HTTP_201_CREATED)
+    
+    @action(detail=True, methods=['put', 'patch'], url_path='actualizar')
+    def actualizar_nota(self, request, pk=None):
+        """
+        Actualiza una nota rápida existente.
+        """
+        try:
+            nota = NotaRapida.objects.get(pk=pk)
+        except NotaRapida.DoesNotExist:
+            return Response({
+                'success': False,
+                'error': 'Nota rápida no encontrada'
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        if 'texto' in request.data:
+            nota.texto = request.data['texto']
+        if 'categorias' in request.data:
+            nota.categorias = request.data['categorias'] if isinstance(request.data['categorias'], list) else []
+        if 'orden' in request.data:
+            nota.orden = request.data['orden']
+        if 'activo' in request.data:
+            nota.activo = request.data['activo']
+        
+        nota.save()
+        
+        return Response({
+            'success': True,
+            'data': {
+                'id': nota.id,
+                'texto': nota.texto,
+                'categorias': nota.categorias,
+                'orden': nota.orden,
+                'activo': nota.activo
+            }
+        }, status=status.HTTP_200_OK)
+    
+    @action(detail=True, methods=['delete'], url_path='eliminar')
+    def eliminar_nota(self, request, pk=None):
+        """
+        Elimina una nota rápida (marca como inactiva o elimina físicamente).
+        """
+        try:
+            nota = NotaRapida.objects.get(pk=pk)
+        except NotaRapida.DoesNotExist:
+            return Response({
+                'success': False,
+                'error': 'Nota rápida no encontrada'
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        # Marcar como inactiva en lugar de eliminar físicamente
+        nota.activo = False
+        nota.save()
+        
+        return Response({
+            'success': True,
+            'message': 'Nota rápida eliminada'
+        }, status=status.HTTP_200_OK)
+
+class DianProcessorViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
+    """
+    ViewSet para procesar facturas electrónicas DIAN de forma asíncrona.
+    Usa Celery para procesamiento en background.
+    """
+    permission_classes = [AllowAny]
+    authentication_classes = [JWTOrAPIKeyAuthentication]
+    
+    @action(detail=False, methods=['post'], url_path='procesar-factura')
+    def procesar_factura(self, request):
+        """
+        Procesa una factura electrónica DIAN de forma asíncrona.
+        Si mock=true, simula el envío esperando 4 segundos y retorna exitoso.
+        
+        Body:
+        {
+            "nit": "132791157",  # NIT (se normaliza automáticamente)
+            "kardex_id": 12345,  # ID del documento a procesar
+            "empresa_servidor_id": 192,  # Opcional, si no se proporciona se busca por NIT
+            "mock": true  # Si es true, simula el envío sin procesar realmente
+        }
+        
+        Returns (si mock=true):
+        {
+            "status": "SUCCESS",
+            "cufe": "MOCK-12345-...",
+            "mensaje": "Documento procesado exitosamente",
+            "kardex_id": 12345
+        }
+        
+        Returns (si mock=false):
+        {
+            "task_id": "abc-123-def-456",  # ID de la tarea Celery
+            "status": "PENDING",
+            "message": "Procesamiento iniciado"
+        }
+        """
+        import time
+        from datetime import datetime
+        
+        nit = request.data.get('nit')
+        kardex_id = request.data.get('kardex_id')
+        empresa_servidor_id = request.data.get('empresa_servidor_id')
+        mock = request.data.get('mock', False)
+        
+        if not nit or not kardex_id:
+            return Response(
+                {'error': 'Debes indicar nit y kardex_id'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Normalizar NIT
+        nit_normalizado = _normalize_nit(nit)
+        
+        # Si es mock, simular envío
+        if mock:
+            logger.info(f"🔄 [MOCK DIAN] Simulando envío a DIAN para kardex_id={kardex_id}")
+            
+            # Esperar 4 segundos
+            time.sleep(4)
+            
+            # Generar CUFE mock
+            cufe_mock = f"MOCK-{kardex_id}-{int(time.time())}"
+            
+            logger.info(f"✅ [MOCK DIAN] Factura {kardex_id} 'enviada' a DIAN (Mock)")
+            
+            # Retornar formato similar al de tasks.py cuando es exitoso
+            return Response({
+                'status': 'SUCCESS',
+                'cufe': cufe_mock,
+                'mensaje': 'Documento procesado exitosamente',
+                'kardex_id': kardex_id,
+                'fecha_envio': datetime.now().isoformat()
+            })
+        
+        # Si no es mock, ejecutar proceso real con Celery
+        from .tasks import procesar_factura_dian_task
+        
+        task = procesar_factura_dian_task.delay(
+            nit_normalizado=nit_normalizado,
+            kardex_id=kardex_id,
+            empresa_servidor_id=empresa_servidor_id
+        )
+        
+        logger.info(f"Tarea Celery iniciada: {task.id} para NIT={nit_normalizado}, KardexID={kardex_id}")
+        
+        return Response({
+            'task_id': task.id,
+            'status': 'PENDING',
+            'message': 'Procesamiento de factura iniciado. Usa el task_id para consultar el estado.',
+            'nit': nit_normalizado,
+            'kardex_id': kardex_id
+        })
+    
+    @action(detail=False, methods=['post'], url_path='crear-factura')
+    def crear_factura(self, request):
+        """
+        Crea una factura en TNS después de un pago exitoso.
+        Este endpoint se llama desde el frontend después de que el datafono procesa el pago.
+        
+        Body:
+        {
+            "empresa_servidor_id": 192,
+            "cart_items": [
+                {"id": "CODIGO1", "name": "Producto 1", "price": 1000, "quantity": 2},
+                ...
+            ],
+            "monto_total": 3000,
+            "invoice_data": {
+                "docType": "cedula" | "nit",
+                "document": "1234567890",
+                "name": "Nombre Completo",
+                "email": "email@example.com",
+                "phone": "3001234567"
+            },
+            "order_type": "takeaway" | "dinein",
+            "referencia": "PED-1234567890",
+            "forma_pago_codigo": "EF",  # Código de forma de pago
+            "mesa_number": "5",  # Opcional, solo si es dinein
+            "observacion": "PARA LLEVAR - TEL: 3001234567",  # Observación construida
+            "usuario_tns": "CAJAGC",  # Usuario TNS logueado
+            "medio_pago_data": {  # Datos del datafono (opcional)
+                "codigo_autorizacion": "123456",
+                "franquicia": "VISA",
+                "ultimos_digitos": "1234",
+                "tipo_cuenta": "CREDITO",
+                "numero_recibo": "12345",
+                "rrn": "123456789"
+            }
+        }
+        
+        Returns:
+        {
+            "success": true,
+            "kardex_id": 12345,
+            "prefijo": "FV",
+            "numero": "12345",
+            "nit_normalizado": "1234567890",
+            "task_id_dian": "abc-123-def-456"  # ID de tarea Celery para DIAN
+        }
+        """
+        from .services.tns_invoice_helper import insertar_factura_tns
+        from .services.tns_bridge import TNSBridge
+        from .tasks import procesar_factura_dian_task
+        
+        empresa_servidor_id = request.data.get('empresa_servidor_id')
+        empresa_nombre = request.data.get('empresa_nombre', '')
+        empresa_nit = request.data.get('empresa_nit', '')
+        cart_items = request.data.get('cart_items', [])
+        monto_total = request.data.get('monto_total')
+        invoice_data = request.data.get('invoice_data')
+        order_type = request.data.get('order_type', 'takeaway')
+        referencia = request.data.get('referencia', '')
+        forma_pago_codigo = request.data.get('forma_pago_codigo')
+        mesa_number = request.data.get('mesa_number')
+        observacion = request.data.get('observacion')
+        usuario_tns = request.data.get('usuario_tns', 'ADMIN')
+        medio_pago_data = request.data.get('medio_pago_data', {})
+        
+        if not empresa_servidor_id:
+            return Response(
+                {'error': 'Debes indicar empresa_servidor_id'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not cart_items or len(cart_items) == 0:
+            return Response(
+                {'error': 'Debes indicar cart_items'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not monto_total:
+            return Response(
+                {'error': 'Debes indicar monto_total'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            empresa = EmpresaServidor.objects.get(id=empresa_servidor_id)
+        except EmpresaServidor.DoesNotExist:
+            return Response(
+                {'error': f'Empresa con ID {empresa_servidor_id} no encontrada'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        try:
+            logger.info("=" * 80)
+            logger.info("🔄 CREANDO FACTURA EN TNS DESPUÉS DEL PAGO EXITOSO")
+            logger.info(f"   Empresa ID: {empresa.id}")
+            logger.info(f"   Usuario TNS: {usuario_tns}")
+            logger.info(f"   Monto: {monto_total}")
+            logger.info(f"   Items: {len(cart_items)}")
+            logger.info(f"   Invoice Data: {invoice_data}")
+            logger.info(f"   Forma Pago: {forma_pago_codigo}")
+            logger.info(f"   Mesa: {mesa_number}")
+            logger.info(f"   Observación: {observacion}")
+            logger.info("=" * 80)
+            
+            # Conectar a TNS
+            bridge = TNSBridge(empresa)
+            
+            # Insertar factura en TNS
+            resultado_insercion = insertar_factura_tns(
+                bridge=bridge,
+                cart_items=cart_items,
+                monto_total=float(monto_total),
+                empresa_servidor_id=empresa.id,
+                invoice_data=invoice_data,
+                order_type=order_type,
+                referencia=referencia,
+                medio_pago_data=medio_pago_data,
+                forma_pago_codigo=forma_pago_codigo,
+                mesa_number=mesa_number,
+                observacion=observacion,
+                usuario_tns=usuario_tns
+            )
+            
+            bridge.close()
+            
+            logger.info("=" * 80)
+            logger.info("📊 RESULTADO DE INSERCIÓN EN TNS")
+            logger.info(f"   Success: {resultado_insercion.get('success')}")
+            logger.info(f"   Resultado completo: {resultado_insercion}")
+            logger.info("=" * 80)
+            
+            if resultado_insercion.get('success'):
+                # NO procesar DIAN aquí - el frontend lo hará después
+                # Solo retornar el kardex_id para que el frontend continúe
+                kardex_id = resultado_insercion['kardex_id']
+                nit_normalizado = resultado_insercion['nit_normalizado']
+                
+                logger.info(f"✅ Factura insertada exitosamente en TNS")
+                logger.info(f"   KARDEXID: {kardex_id}")
+                logger.info(f"   NIT Normalizado: {nit_normalizado}")
+                
+                # Iniciar tarea DIAN
+                task_id_dian = None
+                try:
+                    task = procesar_factura_dian_task.delay(
+                        nit_normalizado=nit_normalizado,
+                        kardex_id=kardex_id,
+                        empresa_servidor_id=empresa.id
+                    )
+                    task_id_dian = task.id
+                    logger.info(f"✅ Tarea DIAN iniciada: {task_id_dian}")
+                except Exception as e:
+                    logger.error(f"❌ Error al iniciar tarea DIAN: {e}", exc_info=True)
+                
+                return Response({
+                    'success': True,
+                    'kardex_id': kardex_id,
+                    'prefijo': resultado_insercion.get('prefijo'),
+                    'numero': resultado_insercion.get('numero'),
+                    'nit_normalizado': nit_normalizado,
+                    'task_id_dian': task_id_dian,
+                    'observacion': resultado_insercion.get('observacion')
+                })
+            else:
+                error_msg = resultado_insercion.get('error', 'Error desconocido')
+                logger.error(f"❌ Error al insertar factura en TNS: {error_msg}")
+                logger.error(f"   Detalles completos: {resultado_insercion}")
+                
+                # ⚠️ PAGO EXITOSO PERO FALLO LA INSERCIÓN: Generar ticket de error e imprimir
+                try:
+                    from .services.pdf_helper import generar_ticket_error_pdf
+                    from .models import CajaAutopago
+                    import requests
+                    from django.core.files.uploadedfile import SimpleUploadedFile
+                    
+                    logger.warning("⚠️ Generando ticket de error porque el pago fue exitoso pero falló la inserción en TNS")
+                    
+                    # Obtener datos de la empresa
+                    empresa_nit = empresa.nit
+                    empresa_nombre = empresa.nombre
+                    empresa_direccion = ""  # Se puede obtener de TNS si es necesario
+                    empresa_telefono = ""  # Se puede obtener de TNS si es necesario
+                    empresa_email = ""  # Se puede obtener de TNS si es necesario
+                    
+                    # Generar ticket de error
+                    pdf_buffer = generar_ticket_error_pdf(
+                        empresa_nit=empresa_nit,
+                        empresa_nombre=empresa_nombre,
+                        empresa_direccion=empresa_direccion,
+                        empresa_telefono=empresa_telefono,
+                        empresa_email=empresa_email,
+                        monto_total=float(monto_total),
+                        cart_items=cart_items,
+                        error_message=error_msg[:200],  # Limitar longitud
+                        referencia_pago=referencia or 'SIN-REF',
+                        medio_pago_data=medio_pago_data,
+                        invoice_data=invoice_data,  # Datos del cliente
+                        observacion=observacion,  # Observaciones del pedido
+                        fecha=datetime.now().strftime("%Y-%m-%d"),
+                        hora=datetime.now().strftime("%H:%M:%S")
+                    )
+                    
+                    if pdf_buffer:
+                        # Obtener IP y puerto del servidor Flask desde CajaAutopago
+                        caja = CajaAutopago.objects.filter(empresa_servidor_id=empresa.id).first()
+                        if caja and caja.ip_datafono and caja.puerto_datafono:
+                            flask_url = f"http://{caja.ip_datafono}:{caja.puerto_datafono}/api/invoice/print-short"
+                            
+                            # Enviar PDF al servidor Flask para imprimir
+                            pdf_buffer.seek(0)
+                            files = {
+                                'pdf': ('ticket_error.pdf', pdf_buffer.read(), 'application/pdf')
+                            }
+                            data = {
+                                'kardex_id': 'ERROR',
+                                'empresa_servidor_id': str(empresa.id)
+                            }
+                            
+                            try:
+                                response = requests.post(flask_url, files=files, data=data, timeout=10)
+                                if response.status_code == 200:
+                                    logger.info("✅ Ticket de error enviado a impresión exitosamente")
+                                else:
+                                    logger.warning(f"⚠️ Error al enviar ticket de error a impresión: {response.status_code} - {response.text}")
+                            except Exception as e:
+                                logger.error(f"❌ Error al enviar ticket de error a impresión: {e}", exc_info=True)
+                        else:
+                            logger.warning("⚠️ No se encontró configuración de servidor Flask para imprimir ticket de error")
+                    else:
+                        logger.error("❌ No se pudo generar el PDF del ticket de error")
+                        
+                except Exception as e:
+                    logger.error(f"❌ Error al generar/imprimir ticket de error: {e}", exc_info=True)
+                    # No fallar la respuesta por esto, solo loguear
+                
+                return Response(
+                    {
+                        'success': False,
+                        'error': error_msg,
+                        'detalles': resultado_insercion,
+                        'ticket_error_generado': pdf_buffer is not None if 'pdf_buffer' in locals() else False
+                    },
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+        
+        except Exception as e:
+            logger.error(f"❌ Error general al crear factura: {e}", exc_info=True)
+            return Response(
+                {
+                    'success': False,
+                    'error': str(e)
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=False, methods=['get'], url_path='estado-tarea')
+    def estado_tarea(self, request):
+        """
+        Consulta el estado de una tarea Celery.
+        
+        Query params:
+        - task_id: ID de la tarea Celery
+        
+        Returns:
+        {
+            "task_id": "abc-123-def-456",
+            "status": "SUCCESS|FAILED|PENDING|PROCESSING|ERROR",
+            "result": {...}  # Solo si está completada
+        }
+        """
+        from celery.result import AsyncResult
+        
+        task_id = request.query_params.get('task_id')
+        if not task_id:
+            return Response(
+                {'error': 'Debes indicar task_id'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        task_result = AsyncResult(task_id)
+        
+        response_data = {
+            'task_id': task_id,
+            'status': task_result.state
+        }
+        
+        if task_result.ready():
+            if task_result.successful():
+                response_data['result'] = task_result.result
+                response_data['status'] = task_result.result.get('status', 'SUCCESS') if isinstance(task_result.result, dict) else 'SUCCESS'
+            else:
+                response_data['error'] = str(task_result.info)
+                response_data['status'] = 'ERROR'
+        elif task_result.state == 'PROCESSING':
+            response_data['meta'] = task_result.info if isinstance(task_result.info, dict) else {}
+        
+        return Response(response_data)
+    
+    @action(detail=False, methods=['post'], url_path='generar-pdf-completo')
+    def generar_pdf_completo(self, request):
+        """
+        Genera PDF de factura completa consultando TNS directamente.
+        Django tiene acceso directo a TNS, así que no necesita llamar al Flask.
+        
+        Body:
+        {
+            "kardex_id": 12345,
+            "empresa_servidor_id": 192
+        }
+        
+        Returns:
+            PDF binario
+        """
+        from django.http import HttpResponse
+        from io import BytesIO
+        
+        kardex_id = request.data.get('kardex_id')
+        empresa_servidor_id = request.data.get('empresa_servidor_id')
+        empresa_nombre = request.data.get('empresa_nombre', '')
+        empresa_nit = request.data.get('empresa_nit', '')
+        
+        if not kardex_id or not empresa_servidor_id:
+            return Response(
+                {'error': 'Debes indicar kardex_id y empresa_servidor_id'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            empresa = EmpresaServidor.objects.get(id=empresa_servidor_id)
+        except EmpresaServidor.DoesNotExist:
+            return Response(
+                {'error': f'Empresa con ID {empresa_servidor_id} no encontrada'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Obtener configuración de la caja para saber la IP del Flask
+        caja = CajaAutopago.objects.filter(
+            empresa_servidor_id=empresa_servidor_id,
+            activa=True
+        ).first()
+        
+        if not caja:
+            return Response(
+                {'error': 'No hay caja activa configurada para esta empresa'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Consultar datos de la factura desde TNS y generar PDF directamente
+        from .services.pdf_helper import consultar_datos_factura_para_pdf, generar_pdf_factura_completa
+        from .services.tns_bridge import TNSBridge
+        
+        bridge = TNSBridge(empresa)
+        bridge.connect()
+        
+        try:
+            factura_data = consultar_datos_factura_para_pdf(bridge, kardex_id)
+            
+            if not factura_data:
+                return Response(
+                    {'error': 'No se pudieron obtener los datos de la factura desde TNS'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+            
+            # Usar datos de empresa del frontend si están disponibles
+            if empresa_nombre:
+                factura_data['empresa_nombre'] = empresa_nombre
+            if empresa_nit:
+                factura_data['empresa_nit'] = empresa_nit
+            
+            # Obtener logo de la empresa desde EmpresaPersonalizacion usando NIT normalizado
+            logo_base64 = None
+            try:
+                from .models import EmpresaPersonalizacion
+                # Usar la misma función de normalización que se usa al guardar el logo
+                nit_normalizado = _normalize_nit(empresa_nit) if empresa_nit else ''
+                if nit_normalizado:
+                    personalizacion = EmpresaPersonalizacion.objects.filter(nit_normalizado=nit_normalizado).first()
+                    if personalizacion and personalizacion.logo:
+                        logo_base64 = base64.b64encode(personalizacion.logo.read()).decode('utf-8')
+                        logger.info(f"✅ Logo obtenido desde EmpresaPersonalizacion para NIT normalizado: {nit_normalizado}")
+                    else:
+                        logger.info(f"⚠️ No se encontró logo en EmpresaPersonalizacion para NIT normalizado: {nit_normalizado}")
+            except Exception as e:
+                logger.warning(f"No se pudo obtener logo: {e}", exc_info=True)
+                pass
+            
+            # Generar PDF directamente en Django
+            pdf_buffer = generar_pdf_factura_completa(factura_data, logo_base64)
+            
+            if not pdf_buffer:
+                return Response(
+                    {'error': 'Error generando PDF'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+            
+            # Retornar el PDF directamente
+            response = HttpResponse(
+                pdf_buffer.read(),
+                content_type='application/pdf'
+            )
+            response['Content-Disposition'] = f'inline; filename="factura_{factura_data.get("prefijo", "FV")}-{factura_data.get("numero", kardex_id)}.pdf"'
+            return response
+            
+        except Exception as e:
+            logger.error(f"Error generando PDF: {e}", exc_info=True)
+            return Response(
+                {'error': f'Error generando PDF: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        finally:
+            bridge.close()
+    
+    @action(detail=False, methods=['post'], url_path='generar-pdf-corto')
+    def generar_pdf_corto(self, request):
+        """
+        Genera PDF de ticket corto consultando TNS directamente.
+        
+        Body:
+        {
+            "kardex_id": 12345,
+            "empresa_servidor_id": 192
+        }
+        
+        Returns:
+            PDF binario
+        """
+        from django.http import HttpResponse
+        import requests
+        
+        kardex_id = request.data.get('kardex_id')
+        empresa_servidor_id = request.data.get('empresa_servidor_id')
+        empresa_nombre = request.data.get('empresa_nombre', '')
+        empresa_nit = request.data.get('empresa_nit', '')
+        
+        if not kardex_id or not empresa_servidor_id:
+            return Response(
+                {'error': 'Debes indicar kardex_id y empresa_servidor_id'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            empresa = EmpresaServidor.objects.get(id=empresa_servidor_id)
+        except EmpresaServidor.DoesNotExist:
+            return Response(
+                {'error': f'Empresa con ID {empresa_servidor_id} no encontrada'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Obtener configuración de la caja para saber la IP del Flask
+        caja = CajaAutopago.objects.filter(
+            empresa_servidor_id=empresa_servidor_id,
+            activa=True
+        ).first()
+        
+        if not caja:
+            return Response(
+                {'error': 'No hay caja activa configurada para esta empresa'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Consultar datos de la factura desde TNS y generar PDF directamente
+        from .services.pdf_helper import consultar_datos_factura_para_pdf, generar_pdf_ticket_corto
+        from .services.tns_bridge import TNSBridge
+        
+        bridge = TNSBridge(empresa)
+        bridge.connect()
+        
+        try:
+            factura_data = consultar_datos_factura_para_pdf(bridge, kardex_id)
+            
+            if not factura_data:
+                return Response(
+                    {'error': 'No se pudieron obtener los datos de la factura desde TNS'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+            
+            # Usar datos de empresa del frontend si están disponibles
+            if empresa_nombre:
+                factura_data['empresa_nombre'] = empresa_nombre
+            if empresa_nit:
+                factura_data['empresa_nit'] = empresa_nit
+            
+            # Obtener logo de la empresa desde EmpresaPersonalizacion usando NIT normalizado
+            logo_base64 = None
+            try:
+                from .models import EmpresaPersonalizacion
+                # Usar la misma función de normalización que se usa al guardar el logo
+                nit_normalizado = _normalize_nit(empresa_nit) if empresa_nit else ''
+                if nit_normalizado:
+                    personalizacion = EmpresaPersonalizacion.objects.filter(nit_normalizado=nit_normalizado).first()
+                    if personalizacion and personalizacion.logo:
+                        logo_base64 = base64.b64encode(personalizacion.logo.read()).decode('utf-8')
+                        logger.info(f"✅ Logo obtenido desde EmpresaPersonalizacion para NIT normalizado: {nit_normalizado}")
+                    else:
+                        logger.info(f"⚠️ No se encontró logo en EmpresaPersonalizacion para NIT normalizado: {nit_normalizado}")
+            except Exception as e:
+                logger.warning(f"No se pudo obtener logo: {e}", exc_info=True)
+                pass
+            
+            # Generar PDF directamente en Django
+            pdf_buffer = generar_pdf_ticket_corto(factura_data, logo_base64)
+            
+            if not pdf_buffer:
+                return Response(
+                    {'error': 'Error generando PDF'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+            
+            # Retornar el PDF directamente
+            response = HttpResponse(
+                pdf_buffer.read(),
+                content_type='application/pdf'
+            )
+            response['Content-Disposition'] = f'inline; filename="ticket_{factura_data.get("prefijo", "FV")}-{factura_data.get("numero", kardex_id)}.pdf"'
+            return response
+            
+        except Exception as e:
+            logger.error(f"Error generando PDF: {e}", exc_info=True)
+            return Response(
+                {'error': f'Error generando PDF: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        finally:
+            bridge.close()
+# ViewSet para VPN - Agregar al final de views.py
+
+class VpnConfigViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
+    """
+    ViewSet para gestionar configuraciones VPN (WireGuard).
+    Permite crear, listar, activar/desactivar y descargar configuraciones de túneles VPN.
+    """
+    queryset = VpnConfig.objects.all()
+    serializer_class = VpnConfigSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def create(self, request, *args, **kwargs):
+        """
+        Crea una nueva configuración VPN.
+        Genera claves, asigna IP y crea el archivo .conf.
+        """
+        from .services.wireguard_manager import WireGuardManager
+        
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        nombre = serializer.validated_data.get('nombre')
+        ip_address = serializer.validated_data.get('ip_address')
+        activo = serializer.validated_data.get('activo', True)
+        notas = serializer.validated_data.get('notas', '')
+        
+        try:
+            wg_manager = WireGuardManager()
+            
+            # Crear cliente
+            client_data = wg_manager.create_client(
+                nombre=nombre,
+                ip_address=ip_address
+            )
+            
+            # Crear registro en BD
+            vpn_config = VpnConfig.objects.create(
+                nombre=nombre,
+                ip_address=client_data['ip_address'],
+                public_key=client_data['public_key'],
+                private_key=client_data['private_key'],
+                config_file_path=client_data['config_file_path'],
+                activo=activo,
+                notas=notas
+            )
+            
+            response_serializer = self.get_serializer(vpn_config)
+            return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+            
+        except Exception as e:
+            logger.error(f"Error creando configuración VPN: {e}", exc_info=True)
+            return Response(
+                {'error': f'Error creando configuración VPN: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=True, methods=['get'], url_path='download')
+    def download_config(self, request, pk=None):
+        """
+        Descarga el archivo .conf de una configuración VPN.
+        """
+        try:
+            vpn_config = self.get_object()
+            
+            if not vpn_config.config_file_path:
+                return Response(
+                    {'error': 'Archivo de configuración no encontrado'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Leer archivo
+            from pathlib import Path
+            config_path = Path(vpn_config.config_file_path)
+            
+            if not config_path.exists():
+                # Regenerar si no existe
+                from .services.wireguard_manager import WireGuardManager
+                wg_manager = WireGuardManager()
+                config_content = wg_manager.create_client_config(
+                    client_name=vpn_config.nombre,
+                    client_private_key=vpn_config.private_key,
+                    client_public_key=vpn_config.public_key,
+                    client_ip=vpn_config.ip_address
+                )
+                config_path = Path(wg_manager.save_config_file(vpn_config.nombre, config_content))
+                vpn_config.config_file_path = str(config_path)
+                vpn_config.save()
+            
+            # Leer y retornar
+            config_content = config_path.read_text()
+            
+            from django.http import HttpResponse
+            response = HttpResponse(config_content, content_type='text/plain')
+            response['Content-Disposition'] = f'attachment; filename="wg-{vpn_config.nombre.replace(" ", "_")}.conf"'
+            return response
+            
+        except Exception as e:
+            logger.error(f"Error descargando configuración VPN: {e}", exc_info=True)
+            return Response(
+                {'error': f'Error descargando configuración: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    def update(self, request, *args, **kwargs):
+        """
+        Actualiza una configuración VPN (principalmente para activar/desactivar).
+        """
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        
+        # Si se está activando/desactivando, actualizar en el servidor WireGuard
+        if 'activo' in serializer.validated_data:
+            activo = serializer.validated_data['activo']
+            from .services.wireguard_manager import WireGuardManager
+            wg_manager = WireGuardManager()
+            
+            if activo and not instance.activo:
+                # Activar: agregar peer al servidor
+                wg_manager.add_peer_to_server(instance.public_key, instance.ip_address)
+            elif not activo and instance.activo:
+                # Desactivar: remover peer del servidor
+                wg_manager.remove_peer_from_server(instance.public_key)
+        
+        self.perform_update(serializer)
+        return Response(serializer.data)
+    
+    def destroy(self, request, *args, **kwargs):
+        """
+        Elimina una configuración VPN y remueve el peer del servidor.
+        """
+        instance = self.get_object()
+        
+        try:
+            # Remover peer del servidor
+            from .services.wireguard_manager import WireGuardManager
+            wg_manager = WireGuardManager()
+            wg_manager.remove_peer_from_server(instance.public_key)
+        except Exception as e:
+            logger.warning(f"No se pudo remover peer del servidor: {e}")
+        
+        self.perform_destroy(instance)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+    
+    @action(detail=False, methods=['get'], url_path='server-status')
+    def server_status(self, request):
+        """
+        Obtiene el estado del servidor WireGuard.
+        """
+        from .services.wireguard_manager import WireGuardManager
+        wg_manager = WireGuardManager()
+        status_data = wg_manager.get_server_status()
+        return Response(status_data)
+    
+    @action(detail=False, methods=['post'], url_path='sync-peers')
+    def sync_peers(self, request):
+        """
+        Sincroniza los peers existentes en el servidor WireGuard con la base de datos.
+        Crea registros VpnConfig para peers que existen en el servidor pero no en la BD.
+        """
+        from .services.wireguard_manager import WireGuardManager
+        wg_manager = WireGuardManager()
+        sync_result = wg_manager.sync_existing_peers()
+        
+        if 'error' in sync_result:
+            return Response(
+                {'error': sync_result['error']},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+        return Response({
+            'message': f'Sincronización completada',
+            'created': sync_result['created'],
+            'existing': sync_result['existing'],
+            'total_peers': sync_result['total_peers']
+        })
+    
+    @action(detail=False, methods=['get'], url_path='peer-stats')
+    def peer_stats(self, request):
+        """
+        Obtiene estadísticas detalladas de todos los peers (tráfico, conexión, etc.)
+        """
+        from .services.wireguard_manager import WireGuardManager
+        wg_manager = WireGuardManager()
+        stats = wg_manager.get_peer_stats()
+        
+        # Enriquecer con información de la BD (nombres, etc.)
+        if stats.get('peers'):
+            for peer in stats['peers']:
+                try:
+                    vpn_config = VpnConfig.objects.get(public_key=peer['public_key'])
+                    peer['nombre'] = vpn_config.nombre
+                    peer['id'] = vpn_config.id
+                    peer['activo'] = vpn_config.activo
+                    peer['fecha_creacion'] = vpn_config.fecha_creacion
+                except VpnConfig.DoesNotExist:
+                    peer['nombre'] = 'Desconocido'
+                    peer['id'] = None
+                    peer['activo'] = False
+        
+        return Response(stats)
+    
+    @action(detail=True, methods=['get'], url_path='stats')
+    def peer_detail_stats(self, request, pk=None):
+        """
+        Obtiene estadísticas detalladas de un peer específico.
+        """
+        vpn_config = self.get_object()
+        
+        from .services.wireguard_manager import WireGuardManager
+        wg_manager = WireGuardManager()
+        stats = wg_manager.get_peer_stats(public_key=vpn_config.public_key)
+        
+        if stats.get('peers') and len(stats['peers']) > 0:
+            peer_stats = stats['peers'][0]
+            peer_stats['nombre'] = vpn_config.nombre
+            peer_stats['id'] = vpn_config.id
+            return Response(peer_stats)
+        else:
+            return Response({
+                'error': 'Peer no encontrado o no conectado',
+                'nombre': vpn_config.nombre,
+                'id': vpn_config.id,
+                'activo': vpn_config.activo
+            }, status=status.HTTP_404_NOT_FOUND)
+
+
+class ServerManagementViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
+    """
+    ViewSet para gestionar servicios del sistema (systemd) y PM2 vía SSH.
+    Permite ver estado, iniciar, detener, reiniciar servicios y ver logs.
+    """
+    # No requerir autenticación específica, usar la del APIKeyAwareViewSet
+    permission_classes = []  # Se maneja en APIKeyAwareViewSet
+    
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        try:
+            from .services.server_manager import ServerManager
+            self.server_manager = ServerManager()
+        except Exception as e:
+            logger.error(f"Error inicializando ServerManager: {e}")
+            self.server_manager = None
+    
+    @action(detail=False, methods=['get'])
+    def systemd_services(self, request):
+        """Obtiene lista de servicios systemd"""
+        if not self.server_manager:
+            return Response({'error': 'ServerManager no está configurado'}, status=500)
+        
+        try:
+            services = self.server_manager.get_systemd_services()
+            return Response({'services': services})
+        except Exception as e:
+            logger.error(f"Error obteniendo servicios systemd: {e}")
+            return Response({'error': str(e)}, status=500)
+    
+    @action(detail=False, methods=['get'])
+    def pm2_processes(self, request):
+        """Obtiene lista de procesos PM2"""
+        if not self.server_manager:
+            return Response({'error': 'ServerManager no está configurado'}, status=500)
+        
+        try:
+            processes = self.server_manager.get_pm2_processes()
+            return Response({'processes': processes})
+        except Exception as e:
+            logger.error(f"Error obteniendo procesos PM2: {e}")
+            return Response({'error': str(e)}, status=500)
+    
+    @action(detail=False, methods=['post'])
+    def systemd_action(self, request):
+        """Ejecuta una acción sobre un servicio systemd"""
+        if not self.server_manager:
+            return Response({'error': 'ServerManager no está configurado'}, status=500)
+        
+        service_name = request.data.get('service_name')
+        action = request.data.get('action')
+        
+        if not service_name or not action:
+            return Response({'error': 'service_name y action son requeridos'}, status=400)
+        
+        try:
+            result = self.server_manager.systemd_action(service_name, action)
+            return Response(result)
+        except Exception as e:
+            logger.error(f"Error ejecutando acción systemd: {e}")
+            return Response({'error': str(e)}, status=500)
+    
+    @action(detail=False, methods=['post'])
+    def pm2_action(self, request):
+        """Ejecuta una acción sobre un proceso PM2"""
+        if not self.server_manager:
+            return Response({'error': 'ServerManager no está configurado'}, status=500)
+        
+        process_name = request.data.get('process_name')
+        action = request.data.get('action')
+        
+        if not process_name or not action:
+            return Response({'error': 'process_name y action son requeridos'}, status=400)
+        
+        try:
+            result = self.server_manager.pm2_action(process_name, action)
+            return Response(result)
+        except Exception as e:
+            logger.error(f"Error ejecutando acción PM2: {e}")
+            return Response({'error': str(e)}, status=500)
+    
+    @action(detail=False, methods=['get'])
+    def service_logs(self, request):
+        """Obtiene logs de un servicio"""
+        if not self.server_manager:
+            return Response({'error': 'ServerManager no está configurado'}, status=500)
+        
+        service_name = request.query_params.get('service_name')
+        lines = int(request.query_params.get('lines', 100))
+        service_type = request.query_params.get('service_type', 'systemd')
+        
+        if not service_name:
+            return Response({'error': 'service_name es requerido'}, status=400)
+        
+        try:
+            logs = self.server_manager.get_service_logs(service_name, lines, service_type)
+            return Response({'logs': logs, 'service_name': service_name, 'lines': lines})
+        except Exception as e:
+            logger.error(f"Error obteniendo logs: {e}")
+            return Response({'error': str(e)}, status=500)
+    
+    @action(detail=False, methods=['get'])
+    def system_info(self, request):
+        """Obtiene información general del sistema"""
+        if not self.server_manager:
+            return Response({'error': 'ServerManager no está configurado'}, status=500)
+        
+        try:
+            info = self.server_manager.get_system_info()
+            return Response(info)
+        except Exception as e:
+            logger.error(f"Error obteniendo información del sistema: {e}")
+            return Response({'error': str(e)}, status=500)
+    
+    @action(detail=False, methods=['post'])
+    def execute_command(self, request):
+        """Ejecuta un comando arbitrario en el servidor vía SSH"""
+        if not self.server_manager:
+            return Response({'error': 'ServerManager no está configurado'}, status=500)
+        
+        command = request.data.get('command')
+        use_sudo = request.data.get('use_sudo', False)
+        
+        if not command:
+            return Response({'error': 'command es requerido'}, status=400)
+        
+        # Validar comandos peligrosos (opcional, por seguridad)
+        dangerous_commands = ['rm -rf /', 'dd if=', 'mkfs', 'fdisk']
+        if any(danger in command.lower() for danger in dangerous_commands):
+            return Response({'error': 'Comando peligroso no permitido'}, status=400)
+        
+        try:
+            result = self.server_manager.execute_command(command, use_sudo=use_sudo)
+            return Response(result)
+        except Exception as e:
+            logger.error(f"Error ejecutando comando: {e}")
+            return Response({'error': str(e)}, status=500)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def public_catalog_view(request):
+    """
+    Endpoint público y seguro para catálogo de e-commerce.
+    Solo acepta dominio como parámetro y retorna empresa, productos, categorías y más vendidos.
+    Usa SQL queries predefinidos (quemados) internamente - NO expone el sistema de records.
+    GET /api/public-catalog/?dominio=pepito.ecommerce.localhost:3001
+    """
+    print("=" * 80)
+    print("🛒 [PUBLIC-CATALOG] INICIO DE REQUEST")
+    print(f"   Método: {request.method}")
+    print(f"   Path: {request.path}")
+    print(f"   Query params: {request.query_params}")
+    
+    dominio = request.query_params.get('dominio')
+    print(f"   Dominio recibido: {dominio}")
+    
+    if not dominio:
+        print("   ❌ ERROR: Parámetro 'dominio' faltante")
+        return Response({'error': 'Parámetro "dominio" requerido'}, status=400)
+    
+    # Normalizar dominio
+    dominio_normalizado = dominio.lower().strip()
+    if dominio_normalizado.startswith('www.'):
+        dominio_normalizado = dominio_normalizado[4:]
+    
+    print(f"   Dominio normalizado: {dominio_normalizado}")
+    
+    try:
+        # Buscar dominio (exacto o por subdominio)
+        empresa_dominio = None
+        try:
+            empresa_dominio = EmpresaDominio.objects.select_related('empresa_servidor').get(
+                dominio=dominio_normalizado,
+                activo=True
+            )
+        except EmpresaDominio.DoesNotExist:
+            subdominio = dominio_normalizado.split('.')[0] if '.' in dominio_normalizado else dominio_normalizado
+            empresa_dominio = EmpresaDominio.objects.select_related('empresa_servidor').filter(
+                activo=True
+            ).filter(
+                Q(dominio=subdominio) | Q(dominio__startswith=f"{subdominio}.")
+            ).first()
+        
+        if not empresa_dominio:
+            print(f"   ❌ Dominio no encontrado: {dominio_normalizado}")
+            return Response({'error': 'Dominio no encontrado o inactivo'}, status=404)
+        
+        # Obtener empresa (con lógica de año fiscal más reciente)
+        empresa = empresa_dominio.empresa_servidor
+        if not empresa:
+            # Buscar por NIT si no hay empresa asociada
+            if empresa_dominio.nit:
+                nit_normalizado = _normalize_nit(empresa_dominio.nit)
+                empresas_mismo_nit = EmpresaServidor.objects.filter(
+                    nit=nit_normalizado
+                ).order_by('-anio_fiscal')
+                if empresas_mismo_nit.exists():
+                    empresa = empresas_mismo_nit.first()
+                    empresa_dominio.empresa_servidor = empresa
+                    empresa_dominio.anio_fiscal = empresa.anio_fiscal
+                    empresa_dominio.save(update_fields=['empresa_servidor', 'anio_fiscal'])
+        
+        if not empresa:
+            return Response({'error': 'No se pudo determinar la empresa para este dominio'}, status=404)
+        
+        print(f"   ✅ Empresa encontrada: {empresa.nombre} (ID: {empresa.id})")
+        
+        # Obtener logo
+        logo_url = None
+        try:
+            nit_normalizado = _normalize_nit(empresa.nit) if empresa.nit else ''
+            if nit_normalizado:
+                personalizacion = EmpresaPersonalizacion.objects.filter(
+                    nit_normalizado=nit_normalizado
+                ).first()
+                if personalizacion and personalizacion.logo:
+                    logo_url = request.build_absolute_uri(personalizacion.logo.url)
+        except Exception as e:
+            logger.warning(f"Error obteniendo logo: {e}")
+        
+        # SQL QUERIES PREDEFINIDOS (QUEMADOS) - NO EXPONER records
+        from .services.tns_bridge import TNSBridge
+        bridge = TNSBridge(empresa)
+        
+        try:
+            # 1. PRODUCTOS BÁSICOS (con precio > 0)
+            productos_sql = """
+            SELECT FIRST 500 DISTINCT 
+                M.CODIGO, 
+                M.DESCRIP, 
+                M.MATID,
+                G.CODIGO as GM_CODIGO, 
+                G.DESCRIP as GM_DESCRIP,
+                MS.PRECIO1,
+                M.UNIDAD,
+                M.PESO,
+                M.CODBARRA
+            FROM MATERIAL M
+            LEFT JOIN GRUPMAT G ON G.GRUPMATID = M.GRUPMATID
+            LEFT JOIN MATERIALSUC MS ON MS.MATID = M.MATID
+            WHERE MS.PRECIO1 > 0
+            ORDER BY M.CODIGO
+            """
+            productos = bridge.run_query(productos_sql)
+            print(f"   ✅ {len(productos)} productos cargados")
+            
+            # 2. CATEGORÍAS (GRUPMAT)
+            categorias_sql = """
+            SELECT DISTINCT
+                G.CODIGO as GM_CODIGO,
+                G.DESCRIP as GM_DESCRIP,
+                G.GRUPMATID
+            FROM GRUPMAT G
+            INNER JOIN MATERIAL M ON M.GRUPMATID = G.GRUPMATID
+            INNER JOIN MATERIALSUC MS ON MS.MATID = M.MATID
+            WHERE MS.PRECIO1 > 0
+            ORDER BY G.CODIGO
+            """
+            categorias = bridge.run_query(categorias_sql)
+            print(f"   ✅ {len(categorias)} categorías cargadas")
+            
+            # 3. MÁS VENDIDOS (últimos 30 días, PRECIO1 > 1000)
+            mas_vendidos_sql = """
+            SELECT FIRST 50
+                DK.MATID, 
+                COUNT(*) as VENTAS,
+                M.CODIGO, 
+                M.DESCRIP,
+                G.CODIGO as GM_CODIGO, 
+                G.DESCRIP as GM_DESCRIP,
+                MS.PRECIO1,
+                M.UNIDAD,
+                M.PESO,
+                M.CODBARRA
+            FROM DEKARDEX DK
+            LEFT JOIN KARDEX K ON K.KARDEXID = DK.KARDEXID
+            LEFT JOIN MATERIAL M ON M.MATID = DK.MATID
+            LEFT JOIN GRUPMAT G ON G.GRUPMATID = M.GRUPMATID
+            LEFT JOIN MATERIALSUC MS ON MS.MATID = M.MATID
+            WHERE CAST(K.FECHA AS TIMESTAMP) BETWEEN DATEADD(-30 DAY TO CURRENT_TIMESTAMP) AND CURRENT_TIMESTAMP
+              AND MS.PRECIO1 > 1000
+            GROUP BY DK.MATID, M.CODIGO, M.DESCRIP, G.CODIGO, G.DESCRIP, MS.PRECIO1, M.UNIDAD, M.PESO, M.CODBARRA
+            ORDER BY VENTAS DESC, MS.PRECIO1 DESC
+            """
+            mas_vendidos = bridge.run_query(mas_vendidos_sql)
+            print(f"   ✅ {len(mas_vendidos)} más vendidos cargados")
+            
+            # Seleccionar 5 aleatorios de los más vendidos
+            import random
+            if len(mas_vendidos) > 5:
+                mas_vendidos = random.sample(mas_vendidos, 5)
+                print(f"   ✅ Seleccionados 5 aleatorios de más vendidos")
+            
+            bridge.close()
+            
+            # Obtener NIT normalizado para buscar imágenes
+            nit_normalizado = _normalize_nit(empresa.nit) if empresa.nit else ''
+            
+            # Agregar URLs de imágenes a productos
+            if nit_normalizado:
+                materiales_imagenes = {
+                    mat.codigo_material: {
+                        'imagen_url': request.build_absolute_uri(mat.imagen.url) if mat.imagen else None,
+                        'caracteristicas': mat.caracteristicas,
+                        'pdf_url': request.build_absolute_uri(mat.pdf.url) if mat.pdf else None
+                    }
+                    for mat in MaterialImagen.objects.filter(nit_normalizado=nit_normalizado)
+                }
+                
+                # Agregar imágenes a productos
+                for producto in productos:
+                    codigo = producto.get('CODIGO') or producto.get('codigo')
+                    if codigo and codigo in materiales_imagenes:
+                        producto['imagen_url'] = materiales_imagenes[codigo]['imagen_url']
+                        producto['caracteristicas'] = materiales_imagenes[codigo]['caracteristicas']
+                        producto['pdf_url'] = materiales_imagenes[codigo]['pdf_url']
+                
+                # Agregar imágenes a más vendidos
+                for producto in mas_vendidos:
+                    codigo = producto.get('CODIGO') or producto.get('codigo')
+                    if codigo and codigo in materiales_imagenes:
+                        producto['imagen_url'] = materiales_imagenes[codigo]['imagen_url']
+                        producto['caracteristicas'] = materiales_imagenes[codigo]['caracteristicas']
+                        producto['pdf_url'] = materiales_imagenes[codigo]['pdf_url']
+                
+                # Agregar URLs de imágenes a categorías
+                grupos_imagenes = {
+                    grupo.gm_codigo: request.build_absolute_uri(grupo.imagen.url) if grupo.imagen else None
+                    for grupo in GrupoMaterialImagen.objects.filter(nit_normalizado=nit_normalizado)
+                }
+                
+                for categoria in categorias:
+                    gm_codigo = categoria.get('GM_CODIGO') or categoria.get('gm_codigo')
+                    if gm_codigo and gm_codigo in grupos_imagenes:
+                        categoria['imagen_url'] = grupos_imagenes[gm_codigo]
+            
+            # Construir respuesta
+            nombre_comercial = empresa.nombre
+            if empresa.configuracion:
+                nombre_comercial = empresa.configuracion.get('nombre_comercial', empresa.nombre)
+            
+            response_data = {
+                'empresa': {
+                    'empresa_servidor_id': empresa.id,
+                    'nombre': empresa.nombre,
+                    'nombre_comercial': nombre_comercial,
+                    'nit': empresa.nit or '',
+                    'anio_fiscal': empresa.anio_fiscal,
+                    'modo': empresa_dominio.modo,
+                    'logo_url': logo_url
+                },
+                'productos': productos,
+                'categorias': categorias,
+                'mas_vendidos': mas_vendidos
+            }
+            
+            print(f"   ✅ Respuesta exitosa: empresa={empresa.nombre}, productos={len(productos)}, categorias={len(categorias)}, mas_vendidos={len(mas_vendidos)}")
+            print("=" * 80)
+            return Response(response_data, status=200)
+            
+        except Exception as e:
+            bridge.close()
+            print(f"   ❌ ERROR ejecutando queries: {e}")
+            import traceback
+            print(traceback.format_exc())
+            logger.error(f"Error en public_catalog_view: {e}")
+            return Response({'error': 'Error al cargar catálogo'}, status=500)
+            
+    except Exception as e:
+        print(f"   ❌ ERROR EXCEPCIÓN: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        logger.error(f"Error en public_catalog_view: {e}")
+        return Response({'error': 'Error interno del servidor'}, status=500)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def public_images_view(request):
+    """
+    Endpoint público para obtener imágenes y características de productos y categorías.
+    Solo lectura, basado en dominio. Seguro para e-commerce.
+    
+    GET /api/public-catalog/images/?dominio=pepito.ecommerce.localhost:3001&tipo=materiales|grupos|all
+    GET /api/public-catalog/images/?dominio=pepito.ecommerce.localhost:3001&tipo=materiales&codigo=VU00006
+    GET /api/public-catalog/images/?dominio=pepito.ecommerce.localhost:3001&tipo=grupos&gm_codigo=00.01.01
+    """
+    from .models import EmpresaDominio
+    from django.db.models import Q
+    
+    dominio = request.query_params.get('dominio')
+    if not dominio:
+        return Response({'error': 'Parámetro dominio es requerido'}, status=400)
+    
+    tipo = request.query_params.get('tipo', 'all')  # materiales, grupos, all
+    codigo_material = request.query_params.get('codigo')
+    gm_codigo = request.query_params.get('gm_codigo')
+    
+    try:
+        # Normalizar dominio
+        dominio_normalizado = dominio.lower().strip()
+        if dominio_normalizado.startswith('www.'):
+            dominio_normalizado = dominio_normalizado[4:]
+        
+        # Buscar empresa desde dominio (reutilizar lógica de public_catalog_view)
+        empresa_dominio = None
+        try:
+            empresa_dominio = EmpresaDominio.objects.select_related('empresa_servidor').get(
+                dominio=dominio_normalizado,
+                activo=True
+            )
+        except EmpresaDominio.DoesNotExist:
+            subdominio = dominio_normalizado.split('.')[0] if '.' in dominio_normalizado else dominio_normalizado
+            empresa_dominio = EmpresaDominio.objects.select_related('empresa_servidor').filter(
+                activo=True
+            ).filter(
+                Q(dominio=subdominio) | Q(dominio__startswith=f"{subdominio}.")
+            ).first()
+        
+        if not empresa_dominio or not empresa_dominio.empresa_servidor:
+            return Response({'error': 'Dominio no encontrado'}, status=404)
+        
+        empresa = empresa_dominio.empresa_servidor
+        nit_normalizado = _normalize_nit(empresa.nit) if empresa.nit else ''
+        
+        if not nit_normalizado:
+            return Response({'error': 'No se pudo determinar el NIT de la empresa'}, status=400)
+        
+        response_data = {}
+        
+        # Obtener imágenes de materiales (productos)
+        if tipo in ['materiales', 'all']:
+            materiales_query = MaterialImagen.objects.filter(nit_normalizado=nit_normalizado)
+            
+            if codigo_material:
+                materiales_query = materiales_query.filter(codigo_material=codigo_material)
+            
+            materiales = materiales_query.all()
+            materiales_data = []
+            for mat in materiales:
+                mat_data = {
+                    'codigo_material': mat.codigo_material,
+                    'imagen_url': request.build_absolute_uri(mat.imagen.url) if mat.imagen else None,
+                    'caracteristicas': mat.caracteristicas,
+                    'pdf_url': request.build_absolute_uri(mat.pdf.url) if mat.pdf else None
+                }
+                materiales_data.append(mat_data)
+            
+            if codigo_material:
+                # Si se especificó un código, retornar solo ese
+                response_data['material'] = materiales_data[0] if materiales_data else None
+            else:
+                response_data['materiales'] = materiales_data
+        
+        # Obtener imágenes de grupos (categorías)
+        if tipo in ['grupos', 'all']:
+            grupos_query = GrupoMaterialImagen.objects.filter(nit_normalizado=nit_normalizado)
+            
+            if gm_codigo:
+                grupos_query = grupos_query.filter(gm_codigo=gm_codigo)
+            
+            grupos = grupos_query.all()
+            grupos_data = []
+            for grupo in grupos:
+                grupo_data = {
+                    'gm_codigo': grupo.gm_codigo,
+                    'imagen_url': request.build_absolute_uri(grupo.imagen.url) if grupo.imagen else None
+                }
+                grupos_data.append(grupo_data)
+            
+            if gm_codigo:
+                # Si se especificó un código, retornar solo ese
+                response_data['grupo'] = grupos_data[0] if grupos_data else None
+            else:
+                response_data['grupos'] = grupos_data
+        
+        return Response(response_data, status=200)
+        
+    except Exception as e:
+        logger.error(f"Error en public_images_view: {e}")
+        import traceback
+        print(traceback.format_exc())
+        return Response({'error': 'Error al cargar imágenes'}, status=500)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def resolve_domain_view(request):
+    """
+    Endpoint público para resolver un dominio a una empresa.
+    Usado por el frontend e-commerce para cargar la empresa sin autenticación.
+    GET /api/resolve-domain/?dominio=pepito.ecommerce.localhost:3001
+    """
+    print("=" * 80)
+    print("🔍 [RESOLVE-DOMAIN] INICIO DE REQUEST")
+    print(f"   Método: {request.method}")
+    print(f"   Path: {request.path}")
+    print(f"   Query params: {request.query_params}")
+    
+    dominio = request.query_params.get('dominio')
+    print(f"   Dominio recibido: {dominio}")
+    
+    if not dominio:
+        print("   ❌ ERROR: Parámetro 'dominio' faltante")
+        return Response({'error': 'Parámetro "dominio" requerido'}, status=400)
+    
+    # Normalizar dominio: minúsculas, sin www., sin espacios
+    dominio_normalizado = dominio.lower().strip()
+    if dominio_normalizado.startswith('www.'):
+        dominio_normalizado = dominio_normalizado[4:]
+    
+    print(f"   Dominio normalizado: {dominio_normalizado}")
+    
+    # Debug: listar todos los dominios en BD con información de empresa
+    todos_dominios = EmpresaDominio.objects.select_related('empresa_servidor').all()
+    print(f"   Dominios en BD:")
+    for ed in todos_dominios:
+        if ed.empresa_servidor:
+            print(f"      - Dominio: '{ed.dominio}' -> Empresa: {ed.empresa_servidor.nombre} (ID: {ed.empresa_servidor.id}, NIT: '{ed.empresa_servidor.nit}')")
+        else:
+            print(f"      - Dominio: '{ed.dominio}' -> Sin empresa (NIT: '{ed.nit}')")
+    
+    try:
+        # Primero intentar búsqueda exacta
+        empresa_dominio = None
+        try:
+            empresa_dominio = EmpresaDominio.objects.select_related('empresa_servidor').get(
+                dominio=dominio_normalizado,
+                activo=True
+            )
+            empresa_nombre = empresa_dominio.empresa_servidor.nombre if empresa_dominio.empresa_servidor else 'Sin empresa'
+            print(f"   ✅ Empresa dominio encontrada (exacta): {empresa_dominio.dominio} -> {empresa_nombre}")
+        except EmpresaDominio.DoesNotExist:
+            # Si no se encuentra exacta, intentar buscar por subdominio (primera parte antes del primer punto)
+            subdominio = dominio_normalizado.split('.')[0] if '.' in dominio_normalizado else dominio_normalizado
+            print(f"   🔍 Búsqueda exacta falló, intentando por subdominio: '{subdominio}'")
+            
+            # Buscar dominios que empiecen con el subdominio o que sean exactamente el subdominio
+            empresa_dominio = EmpresaDominio.objects.select_related('empresa_servidor').filter(
+                activo=True
+            ).filter(
+                Q(dominio=subdominio) | Q(dominio__startswith=f"{subdominio}.")
+            ).first()
+            
+            if empresa_dominio:
+                empresa_nombre = empresa_dominio.empresa_servidor.nombre if empresa_dominio.empresa_servidor else 'Sin empresa'
+                print(f"   ✅ Empresa dominio encontrada (por subdominio): {empresa_dominio.dominio} -> {empresa_nombre}")
+            else:
+                raise EmpresaDominio.DoesNotExist(f"No se encontró dominio para '{dominio_normalizado}' o subdominio '{subdominio}'")
+        
+        # Debug: mostrar información completa de la empresa encontrada
+        print(f"   📋 Información de EmpresaDominio:")
+        print(f"      - ID: {empresa_dominio.id}")
+        print(f"      - Dominio: {empresa_dominio.dominio}")
+        print(f"      - NIT: '{empresa_dominio.nit}'")
+        print(f"      - Modo: {empresa_dominio.modo}")
+        print(f"      - Activo: {empresa_dominio.activo}")
+        print(f"      - Año Fiscal guardado: {empresa_dominio.anio_fiscal}")
+        print(f"      - Empresa Servidor ID: {empresa_dominio.empresa_servidor_id}")
+        
+        # Si no hay empresa_servidor asociada, buscar por NIT
+        empresa = empresa_dominio.empresa_servidor
+        if not empresa:
+            print(f"   🔍 No hay empresa asociada, buscando por NIT...")
+            if empresa_dominio.nit:
+                nit_normalizado = _normalize_nit(empresa_dominio.nit)
+                print(f"   🔍 Buscando empresas con NIT normalizado: '{nit_normalizado}'")
+                
+                if nit_normalizado:
+                    # Primero intentar búsqueda directa (si los NITs en BD ya están normalizados)
+                    empresas_mismo_nit = EmpresaServidor.objects.filter(
+                        nit=nit_normalizado
+                    ).order_by('-anio_fiscal')
+                    
+                    print(f"   📊 Búsqueda directa: {empresas_mismo_nit.count()} empresas encontradas")
+                    
+                    # Si no se encuentra, hacer búsqueda flexible normalizando todos los NITs
+                    if not empresas_mismo_nit.exists():
+                        print(f"   🔄 Búsqueda directa falló, intentando búsqueda flexible...")
+                        todas_empresas = EmpresaServidor.objects.all()
+                        print(f"   📊 Total empresas en BD: {todas_empresas.count()}")
+                        
+                        empresas_encontradas = []
+                        for emp in todas_empresas:
+                            nit_emp_normalizado = _normalize_nit(emp.nit) if emp.nit else ''
+                            if nit_emp_normalizado == nit_normalizado:
+                                empresas_encontradas.append(emp)
+                                print(f"      - Empresa encontrada: {emp.nombre} (NIT original: '{emp.nit}', NIT normalizado: '{nit_emp_normalizado}')")
+                        
+                        if empresas_encontradas:
+                            # Ordenar por año fiscal descendente
+                            empresas_encontradas.sort(key=lambda e: e.anio_fiscal, reverse=True)
+                            empresa = empresas_encontradas[0]
+                            print(f"   ✅ Empresa encontrada por NIT (búsqueda flexible): {empresa.nombre} (Año: {empresa.anio_fiscal})")
+                        else:
+                            print(f"   ❌ No se encontraron empresas con NIT normalizado '{nit_normalizado}'")
+                            # Mostrar algunos NITs de ejemplo para debug
+                            print(f"   📋 Primeros 5 NITs en BD (para referencia):")
+                            for emp in todas_empresas[:5]:
+                                nit_emp_norm = _normalize_nit(emp.nit) if emp.nit else ''
+                                print(f"      - '{emp.nit}' -> normalizado: '{nit_emp_norm}'")
+                            return Response({'error': f'No se encontró empresa con NIT {empresa_dominio.nit} (normalizado: {nit_normalizado})'}, status=404)
+                    else:
+                        empresa = empresas_mismo_nit.first()
+                        print(f"   ✅ Empresa encontrada por NIT (búsqueda directa): {empresa.nombre} (Año: {empresa.anio_fiscal})")
+                    
+                    # Actualizar EmpresaDominio con la empresa encontrada
+                    empresa_dominio.empresa_servidor = empresa
+                    empresa_dominio.anio_fiscal = empresa.anio_fiscal
+                    empresa_dominio.save(update_fields=['empresa_servidor', 'anio_fiscal'])
+                    print(f"   💾 EmpresaDominio actualizado con empresa {empresa.id}")
+                else:
+                    print(f"   ❌ NIT inválido: '{empresa_dominio.nit}'")
+                    return Response({'error': f'NIT inválido: {empresa_dominio.nit}'}, status=400)
+            else:
+                print(f"   ❌ No hay NIT ni empresa asociada al dominio")
+                return Response({'error': 'Dominio no tiene NIT ni empresa asociada'}, status=404)
+        
+        # Verificar si necesitamos buscar la empresa con año fiscal más reciente
+        from django.utils import timezone
+        anio_actual = timezone.now().year
+        necesita_buscar_mas_reciente = (
+            empresa_dominio.anio_fiscal is None or 
+            empresa_dominio.anio_fiscal < anio_actual
+        )
+        
+        if necesita_buscar_mas_reciente:
+            print(f"   🔄 Año fiscal guardado ({empresa_dominio.anio_fiscal}) es menor al actual ({anio_actual}), buscando empresa más reciente...")
+            # Usar NIT del dominio o de la empresa actual
+            nit_normalizado = None
+            if empresa_dominio.nit:
+                nit_normalizado = _normalize_nit(empresa_dominio.nit)
+            elif empresa.nit:
+                nit_normalizado = _normalize_nit(empresa.nit)
+            
+            if nit_normalizado:
+                # Buscar todas las empresas con el mismo NIT normalizado, ordenadas por año fiscal descendente
+                empresas_mismo_nit = EmpresaServidor.objects.filter(
+                    nit=nit_normalizado
+                ).order_by('-anio_fiscal')
+                
+                if empresas_mismo_nit.exists():
+                    empresa_mas_reciente = empresas_mismo_nit.first()
+                    print(f"   ✅ Empresa más reciente encontrada: {empresa_mas_reciente.nombre} (Año: {empresa_mas_reciente.anio_fiscal})")
+                    
+                    # Actualizar EmpresaDominio con la empresa más reciente
+                    if empresa_mas_reciente.id != empresa_dominio.empresa_servidor_id:
+                        empresa_dominio.empresa_servidor = empresa_mas_reciente
+                        empresa_dominio.anio_fiscal = empresa_mas_reciente.anio_fiscal
+                        empresa_dominio.save(update_fields=['empresa_servidor', 'anio_fiscal'])
+                        print(f"   💾 EmpresaDominio actualizado: empresa {empresa.id} -> {empresa_mas_reciente.id}")
+                    
+                    empresa = empresa_mas_reciente
+                else:
+                    print(f"   ⚠️  No se encontraron empresas con NIT '{nit_normalizado}'")
+            else:
+                print(f"   ⚠️  NIT vacío, no se puede buscar empresa más reciente")
+        else:
+            print(f"   ✅ Año fiscal guardado ({empresa_dominio.anio_fiscal}) es actual, usando empresa asociada directamente")
+        
+        print(f"   📋 Información de EmpresaServidor (final):")
+        print(f"      - ID: {empresa.id}")
+        print(f"      - Nombre: {empresa.nombre}")
+        print(f"      - NIT: '{empresa.nit}'")
+        print(f"      - Año Fiscal: {empresa.anio_fiscal}")
+        print(f"      - Código: {empresa.codigo}")
+        print(f"      - Configuración: {empresa.configuracion}")
+        
+        # Obtener logo si existe
+        logo_url = None
+        try:
+            nit_normalizado = _normalize_nit(empresa.nit) if empresa.nit else ''
+            print(f"   🖼️  Buscando logo con NIT normalizado: '{nit_normalizado}'")
+            if nit_normalizado:
+                personalizacion = EmpresaPersonalizacion.objects.filter(
+                    nit_normalizado=nit_normalizado
+                ).first()
+                if personalizacion:
+                    print(f"      - Personalización encontrada: {personalizacion.id}")
+                    if personalizacion.logo:
+                        logo_url = request.build_absolute_uri(personalizacion.logo.url)
+                        print(f"      - Logo URL: {logo_url}")
+                    else:
+                        print(f"      - No hay logo en personalización")
+                else:
+                    print(f"      - No se encontró personalización para NIT '{nit_normalizado}'")
+            else:
+                print(f"      - NIT vacío, no se puede buscar logo")
+        except Exception as e:
+            logger.warning(f"Error obteniendo logo para dominio {dominio}: {e}")
+            print(f"      - ❌ Error obteniendo logo: {e}")
+        
+        nombre_comercial = empresa.nombre
+        if empresa.configuracion:
+            nombre_comercial = empresa.configuracion.get('nombre_comercial', empresa.nombre)
+            print(f"   📝 Nombre comercial desde config: '{nombre_comercial}'")
+        
+        # Asegurar que empresa no sea None antes de construir la respuesta
+        if not empresa:
+            print(f"   ❌ ERROR: empresa es None después de toda la lógica")
+            print("=" * 80)
+            return Response({'error': 'No se pudo determinar la empresa para este dominio'}, status=500)
+        
+        # Opcional: incluir productos iniciales, categorías y más vendidos si se solicita
+        include_products = request.query_params.get('include_products', 'false').lower() == 'true'
+        
+        response_data = {
+            'empresa_servidor_id': empresa.id,
+            'nombre': empresa.nombre,
+            'nombre_comercial': nombre_comercial,
+            'nit': empresa.nit or '',
+            'anio_fiscal': empresa.anio_fiscal,
+            'modo': empresa_dominio.modo,
+            'logo_url': logo_url
+        }
+        
+        if include_products:
+            print(f"   📦 Incluyendo productos iniciales en la respuesta...")
+            try:
+                from .services.tns_bridge import TNSBridge
+                bridge = TNSBridge(empresa)
+                
+                # Productos básicos (materialprecio)
+                try:
+                    productos_sql = """
+                    SELECT FIRST 200 DISTINCT 
+                        M.CODIGO, M.DESCRIP, M.MATID,
+                        G.CODIGO as GM_CODIGO, G.DESCRIP as GM_DESCRIP,
+                        MS.PRECIO1
+                    FROM MATERIAL M
+                    LEFT JOIN GRUPMAT G ON G.GRUPMATID = M.GRUPMATID
+                    LEFT JOIN MATERIALSUC MS ON MS.MATID = M.MATID
+                    WHERE MS.PRECIO1 > 0
+                    ORDER BY M.CODIGO
+                    """
+                    productos = bridge.run_query(productos_sql)
+                    response_data['productos'] = productos[:200]  # Limitar a 200
+                    print(f"      ✅ {len(productos)} productos cargados")
+                except Exception as e:
+                    print(f"      ⚠️  Error cargando productos: {e}")
+                    response_data['productos'] = []
+                
+                # Más vendidos (últimos 30 días)
+                try:
+                    mas_vendidos_sql = """
+                    SELECT FIRST 50
+                        DK.MATID, 
+                        COUNT(*) as VENTAS,
+                        M.CODIGO, M.DESCRIP,
+                        G.CODIGO as GM_CODIGO, G.DESCRIP as GM_DESCRIP,
+                        MS.PRECIO1
+                    FROM DEKARDEX DK
+                    LEFT JOIN KARDEX K ON K.KARDEXID = DK.KARDEXID
+                    LEFT JOIN MATERIAL M ON M.MATID = DK.MATID
+                    LEFT JOIN GRUPMAT G ON G.GRUPMATID = M.GRUPMATID
+                    LEFT JOIN MATERIALSUC MS ON MS.MATID = M.MATID
+                    WHERE CAST(K.FECHA AS TIMESTAMP) BETWEEN DATEADD(-30 DAY TO CURRENT_TIMESTAMP) AND CURRENT_TIMESTAMP
+                      AND MS.PRECIO1 > 1000
+                    GROUP BY DK.MATID, M.CODIGO, M.DESCRIP, G.CODIGO, G.DESCRIP, MS.PRECIO1
+                    ORDER BY VENTAS DESC, MS.PRECIO1 DESC
+                    """
+                    mas_vendidos = bridge.run_query(mas_vendidos_sql)
+                    response_data['mas_vendidos'] = mas_vendidos[:50]  # Limitar a 50
+                    print(f"      ✅ {len(mas_vendidos)} más vendidos cargados")
+                except Exception as e:
+                    print(f"      ⚠️  Error cargando más vendidos: {e}")
+                    response_data['mas_vendidos'] = []
+                
+                bridge.close()
+            except Exception as e:
+                print(f"   ⚠️  Error incluyendo productos: {e}")
+                response_data['productos'] = []
+                response_data['mas_vendidos'] = []
+        
+        print(f"   ✅ Respuesta exitosa: {response_data}")
+        print("=" * 80)
+        return Response(response_data, status=200)
+    except EmpresaDominio.DoesNotExist:
+        print(f"   ❌ ERROR: Dominio '{dominio_normalizado}' no encontrado o inactivo")
+        print("   Intentando búsqueda parcial...")
+        # Intentar búsqueda parcial (solo el subdominio)
+        subdominio = dominio_normalizado.split('.')[0] if '.' in dominio_normalizado else dominio_normalizado
+        print(f"   Subdominio extraído: {subdominio}")
+        dominios_similares = EmpresaDominio.objects.filter(dominio__icontains=subdominio).values_list('dominio', 'activo', 'modo')
+        print(f"   Dominios similares encontrados: {list(dominios_similares)}")
+        print("=" * 80)
+        return Response({'error': f'Dominio no encontrado o inactivo. Dominio buscado: {dominio_normalizado}, Subdominio: {subdominio}'}, status=404)
+    except Exception as e:
+        print(f"   ❌ ERROR EXCEPCIÓN: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        print("=" * 80)
+        logger.error(f"Error resolviendo dominio {dominio}: {e}")
+        return Response({'error': 'Error interno del servidor'}, status=500)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def formas_pago_ecommerce_view(request):
+    """
+    Endpoint público para obtener formas de pago desde TNS para e-commerce.
+    Usa usuario_tns de EmpresaEcommerceConfig.
+    GET /api/formas-pago-ecommerce/?empresa_servidor_id=192
+    """
+    empresa_servidor_id = request.query_params.get('empresa_servidor_id')
+    
+    if not empresa_servidor_id:
+        return Response(
+            {'error': 'empresa_servidor_id es requerido'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        empresa = EmpresaServidor.objects.select_related('servidor').get(id=empresa_servidor_id)
+        config = EmpresaEcommerceConfig.objects.get(empresa_servidor_id=empresa_servidor_id)
+    except EmpresaServidor.DoesNotExist:
+        return Response(
+            {'error': f'Empresa con ID {empresa_servidor_id} no encontrada'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except EmpresaEcommerceConfig.DoesNotExist:
+        return Response(
+            {'error': 'Configuración de e-commerce no encontrada'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    
+    if not config.usuario_tns:
+        return Response(
+            {'error': 'usuario_tns no configurado en e-commerce'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    bridge = TNSBridge(empresa)
+    bridge.connect()
+    
+    try:
+        cursor = bridge.conn.cursor()
+        
+        # Obtener usuario TNS de la configuración de e-commerce
+        usuario_tns = config.usuario_tns
+        
+        # GFPPERMITIDASCAJAGC se compone dinámicamente: GFPPERMITIDAS + usuario_logueado
+        variab_formas_pago = f"GFPPERMITIDAS{usuario_tns}"
+        logger.info(f"[ecommerce] Buscando variable de formas de pago: {variab_formas_pago}")
+        
+        # Obtener GFPPERMITIDAS{usuario_tns} de VARIOS
+        cursor.execute("""
+            SELECT CAST(contenido AS VARCHAR(500)) 
+            FROM varios 
+            WHERE variab = ?
+        """, (variab_formas_pago,))
+        
+        resultado = cursor.fetchone()
+        if not resultado or not resultado[0]:
+            return Response(
+                {'error': f'No se encontró configuración de formas de pago ({variab_formas_pago})'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        codigos_str = resultado[0].strip()
+        # Formato: "codigo1,codigo2," (siempre termina en coma)
+        # Remover la coma final si existe
+        if codigos_str.endswith(','):
+            codigos_str = codigos_str[:-1]
+        
+        # Separar códigos
+        codigos = [c.strip() for c in codigos_str.split(',') if c.strip()]
+        
+        if not codigos:
+            return Response(
+                {'error': 'No hay formas de pago configuradas'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Obtener descripciones de FORMAPAGO
+        placeholders = ','.join(['?' for _ in codigos])
+        cursor.execute(f"""
+            SELECT CODIGO, DESCRIP 
+            FROM FORMAPAGO 
+            WHERE CODIGO IN ({placeholders})
+        """, codigos)
+        
+        formas_pago = []
+        for row in cursor.fetchall():
+            codigo, descrip = row
+            formas_pago.append({
+                'codigo': codigo.strip() if codigo else '',
+                'descripcion': descrip.strip() if descrip else codigo.strip() if codigo else ''
+            })
+        
+        logger.info(f"[ecommerce] Formas de pago cargadas: {len(formas_pago)} opciones")
+        
+        return Response({
+            'formas_pago': formas_pago
+        })
+        
+    except Exception as e:
+        logger.error(f"[ecommerce] Error cargando formas de pago: {e}", exc_info=True)
+        return Response(
+            {'error': f'Error al cargar formas de pago: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
     finally:
         bridge.close()
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def pasarelas_disponibles_view(request):
+    """
+    Endpoint público para listar pasarelas de pago disponibles.
+    No requiere autenticación ni credenciales.
+    
+    Query params:
+    - empresa_servidor_id: ID de la empresa (opcional, solo para logging)
+    
+    Returns:
+    {
+        "pasarelas": [
+            {"id": 1, "codigo": "credibanco", "nombre": "Credibanco", "activa": true}
+        ]
+    }
+    """
+    # Retornar pasarelas activas sin validación (es información pública)
+    pasarelas = PasarelaPago.objects.filter(activa=True)
+    serializer = PasarelaPagoSerializer(pasarelas, many=True)
+    
+    return Response({
+        'pasarelas': serializer.data
+    })
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def procesar_pago_ecommerce_view(request):
+    """
+    Endpoint público único para procesar pagos (mock o producción según pasarela).
+    
+    Si mock=true: procesa en modo simulado y crea factura inmediatamente.
+    Si mock=false o no viene: procesa con la pasarela real configurada en admin.
+    
+    Body:
+    {
+        "empresa_servidor_id": 192,
+        "mock": true,  # Opcional: si es true, simula. Si false o no viene, usa pasarela real
+        "forma_pago_codigo": "TC",  # Código de FORMAPAGO (TC, TD, EF, etc.)
+        "cart_items": [
+            {"id": "CODIGO1", "name": "Producto 1", "price": 1000, "quantity": 2},
+            ...
+        ],
+        "monto_total": 3000,
+        "document_number": "1234567890",  # Cédula/NIT del cliente
+        "direccion_envio": "Calle 123 #45-67, Bogotá",
+        "nombre_cliente": "Juan Pérez",
+        "telefono_cliente": "3001234567",
+        "email_cliente": "cliente@example.com",
+        "tarjeta": {  # Solo si forma_pago_codigo es TC/TD
+            "numero": "4111111111111111",
+            "nombre_titular": "Juan Pérez",
+            "mes_vencimiento": "12",
+            "anio_vencimiento": "2025",
+            "cvv": "123"
+        }
+    }
+    
+    Returns (modo mock):
+    {
+        "success": true,
+        "mock": true,
+        "pago": {
+            "codigo_autorizacion": "MOCK123456",
+            "franquicia": "VISA",
+            ...
+        },
+        "factura": {...}
+    }
+    
+    Returns (modo producción - Credibanco):
+    {
+        "success": true,
+        "mock": false,
+        "formUrl": "https://eco.credibanco.com/payment/merchants/...",
+        "order_number": "1234567890",
+        "transaccion_id": 123
+    }
+    """
+    empresa_servidor_id = request.data.get('empresa_servidor_id')
+    mock = request.data.get('mock', None)  # None = usar configuración de la pasarela
+    forma_pago_codigo = request.data.get('forma_pago_codigo')  # Código de FORMAPAGO (TC, TD, EF, etc.)
+    cart_items = request.data.get('cart_items', [])
+    monto_total = request.data.get('monto_total', 0)
+    doc_type = request.data.get('doc_type', 'cedula')  # 'cedula' o 'nit'
+    document_number = request.data.get('document_number') or request.data.get('cedula')
+    nature = request.data.get('nature', 'natural')  # 'natural' o 'juridica'
+    direccion_envio = request.data.get('direccion_envio', '')
+    nombre_cliente = request.data.get('nombre_cliente', '')
+    telefono_cliente = request.data.get('telefono_cliente', '')
+    email_cliente = request.data.get('email_cliente', '')
+    
+    # Validaciones básicas
+    if not empresa_servidor_id:
+        return Response(
+            {'detail': 'empresa_servidor_id es requerido'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    if not forma_pago_codigo:
+        return Response(
+            {'detail': 'forma_pago_codigo es requerido'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    if not cart_items or len(cart_items) == 0:
+        return Response(
+            {'detail': 'cart_items no puede estar vacío'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    if not document_number:
+        return Response(
+            {'detail': 'document_number (o cedula) es requerido'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Obtener empresa y configuración
+    try:
+        empresa = EmpresaServidor.objects.get(id=empresa_servidor_id)
+        config = EmpresaEcommerceConfig.objects.get(empresa_servidor_id=empresa_servidor_id)
+    except EmpresaServidor.DoesNotExist:
+        return Response(
+            {'detail': f'Empresa con ID {empresa_servidor_id} no encontrada'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except EmpresaEcommerceConfig.DoesNotExist:
+        return Response(
+            {'detail': 'Configuración de e-commerce no encontrada. Configure usuario_tns y password_tns en el panel de administración.'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    
+    # Determinar si es tarjeta
+    # Los códigos pueden ser: 'TC', 'TD', 'TCGC', 'TDCG', 'TARJETA CREDITO', etc.
+    codigo_upper = forma_pago_codigo.upper().strip()
+    es_tarjeta = (codigo_upper.startswith('TC') or 
+                  codigo_upper.startswith('TD') or 
+                  codigo_upper == 'TC' or 
+                  codigo_upper == 'TD' or 
+                  'TARJETA' in codigo_upper or 
+                  'CARD' in codigo_upper or
+                  'CREDITO' in codigo_upper or
+                  'DEBITO' in codigo_upper)
+    logger.info(f"[ecommerce] Forma de pago: {codigo_upper}, es_tarjeta: {es_tarjeta}")
+    
+    # Si es tarjeta, necesitamos pasarela
+    if es_tarjeta:
+        # Leer pasarela configurada
+        pasarela_codigo = config.payment_provider
+        if not pasarela_codigo:
+            return Response(
+                {'detail': 'No hay pasarela de pago configurada. Configure payment_provider en el panel de administración.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            pasarela = PasarelaPago.objects.get(codigo=pasarela_codigo, activa=True)
+        except PasarelaPago.DoesNotExist:
+            return Response(
+                {'detail': f'Pasarela de pago "{pasarela_codigo}" no encontrada o inactiva.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Determinar modo: 
+        # 1. Si mock viene explícitamente en el request, usarlo (para testing)
+        # 2. Si no, usar payment_mode de la configuración: 'test' = mock, 'live' = pasarela real
+        if mock is None:
+            # Usar payment_mode de la configuración
+            mock = (config.payment_mode == 'test')
+            logger.info(f"[ecommerce] payment_mode={config.payment_mode}, mock={mock}")
+            if config.payment_mode == 'test':
+                logger.warning("[ecommerce] ⚠️ payment_mode está en 'test'. Para procesar pagos reales, cambia a 'live' en el panel de administración.")
+        else:
+            logger.info(f"[ecommerce] mock viene explícitamente en request: {mock}")
+        
+        logger.info(f"[ecommerce] Procesando pago: es_tarjeta={es_tarjeta}, pasarela={pasarela_codigo}, mock={mock}")
+        
+        # Si es mock, procesar como mock
+        if mock:
+            logger.info("[ecommerce] Procesando como MOCK (simulado)")
+            return _procesar_pago_mock(request, empresa, config, forma_pago_codigo, cart_items, monto_total,
+                                      doc_type, document_number, nature, direccion_envio,
+                                      nombre_cliente, telefono_cliente, email_cliente)
+        
+        # Si no es mock, procesar con pasarela real
+        logger.info(f"[ecommerce] Procesando con pasarela REAL: {pasarela_codigo}")
+        
+        # Verificar que las credenciales estén configuradas
+        if not config.payment_public_key or not config.payment_secret_key:
+            logger.error("[ecommerce] ❌ Credenciales de Credibanco no configuradas")
+            return Response(
+                {
+                    'detail': 'Credenciales de Credibanco no configuradas. Configure payment_public_key y payment_secret_key en el panel de administración.',
+                    'error_code': 'CREDENTIALS_MISSING'
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        return _procesar_pago_pasarela_real(request, empresa, config, pasarela, forma_pago_codigo, cart_items,
+                                           monto_total, doc_type, document_number, nature, direccion_envio,
+                                           nombre_cliente, telefono_cliente, email_cliente)
+    else:
+        # Para efectivo, transferencia, etc. - siempre procesar como mock (no requiere pasarela)
+        return _procesar_pago_mock(request, empresa, config, forma_pago_codigo, cart_items, monto_total,
+                                  doc_type, document_number, nature, direccion_envio,
+                                  nombre_cliente, telefono_cliente, email_cliente)
+
+
+def _procesar_pago_mock(request, empresa, config, forma_pago_codigo, cart_items, monto_total,
+                       doc_type, document_number, nature, direccion_envio,
+                       nombre_cliente, telefono_cliente, email_cliente):
+    """Procesa pago en modo mock (simulado)"""
+    import random
+    import time
+    import re
+    
+    empresa_servidor_id = empresa.id
+    codigo_upper = forma_pago_codigo.upper()
+    es_tarjeta = codigo_upper in ['TC', 'TD'] or 'TARJETA' in codigo_upper or 'CARD' in codigo_upper
+    
+    pago_data = {}
+    
+    if es_tarjeta:
+        # Obtener datos de tarjeta del request
+        tarjeta = request.data.get('tarjeta', {})
+        numero_tarjeta = tarjeta.get('numero', '')
+        nombre_titular = tarjeta.get('nombre_titular', '')
+        mes_vencimiento = tarjeta.get('mes_vencimiento', '')
+        anio_vencimiento = tarjeta.get('anio_vencimiento', '')
+        cvv = tarjeta.get('cvv', '')
+        
+        # Validar datos de tarjeta
+        numero_tarjeta_limpio = re.sub(r'\s', '', numero_tarjeta) if numero_tarjeta else ''
+        if not numero_tarjeta or len(numero_tarjeta_limpio) < 13:
+            return Response(
+                {'detail': 'Número de tarjeta inválido'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not nombre_titular:
+            return Response(
+                {'detail': 'Nombre del titular es requerido'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not mes_vencimiento or not anio_vencimiento:
+            return Response(
+                {'detail': 'Fecha de vencimiento es requerida'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not cvv or len(cvv) < 3:
+            return Response(
+                {'detail': 'CVV es requerido (mínimo 3 dígitos)'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Simular procesamiento de pago (mock)
+        time.sleep(2)  # Simular delay de procesamiento (2 segundos)
+        
+        # Determinar franquicia basada en el primer dígito
+        primer_digito = numero_tarjeta_limpio[0] if numero_tarjeta_limpio else '4'
+        franquicia = 'VISA'
+        if primer_digito == '5':
+            franquicia = 'MASTERCARD'
+        elif primer_digito == '3':
+            franquicia = 'AMEX'
+        
+        # Obtener últimos 4 dígitos
+        ultimos_digitos = numero_tarjeta_limpio[-4:] if len(numero_tarjeta_limpio) >= 4 else '0000'
+        
+        # Generar datos mock del pago
+        pago_data = {
+            'codigo_autorizacion': f'{random.randint(100000, 999999)}',
+            'franquicia': franquicia,
+            'ultimos_digitos': ultimos_digitos,
+            'tipo_cuenta': 'CREDITO',
+            'numero_recibo': f'{random.randint(100000, 999999)}',
+            'rrn': f'{random.randint(100000, 999999)}',
+            'nombre_titular': nombre_titular,
+            'fecha_vencimiento': f'{mes_vencimiento}/{anio_vencimiento}'
+        }
+    else:
+        # Para efectivo, transferencia, etc. - no hay datos de tarjeta
+        time.sleep(1)  # Simular delay más corto
+        pago_data = {
+            'codigo_autorizacion': None,
+            'franquicia': None,
+            'ultimos_digitos': None,
+            'tipo_cuenta': None,
+            'numero_recibo': f'{random.randint(100000, 999999)}',
+            'rrn': None
+        }
+    
+    # Construir observación con dirección de envío
+    observacion_parts = []
+    if direccion_envio:
+        observacion_parts.append(f'DIRECCIÓN DE ENVÍO: {direccion_envio}')
+    if telefono_cliente:
+        observacion_parts.append(f'TEL: {telefono_cliente}')
+    if nombre_cliente:
+        observacion_parts.append(f'CLIENTE: {nombre_cliente}')
+    observacion = ' - '.join(observacion_parts) if observacion_parts else direccion_envio
+    
+    # Crear factura en TNS
+    try:
+        from .services.tns_invoice_helper import insertar_factura_tns
+        
+        bridge = TNSBridge(empresa)
+        bridge.connect()
+        
+        # Preparar invoice_data según el tipo de documento
+        invoice_data = {
+            'docType': doc_type,
+            'document': document_number,
+            'name': nombre_cliente or 'CONSUMIDOR FINAL',
+            'email': email_cliente or '',
+            'phone': telefono_cliente or '',
+            'nature': nature
+        }
+        
+        # Insertar factura
+        resultado = insertar_factura_tns(
+            bridge=bridge,
+            cart_items=cart_items,
+            monto_total=float(monto_total),
+            empresa_servidor_id=empresa_servidor_id,
+            invoice_data=invoice_data,
+            order_type='takeaway',
+            referencia=f'ECOMM-MOCK-{random.randint(100000, 999999)}',
+            medio_pago_data=pago_data,
+            forma_pago_codigo=forma_pago_codigo,
+            mesa_number=None,
+            observacion=observacion,
+            usuario_tns=config.usuario_tns
+        )
+        
+        bridge.close()
+        
+        if resultado.get('success'):
+            return Response({
+                'success': True,
+                'mock': True,
+                'pago': pago_data,
+                'factura': {
+                    'kardex_id': resultado.get('kardex_id'),
+                    'prefijo': resultado.get('prefijo'),
+                    'numero': resultado.get('numero'),
+                    'nit_normalizado': resultado.get('nit_normalizado')
+                }
+            })
+        else:
+            return Response(
+                {'detail': f'Error al crear factura: {resultado.get("error", "Error desconocido")}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    except Exception as exc:
+        logger.error(f"Error procesando pago mock: {str(exc)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return Response(
+            {'detail': f'Error al procesar pago: {str(exc)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+def _procesar_pago_pasarela_real(request, empresa, config, pasarela, forma_pago_codigo, cart_items,
+                                 monto_total, doc_type, document_number, nature, direccion_envio,
+                                 nombre_cliente, telefono_cliente, email_cliente):
+    """Procesa pago con pasarela real (Credibanco, etc.)"""
+    
+    # Determinar qué pasarela es y llamar a su función específica
+    if pasarela.codigo.lower() == 'credibanco':
+        return _procesar_pago_credibanco(request, empresa, config, pasarela, forma_pago_codigo, cart_items,
+                                        monto_total, doc_type, document_number, nature, direccion_envio,
+                                        nombre_cliente, telefono_cliente, email_cliente)
+    else:
+        # Otras pasarelas futuras (Wompi, PayU, etc.)
+        return Response(
+            {'detail': f'Pasarela "{pasarela.codigo}" aún no implementada'},
+            status=status.HTTP_501_NOT_IMPLEMENTED
+        )
+
+
+def _procesar_pago_credibanco(request, empresa, config, pasarela, forma_pago_codigo, cart_items,
+                              monto_total, doc_type, document_number, nature, direccion_envio,
+                              nombre_cliente, telefono_cliente, email_cliente):
+    """Procesa pago con Credibanco (API real)"""
+    import time
+    from urllib.parse import urlencode, quote
+    import json
+    
+    # Obtener configuración de Credibanco
+    pasarela_config = pasarela.configuracion or {}
+    
+    # URLs y endpoints
+    api_url = pasarela_config.get('api_url', 'https://eco.credibanco.com/payment/rest/')
+    register_endpoint = pasarela_config.get('register_endpoint', 'register.do')
+    status_endpoint = pasarela_config.get('status_endpoint', 'getOrderStatusExtended.do')
+    
+    # Credenciales (prioridad: EmpresaEcommerceConfig > PasarelaPago.configuracion)
+    user_name = config.payment_public_key or pasarela_config.get('user_name', '')
+    password = config.payment_secret_key or pasarela_config.get('password', '')
+    
+    # Valores de configuración con defaults según PASARELADEPAGO
+    currency_code = pasarela_config.get('currency_code', '170')  # Pesos colombianos
+    plan_id = pasarela_config.get('plan_id', '01')  # Plan de cobranza
+    quota_id = pasarela_config.get('quota_id', '012')  # Cuotas TDC
+    language = pasarela_config.get('language', 'es')
+    default_country = pasarela_config.get('default_country', 'CO')
+    default_state = pasarela_config.get('default_state', 'NDS')  # Norte de Santander
+    default_postal_code = pasarela_config.get('default_postal_code', '54001')
+    default_gender = pasarela_config.get('default_gender', 'M')
+    shipping_reception_method = pasarela_config.get('shipping_reception_method', 'ba')
+    
+    if not user_name or not password:
+        return Response(
+            {'detail': 'Credenciales de Credibanco no configuradas. Configure payment_public_key y payment_secret_key en el panel de administración.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Generar order_number único (timestamp)
+    order_number = str(int(time.time() * 1000))  # Milisegundos
+    
+    # Obtener IP del cliente
+    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+    if x_forwarded_for:
+        ip_address = x_forwarded_for.split(',')[0]
+    else:
+        ip_address = request.META.get('REMOTE_ADDR', '127.0.0.1')
+    
+    # Construir URLs de retorno
+    dominio = request.get_host()
+    protocolo = 'https' if request.is_secure() else 'http'
+    return_url = f"{protocolo}://{dominio}/api/pasarela-response/"
+    fail_url = f"{protocolo}://{dominio}/api/pasarela-response/"
+    
+    # Preparar datos del cliente
+    nombres_parts = (nombre_cliente or '').split(' ', 1)
+    billing_first_name = nombres_parts[0][:30] if nombres_parts else 'CLIENTE'
+    billing_last_name = nombres_parts[1][:30] if len(nombres_parts) > 1 else 'ECOMMERCE'
+    
+    # Normalizar dirección (sin espacios para jsonParams)
+    direccion_normalizada = direccion_envio.replace(' ', '')[:50] if direccion_envio else 'SIN_DIRECCION'
+    
+    # Construir jsonParams (similar a envio.php)
+    # Nota: payerCity, payerPostalCode, payerState deberían venir del cliente si están disponibles
+    # Por ahora usamos valores por defecto de la configuración
+    json_params = {
+        'IVA.amount': '000',
+        'email': email_cliente or 'noreply@ecommerce.com',
+        'postAddress': direccion_normalizada,
+        'payerCity': 'BOGOTA',  # TODO: Obtener del cliente si está disponible
+        'payerPostalCode': default_postal_code,
+        'payerCountry': default_country,
+        'payerState': default_state,  # TODO: Obtener del cliente si está disponible
+        'docType': 'CC',  # Cédula de ciudadanía
+        'docValue': document_number or '',
+        'phone': f'+57{telefono_cliente}' if telefono_cliente else '+571234567890',
+        'shippingAddress': direccion_envio[:50] if direccion_envio else ''
+    }
+    
+    # Convertir jsonParams a string URL-encoded
+    json_params_str = quote(json.dumps(json_params))
+    
+    # Monto en centavos (Credibanco espera en centavos)
+    amount_centavos = int(float(monto_total) * 100)
+    
+    # Construir URL de register.do
+    register_url = f"{api_url}{register_endpoint}"
+    params = {
+        'userName': user_name,
+        'password': password,
+        'orderNumber': order_number,
+        'returnUrl': return_url,
+        'failUrl': fail_url,
+        'language': 'es',
+        'amount': amount_centavos,
+        'jsonParams': json_params_str
+    }
+    
+    url_completa = f"{register_url}?{urlencode(params)}"
+    
+    # Crear TransaccionPago con estado PENDIENTE
+    datos_cliente = {
+        'nombre': nombre_cliente,
+        'email': email_cliente,
+        'telefono': telefono_cliente,
+        'document_number': document_number,
+        'doc_type': doc_type,
+        'nature': nature,
+        'direccion_envio': direccion_envio,
+        'cart_items': cart_items,  # Guardar items del carrito para crear factura después
+        'forma_pago_codigo': forma_pago_codigo
+    }
+    
+    transaccion = TransaccionPago.objects.create(
+        empresa_servidor=empresa,
+        pasarela_pago=pasarela,
+        order_number=order_number,
+        monto=Decimal(str(monto_total)),
+        estado='PENDIENTE',
+        datos_cliente=datos_cliente
+    )
+    
+    # Llamar a API de Credibanco
+    try:
+        import requests
+        logger.info(f"[ecommerce] Llamando a Credibanco: {register_url}")
+        logger.info(f"[ecommerce] Parámetros: userName={user_name}, orderNumber={order_number}, amount={amount_centavos}")
+        
+        # IMPORTANTE: Credibanco espera un POST, pero los parámetros van en la URL (query string)
+        # No enviar datos en el body, solo en la URL
+        response = requests.post(url_completa, timeout=30)
+        response.raise_for_status()
+        
+        logger.info(f"[ecommerce] Respuesta de Credibanco recibida, status={response.status_code}")
+        credibanco_response = response.json()
+        logger.info(f"[ecommerce] Respuesta JSON de Credibanco: {credibanco_response}")
+        
+        # Verificar si hay error
+        if 'errorCode' in credibanco_response:
+            transaccion.estado = 'FALLIDA'
+            transaccion.error_message = credibanco_response.get('errorMessage', 'Error desconocido')
+            transaccion.datos_respuesta = credibanco_response
+            transaccion.save()
+            
+            return Response(
+                {
+                    'detail': f'Error en Credibanco: {credibanco_response.get("errorMessage", "Error desconocido")}',
+                    'error_code': credibanco_response.get('errorCode')
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Si hay formUrl, la transacción está en proceso
+        form_url = credibanco_response.get('formUrl')
+        if not form_url:
+            transaccion.estado = 'FALLIDA'
+            transaccion.error_message = 'Credibanco no retornó formUrl'
+            transaccion.datos_respuesta = credibanco_response
+            transaccion.save()
+            
+            return Response(
+                {'detail': 'Credibanco no retornó formUrl'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+        # Actualizar transacción con order_id si viene
+        if 'orderId' in credibanco_response:
+            transaccion.order_id = credibanco_response['orderId']
+        
+        transaccion.estado = 'PROCESANDO'
+        transaccion.datos_respuesta = credibanco_response
+        transaccion.save()
+        
+        return Response({
+            'success': True,
+            'mock': False,
+            'formUrl': form_url,
+            'order_number': order_number,
+            'transaccion_id': transaccion.id,
+            'pasarela': pasarela.codigo
+        })
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error llamando a Credibanco: {str(e)}")
+        transaccion.estado = 'FALLIDA'
+        transaccion.error_message = f'Error de conexión: {str(e)}'
+        transaccion.save()
+        
+        return Response(
+            {'detail': f'Error de conexión con Credibanco: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+    except Exception as e:
+        logger.error(f"Error procesando pago Credibanco: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        transaccion.estado = 'FALLIDA'
+        transaccion.error_message = str(e)
+        transaccion.save()
+        
+        return Response(
+            {'detail': f'Error al procesar pago: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def pasarela_response_view(request):
+    """
+    Endpoint de callback para Credibanco (y otras pasarelas futuras).
+    Credibanco redirige aquí después de que el usuario completa el pago.
+    
+    Query params:
+    - orderId: ID de orden de Credibanco (viene en la URL de retorno)
+    
+    Returns:
+    - HTML con redirección al frontend con resultado del pago
+    """
+    order_id = request.query_params.get('orderId')
+    
+    if not order_id:
+        return Response(
+            {'detail': 'orderId es requerido'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        # Buscar transacción por order_id
+        transaccion = TransaccionPago.objects.get(order_id=order_id)
+    except TransaccionPago.DoesNotExist:
+        logger.error(f"[pasarela-response] Transacción no encontrada para orderId: {order_id}")
+        # Retornar HTML de error
+        html_error = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Error en el pago</title>
+            <meta charset="utf-8">
+        </head>
+        <body>
+            <h1>Error</h1>
+            <p>No se encontró la transacción de pago.</p>
+            <script>
+                setTimeout(function() {{
+                    window.location.href = '/subdomain/ecommerce?payment_error=transaccion_no_encontrada';
+                }}, 3000);
+            </script>
+        </body>
+        </html>
+        """
+        return Response(html_error, content_type='text/html')
+    
+    # Obtener configuración de la empresa
+    empresa = transaccion.empresa_servidor
+    config = EmpresaEcommerceConfig.objects.get(empresa_servidor_id=empresa.id)
+    pasarela = transaccion.pasarela_pago
+    
+    if not pasarela:
+        logger.error(f"[pasarela-response] Pasarela no encontrada para transacción {transaccion.id}")
+        html_error = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Error en el pago</title>
+            <meta charset="utf-8">
+        </head>
+        <body>
+            <h1>Error</h1>
+            <p>Configuración de pasarela no encontrada.</p>
+            <script>
+                setTimeout(function() {{
+                    window.location.href = '/subdomain/ecommerce?payment_error=configuracion_no_encontrada';
+                }}, 3000);
+            </script>
+        </body>
+        </html>
+        """
+        return Response(html_error, content_type='text/html')
+    
+    # Consultar estado del pago en Credibanco
+    if pasarela.codigo.lower() == 'credibanco':
+        try:
+            pasarela_config = pasarela.configuracion or {}
+            api_url = pasarela_config.get('api_url', 'https://eco.credibanco.com/payment/rest/')
+            user_name = config.payment_public_key or pasarela_config.get('user_name', '')
+            password = config.payment_secret_key or pasarela_config.get('password', '')
+            
+            if not user_name or not password:
+                raise Exception('Credenciales de Credibanco no configuradas')
+            
+            import requests
+            # Obtener configuración de la pasarela para el endpoint de status
+            pasarela_config = transaccion.pasarela_pago.configuracion or {}
+            api_url = pasarela_config.get('api_url', 'https://eco.credibanco.com/payment/rest/')
+            status_endpoint = pasarela_config.get('status_endpoint', 'getOrderStatusExtended.do')
+            
+            # Obtener credenciales (prioridad: EmpresaEcommerceConfig > PasarelaPago.configuracion)
+            ecommerce_config = EmpresaEcommerceConfig.objects.filter(
+                empresa_servidor=transaccion.empresa_servidor
+            ).first()
+            user_name = (ecommerce_config.payment_public_key if ecommerce_config else None) or pasarela_config.get('user_name', '')
+            password = (ecommerce_config.payment_secret_key if ecommerce_config else None) or pasarela_config.get('password', '')
+            
+            status_url = f"{api_url}{status_endpoint}"
+            params = {
+                'userName': user_name,
+                'password': password,
+                'orderId': order_id
+            }
+            
+            response = requests.get(status_url, params=params, timeout=30)
+            response.raise_for_status()
+            
+            credibanco_status = response.json()
+            
+            # Actualizar transacción con respuesta
+            transaccion.datos_respuesta = credibanco_status
+            
+            # Extraer información importante
+            error_code = credibanco_status.get('errorCode')
+            error_message = credibanco_status.get('errorMessage')
+            order_status = credibanco_status.get('orderStatus')
+            action_code = credibanco_status.get('actionCode')
+            action_code_description = credibanco_status.get('actionCodeDescription')
+            
+            # Obtener paymentState
+            payment_state = None
+            payment_amount_info = credibanco_status.get('paymentAmountInfo', {})
+            if isinstance(payment_amount_info, dict):
+                payment_state = payment_amount_info.get('paymentState')
+            
+            # Obtener approvalCode
+            approval_code = None
+            card_auth_info = credibanco_status.get('cardAuthInfo', {})
+            if isinstance(card_auth_info, dict):
+                approval_code = card_auth_info.get('approvalCode')
+            
+            if error_code:
+                # Error en Credibanco
+                transaccion.estado = 'FALLIDA'
+                transaccion.error_message = error_message or 'Error desconocido'
+                transaccion.save()
+                
+                html_error = f"""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Error en el pago</title>
+                    <meta charset="utf-8">
+                </head>
+                <body>
+                    <h1>Error en el pago</h1>
+                    <p>{error_message or 'Error desconocido'}</p>
+                    <script>
+                        setTimeout(function() {{
+                            window.location.href = '/subdomain/ecommerce?payment_error={error_code}&order_number={transaccion.order_number}';
+                        }}, 3000);
+                    </script>
+                </body>
+                </html>
+                """
+                return Response(html_error, content_type='text/html')
+            
+            # Verificar si el pago fue exitoso
+            if payment_state == 'DEPOSITED':
+                # Pago exitoso
+                transaccion.estado = 'EXITOSA'
+                transaccion.approval_code = approval_code
+                transaccion.save()
+                
+                # Crear factura en TNS
+                try:
+                    from .services.tns_invoice_helper import insertar_factura_tns
+                    import random
+                    
+                    bridge = TNSBridge(empresa)
+                    bridge.connect()
+                    
+                    datos_cliente = transaccion.datos_cliente
+                    invoice_data = {
+                        'docType': datos_cliente.get('doc_type', 'cedula'),
+                        'document': datos_cliente.get('document_number', ''),
+                        'name': datos_cliente.get('nombre', 'CONSUMIDOR FINAL'),
+                        'email': datos_cliente.get('email', ''),
+                        'phone': datos_cliente.get('telefono', ''),
+                        'nature': datos_cliente.get('nature', 'natural')
+                    }
+                    
+                    # Preparar datos del pago para TNS
+                    medio_pago_data = {
+                        'codigo_autorizacion': approval_code or 'N/A',
+                        'franquicia': 'TARJETA',
+                        'ultimos_digitos': '****',
+                        'tipo_cuenta': 'CREDITO',
+                        'numero_recibo': order_id[:20],
+                        'rrn': order_id
+                    }
+                    
+                    # Obtener cart_items de la transacción (se guardaron en datos_cliente o se pueden reconstruir)
+                    # Por ahora, necesitamos guardar cart_items en TransaccionPago también
+                    # Por simplicidad, asumimos que están en datos_cliente
+                    cart_items = datos_cliente.get('cart_items', [])
+                    
+                    observacion = f'DIRECCIÓN DE ENVÍO: {datos_cliente.get("direccion_envio", "")}'
+                    if datos_cliente.get('telefono'):
+                        observacion += f' - TEL: {datos_cliente.get("telefono")}'
+                    
+                    forma_pago_codigo = datos_cliente.get('forma_pago_codigo', 'TC')  # Default a TC si no está
+                    
+                    resultado = insertar_factura_tns(
+                        bridge=bridge,
+                        cart_items=cart_items,
+                        monto_total=float(transaccion.monto),
+                        empresa_servidor_id=empresa.id,
+                        invoice_data=invoice_data,
+                        order_type='takeaway',
+                        referencia=f'ECOMM-{transaccion.order_number}',
+                        medio_pago_data=medio_pago_data,
+                        forma_pago_codigo=forma_pago_codigo,
+                        mesa_number=None,
+                        observacion=observacion,
+                        usuario_tns=config.usuario_tns
+                    )
+                    
+                    bridge.close()
+                    
+                    if resultado.get('success'):
+                        transaccion.factura_tns_id = resultado.get('kardex_id')
+                        transaccion.save()
+                        
+                        html_success = f"""
+                        <!DOCTYPE html>
+                        <html>
+                        <head>
+                            <title>Pago exitoso</title>
+                            <meta charset="utf-8">
+                        </head>
+                        <body>
+                            <h1>¡Pago exitoso!</h1>
+                            <p>Tu pedido ha sido procesado correctamente.</p>
+                            <p>Número de factura: {resultado.get('prefijo')} {resultado.get('numero')}</p>
+                            <script>
+                                setTimeout(function() {{
+                                    window.location.href = '/subdomain/ecommerce?payment_success=true&order_number={transaccion.order_number}&factura={resultado.get("prefijo")}-{resultado.get("numero")}';
+                                }}, 3000);
+                            </script>
+                        </body>
+                        </html>
+                        """
+                        return Response(html_success, content_type='text/html')
+                    else:
+                        logger.error(f"[pasarela-response] Error creando factura TNS: {resultado.get('error')}")
+                        transaccion.error_message = f"Error creando factura: {resultado.get('error')}"
+                        transaccion.save()
+                        
+                        html_error = f"""
+                        <!DOCTYPE html>
+                        <html>
+                        <head>
+                            <title>Error al crear factura</title>
+                            <meta charset="utf-8">
+                        </head>
+                        <body>
+                            <h1>Pago exitoso pero error al crear factura</h1>
+                            <p>El pago fue procesado pero hubo un error al crear la factura. Por favor contacta al soporte.</p>
+                            <script>
+                                setTimeout(function() {{
+                                    window.location.href = '/subdomain/ecommerce?payment_error=factura_error&order_number={transaccion.order_number}';
+                                }}, 3000);
+                            </script>
+                        </body>
+                        </html>
+                        """
+                        return Response(html_error, content_type='text/html')
+                        
+                except Exception as e:
+                    logger.error(f"[pasarela-response] Error creando factura TNS: {str(e)}", exc_info=True)
+                    transaccion.error_message = f"Error creando factura: {str(e)}"
+                    transaccion.save()
+                    
+                    html_error = f"""
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <title>Error al crear factura</title>
+                        <meta charset="utf-8">
+                    </head>
+                    <body>
+                        <h1>Pago exitoso pero error al crear factura</h1>
+                        <p>El pago fue procesado pero hubo un error al crear la factura. Por favor contacta al soporte.</p>
+                        <script>
+                            setTimeout(function() {{
+                                window.location.href = '/subdomain/ecommerce?payment_error=factura_error&order_number={transaccion.order_number}';
+                            }}, 3000);
+                        </script>
+                    </body>
+                    </html>
+                    """
+                    return Response(html_error, content_type='text/html')
+            else:
+                # Pago no exitoso
+                transaccion.estado = 'FALLIDA'
+                transaccion.error_message = action_code_description or 'Pago rechazado'
+                transaccion.save()
+                
+                html_error = f"""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Pago rechazado</title>
+                    <meta charset="utf-8">
+                </head>
+                <body>
+                    <h1>Pago rechazado</h1>
+                    <p>{action_code_description or 'El pago fue rechazado'}</p>
+                    <script>
+                        setTimeout(function() {{
+                            window.location.href = '/subdomain/ecommerce?payment_error=rechazado&order_number={transaccion.order_number}';
+                        }}, 3000);
+                    </script>
+                </body>
+                </html>
+                """
+                return Response(html_error, content_type='text/html')
+                
+        except Exception as e:
+            logger.error(f"[pasarela-response] Error consultando estado Credibanco: {str(e)}", exc_info=True)
+            transaccion.estado = 'FALLIDA'
+            transaccion.error_message = f'Error consultando estado: {str(e)}'
+            transaccion.save()
+            
+            html_error = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Error</title>
+                <meta charset="utf-8">
+            </head>
+            <body>
+                <h1>Error al consultar estado del pago</h1>
+                <p>Por favor contacta al soporte.</p>
+                <script>
+                    setTimeout(function() {{
+                        window.location.href = '/subdomain/ecommerce?payment_error=consulta_error&order_number={transaccion.order_number}';
+                    }}, 3000);
+                </script>
+            </body>
+            </html>
+            """
+            return Response(html_error, content_type='text/html')
+    else:
+        # Otras pasarelas futuras
+        return Response(
+            {'detail': f'Pasarela "{pasarela.codigo}" aún no implementada para callback'},
+            status=status.HTTP_501_NOT_IMPLEMENTED
+        )
+

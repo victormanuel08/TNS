@@ -129,11 +129,95 @@ Las API keys tambien se aceptan en la mayoria de endpoints enviando `Api-Key: <t
 ## 5. Sistema (descubrimiento / extraccion)
 Base: `/assistant/api/sistema/`
 
-| Endpoint | Metodo | Comentario |
-| --- | --- | --- |
-| `/inicializar_sistema/` | POST | Resetea/valida configuracion general. |
-| `/descubrir_empresas/` | POST | Body `{ "servidor_id": 1 }`, retorna `total_empresas`. |
-| `/extraer_datos/` | POST | Body `{ "empresa_servidor_id": 1, "fecha_inicio": "2025-01-01", "fecha_fin": "2025-01-31", "forzar_reextraccion": false }`. |
+### 5.1 Inicializar Sistema
+- **POST** `/inicializar_sistema/`
+- Resetea/valida configuración general del sistema
+- Crea o carga el archivo maestro (`data/maestro.pkl`)
+- **Response:**
+  ```json
+  {
+    "estado": "sistema_inicializado",
+    "version": "2.0"
+  }
+  ```
+
+### 5.2 Descubrir Empresas
+- **POST** `/descubrir_empresas/`
+- **Body:**
+  ```json
+  {
+    "servidor_id": 1
+  }
+  ```
+- **Qué hace:**
+  1. Conecta al servidor usando `ruta_maestra` (ADMIN.gdb)
+  2. Ejecuta: `SELECT CODIGO, NOMBRE, NIT, ANOFIS, ARCHIVO FROM EMPRESAS WHERE NIT IS NOT NULL`
+  3. Para cada empresa: crea o actualiza `EmpresaServidor`
+  4. Valida unicidad global por NIT + año fiscal (evita duplicados entre servidores)
+- **Response:**
+  ```json
+  {
+    "estado": "empresas_descubiertas",
+    "total_empresas": 5
+  }
+  ```
+- **Nota**: Ver [`FLUJO_SISTEMA.md`](./FLUJO_SISTEMA.md) para detalles completos del proceso.
+
+### 5.3 Extraer Datos
+- **POST** `/extraer_datos/`
+- **Body:**
+  ```json
+  {
+    "empresa_servidor_id": 1,
+    "fecha_inicio": "2025-01-01",
+    "fecha_fin": "2025-01-31",
+    "forzar_reextraccion": false
+  }
+  ```
+- **Qué hace:**
+  1. Conecta a la base de datos de la empresa (usando `ruta_base`)
+  2. Ejecuta la consulta SQL configurada (`consulta_sql`) con parámetros de fecha
+  3. Procesa resultados en chunks de 1000 registros
+  4. Crea registros `MovimientoInventario` en PostgreSQL
+  5. Calcula campos derivados (valor_total, lead_time_dias, tipo_bodega)
+  6. Actualiza `ultima_extraccion` de la empresa
+- **Response:**
+  ```json
+  {
+    "estado": "exito",
+    "registros_guardados": 15234,
+    "total_encontrados": 15234,
+    "chunks_procesados": 16
+  }
+  ```
+- **Nota**: Si `forzar_reextraccion=false` y ya existen datos para ese rango, retorna `{"estado": "ya_extraido"}`.
+
+### 5.4 Gestión de Servidores
+- **GET** `/assistant/api/servidores/` - Lista todos los servidores
+- **POST** `/assistant/api/servidores/` - Crea un nuevo servidor
+  ```json
+  {
+    "nombre": "Servidor Principal",
+    "host": "192.168.1.100",
+    "usuario": "SYSDBA",
+    "password": "masterkey",
+    "tipo_servidor": "FIREBIRD",
+    "puerto": 3050,
+    "ruta_maestra": "C:/Visual TNS/ADMIN.gdb"
+  }
+  ```
+- **PATCH** `/assistant/api/servidores/{id}/` - Actualiza un servidor
+- **DELETE** `/assistant/api/servidores/{id}/` - Elimina un servidor
+
+### 5.5 Gestión de Empresas
+- **GET** `/assistant/api/empresas-servidor/` - Lista todas las empresas
+- **GET** `/assistant/api/empresas-servidor/{id}/` - Obtiene una empresa específica
+- **PATCH** `/assistant/api/empresas-servidor/{id}/` - Actualiza empresa (útil para configurar `consulta_sql`)
+  ```json
+  {
+    "consulta_sql": "SELECT TIPO_DOCUMENTO, FECHA, ARTICULO_CODIGO, ... FROM MOVIMIENTOS WHERE FECHA BETWEEN ? AND ?"
+  }
+  ```
 
 ---
 
@@ -183,9 +267,16 @@ Las respuestas incluyen los datos calculados (forecast, MAE, recomendaciones, et
   {
     "consulta_original": "...",
     "explicacion_nino_inteligente": "...",
-    "datos_tecnicos_completos": { "series": [], "insights": [] }
+    "datos_tecnicos_completos": { 
+      "series": [], 
+      "insights": [],
+      "mlflow_run_id": "abc123...",  // Si MLflow está disponible
+      "mlflow_ui_url": "http://localhost:5000/#/experiments/0/runs/abc123..."  // Si MLflow está disponible
+    }
   }
   ```
+  
+  **Nota**: Para predicciones (demanda, recomendaciones), las respuestas incluyen enlaces a MLflow UI si está configurado. Ver [MLFLOW_INTEGRATION.md](./MLFLOW_INTEGRATION.md).
 
 ---
 

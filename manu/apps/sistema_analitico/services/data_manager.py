@@ -65,8 +65,15 @@ class DataManager:
     def descubrir_empresas(self, servidor_id):
         servidor = Servidor.objects.get(id=servidor_id)
         
+        # Validar que la ruta maestra esté configurada
+        if not servidor.ruta_maestra:
+            raise ValueError(f"El servidor '{servidor.nombre}' no tiene configurada la ruta maestra. Por favor, edita el servidor y agrega la ruta a la base de datos maestra (ej: C:\\datos\\ADMIN.gdb o /ruta/al/ADMIN.gdb)")
+        
         try:
+            logger.info(f"Intentando conectar a servidor: {servidor.nombre} ({servidor.tipo_servidor}) - {servidor.host}:{servidor.puerto or 'default'}")
             conexion = self._conectar_servidor_base(servidor)
+            logger.info(f"Conexión exitosa al servidor {servidor.nombre}")
+            
             consulta_empresas = "SELECT CODIGO, NOMBRE, NIT, ANOFIS, ARCHIVO FROM EMPRESAS WHERE NIT IS NOT NULL ORDER BY NIT, ANOFIS"
             
             df_empresas = self.connector.ejecutar_consulta(
@@ -75,8 +82,26 @@ class DataManager:
             
             empresas_registradas = []
             for _, fila in df_empresas.iterrows():
+                nit = fila['NIT']
+                anio_fiscal = fila['ANOFIS']
+                
+                # Verificar si ya existe una empresa con este NIT y año fiscal en otro servidor
+                empresa_existente = EmpresaServidor.objects.filter(
+                    nit=nit, anio_fiscal=anio_fiscal
+                ).exclude(servidor=servidor).first()
+                
+                if empresa_existente:
+                    empresas_registradas.append({
+                        'empresa': fila['NOMBRE'], 'nit': nit, 
+                        'anio_fiscal': anio_fiscal, 
+                        'accion': 'omitida',
+                        'razon': f'Ya existe en servidor "{empresa_existente.servidor.nombre}"'
+                    })
+                    continue
+                
+                # Si existe en el mismo servidor, actualizar; si no, crear
                 empresa, creada = EmpresaServidor.objects.update_or_create(
-                    servidor=servidor, nit=fila['NIT'], anio_fiscal=fila['ANOFIS'],
+                    servidor=servidor, nit=nit, anio_fiscal=anio_fiscal,
                     defaults={
                         'codigo': fila['CODIGO'], 'nombre': fila['NOMBRE'],
                         'ruta_base': fila['ARCHIVO'], 'estado': 'ACTIVO'
@@ -93,8 +118,34 @@ class DataManager:
             return empresas_registradas
             
         except Exception as e:
-            logger.error(f"Error descubriendo empresas: {e}")
-            raise
+            error_msg = str(e)
+            logger.error(f"Error descubriendo empresas en servidor {servidor.nombre}: {error_msg}")
+            
+            # Mensajes de error más descriptivos
+            if '10060' in error_msg or 'timeout' in error_msg.lower():
+                raise Exception(
+                    f"No se pudo conectar al servidor '{servidor.nombre}' ({servidor.host}:{servidor.puerto or 'default'}).\n\n"
+                    f"Posibles causas:\n"
+                    f"• El servidor Firebird no está corriendo en {servidor.host}\n"
+                    f"• La IP {servidor.host} no es accesible desde esta máquina\n"
+                    f"• El puerto {servidor.puerto or 3050} está bloqueado por firewall\n"
+                    f"• La ruta maestra '{servidor.ruta_maestra}' no existe o es incorrecta\n\n"
+                    f"Verifica:\n"
+                    f"1. Que el servidor Firebird esté corriendo en {servidor.host}\n"
+                    f"2. Que puedas hacer ping a {servidor.host}\n"
+                    f"3. Que el puerto {servidor.puerto or 3050} esté abierto\n"
+                    f"4. Que la ruta maestra sea correcta"
+                )
+            elif '10061' in error_msg or 'connection refused' in error_msg.lower():
+                raise Exception(
+                    f"La conexión fue rechazada por el servidor '{servidor.nombre}' ({servidor.host}:{servidor.puerto or 'default'}).\n\n"
+                    f"El servidor está accesible pero rechazó la conexión. Verifica:\n"
+                    f"• Que Firebird esté corriendo en el puerto {servidor.puerto or 3050}\n"
+                    f"• Que las credenciales (usuario/password) sean correctas\n"
+                    f"• Que el usuario tenga permisos para acceder a la base de datos"
+                )
+            else:
+                raise Exception(f"Error conectando al servidor '{servidor.nombre}': {error_msg}")
     
     def extraer_datos_empresa(self, empresa_servidor_id, fecha_inicio, fecha_fin, forzar_reextraccion=False):
         emp_serv = EmpresaServidor.objects.get(id=empresa_servidor_id)
@@ -308,10 +359,18 @@ class DataManager:
             if movimiento.fecha and movimiento.fecha_orden_pedido:
                 movimiento.lead_time_dias = (movimiento.fecha - movimiento.fecha_orden_pedido).days
 
-            tipo_bodega = str(movimiento.tipo_bodega).upper()
-            movimiento.es_implante = 'IMPLANTE' in tipo_bodega
-            movimiento.es_instrumental = 'INSTRUMENTAL' in tipo_bodega
-            movimiento.es_equipo_poder = 'EQUIPO' in tipo_bodega and 'PODER' in tipo_bodega
+            # Calcular booleanos de tipo de bodega basado en TIPO_BODEGA del SQL
+            # El SQL ya calcula: 'IMPLANTE', 'EQUIPO DE PODER', o 'INSTRUMENTAL'
+            if movimiento.tipo_bodega:
+                tipo_bodega = str(movimiento.tipo_bodega).upper().strip()
+                movimiento.es_implante = tipo_bodega == 'IMPLANTE'
+                movimiento.es_instrumental = tipo_bodega == 'INSTRUMENTAL'
+                movimiento.es_equipo_poder = tipo_bodega == 'EQUIPO DE PODER'
+            else:
+                # Si no hay tipo_bodega, usar valores por defecto
+                movimiento.es_implante = False
+                movimiento.es_instrumental = False
+                movimiento.es_equipo_poder = False
 
             movimientos.append(movimiento)
 

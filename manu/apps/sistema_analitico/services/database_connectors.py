@@ -11,18 +11,34 @@ class DatabaseConnector:
     @staticmethod
     def conectar_firebird(servidor, ruta_base=None):
         try:
+            # Validar que ruta_base no esté vacía
+            if not ruta_base:
+                raise ValueError("La ruta a la base de datos no puede estar vacía. Verifica la configuración del servidor.")
+            
+            # Validar formato de host
+            host = servidor.host.strip()
+            if not host:
+                raise ValueError("El host del servidor no puede estar vacío")
+            
+            # Si el host parece ser solo un número (ej: "3.100"), podría ser una IP incompleta
+            # En ese caso, asumimos que es parte de la red VPN 10.8.3.x
+            if host.replace('.', '').isdigit() and host.count('.') < 3:
+                logger.warning(f"Host '{host}' parece ser una IP incompleta. Si estás en la red VPN, debería ser '10.8.3.{host}'")
+            
             config = {
-                'host': servidor.host,
+                'host': host,
                 'database': ruta_base,
                 'user': servidor.usuario,
                 'password': servidor.password,
                 'port': servidor.puerto or 3050,
                 'charset': 'WIN1252',
-                'timeout': 60  
+                'timeout': 30  # Reducido a 30 segundos para fallar más rápido
             }
+            
+            logger.info(f"Conectando a Firebird: {host}:{config['port']} - Base: {ruta_base}")
             return firebirdsql.connect(**config)
         except Exception as e:
-            logger.error(f"Error conectando a Firebird: {e}")
+            logger.error(f"Error conectando a Firebird ({servidor.host}:{servidor.puerto or 3050}): {e}")
             raise
     
     @staticmethod

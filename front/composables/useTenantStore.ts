@@ -17,7 +17,8 @@ const defaultPreferences: TenantPreferences = {
 }
 
 export const useTenantStore = () => {
-  const { getSubdomain } = useSubdomain()
+  const subdomainUtils = useSubdomain()
+  const { getSubdomain } = subdomainUtils
   const company = useState<CompanyInfo | null>(
     'tenant-company',
     () => null
@@ -34,16 +35,32 @@ export const useTenantStore = () => {
   const lastLoaded = useState<number | null>('tenant-last-loaded', () => null)
   const currentSubdomain = useState('tenant-current-subdomain', () => getSubdomain())
 
-  const { getCompanyInfo } = useSubdomain()
+  const { getCompanyInfo } = subdomainUtils
 
   const ensureTenantLoaded = async (force = false) => {
-    if (!force && company.value) {
+    const subdomain = getSubdomain()
+    currentSubdomain.value = subdomain
+
+    if (!subdomain) {
+      company.value = null
+      return null
+    }
+
+    if (
+      !force &&
+      company.value &&
+      company.value.subdomain === subdomain
+    ) {
       return company.value
     }
 
     loading.value = true
     try {
-      const info = await getCompanyInfo()
+      const info = await getCompanyInfo(subdomain)
+      if (!info) {
+        company.value = null
+        return null
+      }
       company.value = info
       template.value = info.mode
       preferences.value = {
@@ -53,7 +70,6 @@ export const useTenantStore = () => {
         fontFamily: info.font_family || defaultPreferences.fontFamily,
         tagline: info.tagline || defaultPreferences.tagline
       }
-      currentSubdomain.value = getSubdomain()
       lastLoaded.value = Date.now()
       return info
     } catch (error) {

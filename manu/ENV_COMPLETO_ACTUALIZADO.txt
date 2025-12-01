@@ -1,0 +1,93 @@
+# ============================================
+# CONFIGURACIÓN DJANGO
+# ============================================
+DJANGO_SECRET_KEY=django-insecure-z@d&2&4f-kk_8dj0&&)!!*115+hr49yp%j0&&4a$pjiwxt4)@!
+DJANGO_DEBUG=True
+DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,api.dipromedicos.com.co
+
+# ============================================
+# BASE DE DATOS POSTGRESQL
+# ============================================
+DB_ENGINE=django.db.backends.postgresql
+DB_NAME=manu
+DB_USER=postgres
+DB_PASSWORD=postgres
+DB_HOST=127.0.0.1
+DB_PORT=5432
+
+# Variables legacy (mantenidas por compatibilidad)
+POSTGRES_DB=manu
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=postgres
+POSTGRES_HOST=127.0.0.1
+POSTGRES_PORT=5432
+
+# ============================================
+# REDIS Y CELERY
+# ============================================
+REDIS_URL=redis://localhost:6380/0
+CELERY_BROKER_URL=redis://localhost:6380/0
+CELERY_RESULT_BACKEND=redis://localhost:6380/0
+
+# ============================================
+# ENCRIPTACIÓN DE CAMPOS
+# ============================================
+FIELD_ENCRYPTION_KEY=43EhL08hcvPp_GYrvlGyXNbqzWrgL4lUFZs2v4EC2S8=
+
+# ============================================
+# DEEPSEEK API (Para consultas inteligentes)
+# ============================================
+DEEPSEEK_API_KEY=sk-f0ba5a27ac694372aa63ee974237a9b2
+
+# ============================================
+# DIAN SCRAPER
+# ============================================
+DIAN_SCRAPER_HEADLESS=True
+
+# ============================================
+# FUDO SCRAPER - API FUDO
+# ============================================
+FUDO_API_URL=https://api.fu.do
+FUDO_AUTH_URL=https://auth.fu.do/authenticate
+FUDO_CLUSTER_ID=2
+FUDO_LOGIN=your-fudo-username
+FUDO_PASSWORD=your-fudo-password
+FORCE_CACHE=0
+
+# ============================================
+# FUDO SCRAPER - FIREBIRD
+# ============================================
+FIREBIRD_HOST=localhost
+FIREBIRD_USER=SYSDBA
+FIREBIRD_PASSWORD=masterkey
+FIREBIRD_CHARSET=ISO8859_1
+# FIREBIRD_DB se configura por empresa en EmpresaServidor.ruta_base
+
+# ============================================
+# FUDO SCRAPER - CONFIGURACIÓN FACTURAS
+# ============================================
+# PREFIX: Prefijo de facturación para FUDO (ej: FE, FC, etc.)
+# Este prefijo se usa al crear facturas desde FUDO en Firebird
+PREFIX=FE
+# REVERSE_PREFIX: Si es True, invierte el prefijo cuando el pago es en efectivo
+REVERSE_PREFIX=False
+
+# ============================================
+# CORS
+# ============================================
+CORS_ALLOW_ALL_ORIGINS=False
+CORS_ALLOWED_ORIGINS=https://tudominio.com,https://www.tudominio.com,http://localhost:8000
+
+# ============================================
+# EMAIL (Configuración de correo)
+# ============================================
+EMAIL_HOST_USER=informacion.bce1@gmail.com
+EMAIL_HOST_PASSWORD=wxjkimgskpfakbmf
+
+# ============================================
+# MLFLOW (Tracking de modelos ML - Opcional)
+# ============================================
+# URL del servidor MLflow (default: http://localhost:5000)
+# Si no se configura, el sistema funcionará sin MLflow
+MLFLOW_TRACKING_URI=http://localhost:5000
+

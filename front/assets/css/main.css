@@ -1,253 +1,221 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@400;600&display=swap');
+/* Estilos globales - Diseño moderno con tonos claros */
 
-/* ===== Variables & Base ===== */
 :root {
-  color-scheme: dark;
-  --bg-base: #050913;
-  --bg-primary: rgba(18, 25, 45, 0.85);
-  --bg-secondary: rgba(12, 18, 34, 0.9);
-  --surface-contrast: rgba(255, 255, 255, 0.04);
-  --text-primary: #f8fafc;
-  --text-secondary: #94a3b8;
-  --border-color: rgba(148, 163, 184, 0.25);
-  --border-strong: rgba(226, 232, 240, 0.4);
-  --shadow: 0 20px 45px rgba(2, 6, 23, 0.65);
-  --border-radius: 18px;
-  --font-family: 'Inter', 'Outfit', 'Poppins', system-ui, -apple-system,
-    BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  /* Colores principales - Tonos claros y pasteles */
+  --color-primary: #2563eb;
+  --color-primary-light: #3b82f6;
+  --color-primary-dark: #1d4ed8;
+  
+  --color-secondary: #8b5cf6;
+  --color-secondary-light: #a78bfa;
+  --color-secondary-dark: #7c3aed;
+  
+  /* Tonos neutros claros */
+  --color-background: #fafafa;
+  --color-surface: #ffffff;
+  --color-surface-alt: #f5f5f5;
+  
+  /* Tonos crema y pasteles */
+  --color-cream: #fef9f3;
+  --color-cream-light: #fffbf5;
+  --color-pastel-blue: #e0f2fe;
+  --color-pastel-purple: #f3e8ff;
+  --color-pastel-pink: #fce7f3;
+  
+  /* Texto */
+  --color-text-primary: #1f2937;
+  --color-text-secondary: #6b7280;
+  --color-text-tertiary: #9ca3af;
+  
+  /* Bordes */
+  --color-border: #e5e7eb;
+  --color-border-light: #f3f4f6;
+  
+  /* Estados */
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-error: #ef4444;
+  --color-info: #3b82f6;
+  
+  /* Sombras suaves */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  --shadow-md: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+  
+  /* Bordes redondeados */
+  --radius-sm: 0.375rem;
+  --radius: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.5rem;
+  
+  /* Espaciado */
+  --spacing-xs: 0.25rem;
+  --spacing-sm: 0.5rem;
+  --spacing: 1rem;
+  --spacing-md: 1.5rem;
+  --spacing-lg: 2rem;
+  --spacing-xl: 3rem;
+  
+  /* Tipografía */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'Fira Code', 'Courier New', monospace;
 }
 
-*,
-*::before,
-*::after {
+* {
+  margin: 0;
+  padding: 0;
   box-sizing: border-box;
-  -webkit-font-smoothing: antialiased;
-}
-
-html,
-body,
-#__nuxt {
-  min-height: 100%;
 }
 
 body {
-  margin: 0;
-  background: radial-gradient(circle at top, #0f172a, #020617);
-  color: var(--text-primary);
-  font-family: var(--font-family);
-  line-height: 1.5;
+  font-family: var(--font-sans);
+  background: var(--color-background);
+  color: var(--color-text-primary);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
+/* Scrollbar personalizado */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-surface-alt);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-tertiary);
+}
+
+/* Enlaces */
 a {
-  color: inherit;
+  color: var(--color-primary);
   text-decoration: none;
+  transition: color 0.2s;
 }
 
-img {
-  max-width: 100%;
-  display: block;
+a:hover {
+  color: var(--color-primary-dark);
 }
 
-/* ===== Layout helpers ===== */
-.page-container {
-  width: min(1200px, 92vw);
-  margin: 0 auto;
-  padding: 2rem 0 3rem;
+/* Botones base */
+button {
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.2s;
 }
 
-.grid {
-  display: grid;
-  gap: 1.25rem;
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
-.grid.two {
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-}
-
-/* ===== Forms & Inputs ===== */
+/* Inputs base */
 input,
 textarea,
 select {
-  background: rgba(15, 23, 42, 0.9);
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  color: var(--text-primary);
-  font: inherit;
-  padding: 0.65rem 0.85rem;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  font-family: inherit;
+  font-size: inherit;
 }
 
 input:focus,
 textarea:focus,
 select:focus {
   outline: none;
-  border-color: var(--border-strong);
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.35);
 }
 
-label {
-  font-size: 0.85rem;
-  letter-spacing: 0.01em;
-  color: var(--text-secondary);
+/* Utilidades */
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 var(--spacing);
 }
 
-/* ===== Buttons ===== */
-button,
-.btn {
-  border-radius: 999px;
-  border: none;
-  padding: 0.65rem 1.4rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
-  background: linear-gradient(120deg, #2563eb, #7c3aed);
-  color: white;
-  box-shadow: 0 15px 35px rgba(37, 99, 235, 0.35);
-}
-
-button.ghost,
-.btn-ghost {
-  background: transparent;
-  border: 1px solid var(--border-color);
-  box-shadow: none;
-  color: var(--text-primary);
-}
-
-button:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-  box-shadow: none;
-}
-
-button:not(:disabled):hover {
-  transform: translateY(-1px);
-  box-shadow: 0 18px 40px rgba(37, 99, 235, 0.4);
-}
-
-/* ===== Cards / Panels ===== */
-.card,
-.panel-card,
-.section-card {
-  background: var(--bg-primary);
-  backdrop-filter: blur(14px);
-  border: 1px solid var(--surface-contrast);
-  border-radius: var(--border-radius);
-  padding: 1.5rem;
+.card {
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-lg);
   box-shadow: var(--shadow);
 }
 
-.panel-icon {
-  width: 56px;
-  height: 56px;
-  border-radius: 18px;
-  display: grid;
-  place-items: center;
-  font-size: 1.25rem;
-  background: rgba(96, 165, 250, 0.15);
-}
-
-.status-pill {
+.btn {
   display: inline-flex;
   align-items: center;
-  padding: 0.2rem 0.75rem;
-  border-radius: 999px;
-  font-size: 0.8rem;
-  text-transform: capitalize;
+  justify-content: center;
+  padding: 0.75rem 1.5rem;
+  border-radius: var(--radius);
+  font-weight: 600;
+  transition: all 0.2s;
+  border: none;
+  cursor: pointer;
 }
 
-.status-pill.completed {
-  background: rgba(34, 197, 94, 0.15);
-  color: #4ade80;
+.btn-primary {
+  background: var(--color-primary);
+  color: white;
 }
 
-.status-pill.running {
-  background: rgba(250, 204, 21, 0.15);
-  color: #facc15;
+.btn-primary:hover:not(:disabled) {
+  background: var(--color-primary-dark);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
 }
 
-.status-pill.error {
-  background: rgba(248, 113, 113, 0.15);
-  color: #f87171;
+.btn-secondary {
+  background: var(--color-surface);
+  color: var(--color-primary);
+  border: 1px solid var(--color-primary);
 }
 
-/* ===== Tables ===== */
-table {
-  width: 100%;
-  border-collapse: collapse;
-  border-radius: 18px;
-  overflow: hidden;
+.btn-secondary:hover:not(:disabled) {
+  background: var(--color-pastel-blue);
 }
 
-thead {
-  background: rgba(15, 23, 42, 0.6);
-}
-
-th,
-td {
-  padding: 0.9rem;
-  text-align: left;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-th {
-  font-size: 0.75rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
-}
-
-/* ===== Misc Utility ===== */
-.kicker {
-  text-transform: uppercase;
-  font-size: 0.75rem;
-  letter-spacing: 0.16em;
-  color: var(--text-secondary);
-  margin-bottom: 0.35rem;
-}
-
-.error-banner {
-  padding: 0.85rem 1rem;
-  border-radius: 14px;
-  background: rgba(239, 68, 68, 0.1);
-  color: #fecaca;
-  border: 1px solid rgba(239, 68, 68, 0.3);
-}
-
-.hero {
-  border-radius: 26px;
-  background: linear-gradient(125deg, rgba(30, 64, 175, 0.65), rgba(2, 6, 23, 0.92));
-  padding: 2rem;
-  border: 1px solid var(--border-color);
-  box-shadow: var(--shadow);
-}
-
-.metrics .metric-card {
-  position: relative;
-  overflow: hidden;
-}
-
-.metrics .metric-card::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: radial-gradient(circle at top right, rgba(59, 130, 246, 0.18), transparent);
-  z-index: 0;
-}
-
-.metrics .metric-card > * {
-  position: relative;
-  z-index: 1;
-}
-
-@media (max-width: 768px) {
-  .hero {
-    flex-direction: column;
-    gap: 1.25rem;
+/* Animaciones suaves */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
   }
-
-  button,
-  .btn {
-    width: 100%;
-    text-align: center;
+  to {
+    opacity: 1;
   }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+.slide-up {
+  animation: slideUp 0.4s ease-out;
+}
+
+/* Asegurar que SweetAlert esté por encima de modales */
+.swal-z-index-fix,
+.swal2-container.swal-z-index-fix {
+  z-index: 10000 !important;
+}
+
+.swal2-container {
+  z-index: 10000 !important;
 }

@@ -9,6 +9,7 @@ from .models import (
     UsuarioEmpresa,
     APIKeyCliente,
     UserTenantProfile,
+    NotaRapida,
 )
 
 # ========== ADMIN CONFIGURACIÓN GLOBAL ==========
@@ -237,7 +238,7 @@ class APIKeyClienteAdmin(admin.ModelAdmin):
     
     def get_readonly_fields(self, request, obj=None):
         if obj:  # Editando objeto existente
-            return self.readonly_fields + ('api_key',)
+            return list(self.readonly_fields) + ['api_key']
         else:  # Creando nuevo objeto
             return [f for f in self.readonly_fields if f != 'api_key']
     
@@ -249,6 +250,32 @@ class APIKeyClienteAdmin(admin.ModelAdmin):
 class UserTenantProfileAdmin(admin.ModelAdmin):
     list_display = ['user', 'subdomain', 'preferred_template']
     search_fields = ['user__username', 'subdomain']
+
+# ========== NOTAS RÁPIDAS ADMIN ==========
+@admin.register(NotaRapida)
+class NotaRapidaAdmin(admin.ModelAdmin):
+    list_display = ['texto', 'categorias_display', 'activo', 'orden', 'fecha_creacion']
+    list_filter = ['activo', 'fecha_creacion']
+    search_fields = ['texto']
+    list_editable = ['activo', 'orden']
+    list_per_page = 30
+    ordering = ['orden', 'texto']
+    
+    fieldsets = (
+        ('Información Básica', {
+            'fields': ('texto', 'activo', 'orden')
+        }),
+        ('Asociación a Categorías', {
+            'description': 'Deja vacío para que esté disponible en todas las categorías. O selecciona categorías específicas (GM_CODIGO)',
+            'fields': ('categorias',)
+        }),
+    )
+    
+    def categorias_display(self, obj):
+        if not obj.categorias or len(obj.categorias) == 0:
+            return format_html('<span style="color: green; font-weight: bold;">TODAS LAS CATEGORÍAS</span>')
+        return ', '.join(obj.categorias) if isinstance(obj.categorias, list) else str(obj.categorias)
+    categorias_display.short_description = 'Categorías'
 
 # ========== FILTRO PERSONALIZADO PARA FECHAS ==========
 class RangoFechasFilter(admin.SimpleListFilter):

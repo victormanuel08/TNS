@@ -40,7 +40,78 @@
         Sesión iniciada. Ahora puedes elegir tu empresa o ir al
         <NuxtLink to="/">dashboard</NuxtLink>.
       </p>
+
+      <!-- Botón discreto para login con API Key -->
+      <div class="api-key-link">
+        <button 
+          type="button" 
+          class="api-key-btn"
+          @click="showApiKeyModal = true"
+        >
+          🔑 Login con API Key
+        </button>
+      </div>
     </SectionCard>
+
+    <!-- Modal API Key -->
+    <div v-if="showApiKeyModal" class="modal-overlay" @click="showApiKeyModal = false">
+      <div class="modal-content" @click.stop>
+        <h3>Login con API Key</h3>
+        <div v-if="storedApiKey" class="stored-key-section">
+          <p class="stored-key-label">API Key guardada:</p>
+          <div class="stored-key-display">
+            <code>{{ maskedApiKey }}</code>
+            <button 
+              type="button" 
+              class="btn-small btn-danger"
+              @click="clearStoredApiKey"
+            >
+              🗑️ Borrar
+            </button>
+          </div>
+          <button 
+            type="button" 
+            class="btn-primary"
+            @click="useStoredApiKey"
+            :disabled="session.loading.value"
+          >
+            {{ session.loading.value ? 'Validando...' : 'Usar API Key guardada' }}
+          </button>
+          <hr />
+          <p class="or-text">O ingresa una nueva:</p>
+        </div>
+        <form @submit.prevent="() => handleApiKeyLogin()">
+          <label>
+            API Key
+            <input
+              v-model="apiKeyForm.apiKey"
+              type="password"
+              placeholder="sk_..."
+              required
+            />
+          </label>
+          <div class="modal-actions">
+            <button 
+              type="button" 
+              class="btn-secondary"
+              @click="showApiKeyModal = false"
+            >
+              Cancelar
+            </button>
+            <button 
+              type="submit" 
+              class="btn-primary"
+              :disabled="session.loading.value"
+            >
+              {{ session.loading.value ? 'Validando...' : 'Ingresar' }}
+            </button>
+          </div>
+        </form>
+        <p v-if="session.lastError.value" class="error-text">
+          {{ session.lastError.value }}
+        </p>
+      </div>
+    </div>
 
     <SectionCard
       title="Empresas disponibles"
@@ -170,7 +241,7 @@
 
       <div v-if="session.validation.value" class="validation-result">
         <h4>Resultado</h4>
-        <pre>{{ session.validation.value.VALIDATE }}</pre>
+        <pre>{{ session.validation.value.VALIDATE || session.validation.value.validation || session.validation.value }}</pre>
       </div>
     </SectionCard>
   </div>
@@ -183,6 +254,73 @@ definePageMeta({
 
 const session = useSessionStore()
 const loginFinished = ref(false)
+const showApiKeyModal = ref(false)
+const storedApiKey = ref<string | null>(null)
+
+// Cargar API Key guardada al montar
+onMounted(() => {
+  storedApiKey.value = session.getStoredApiKey()
+})
+
+const maskedApiKey = computed(() => {
+  if (!storedApiKey.value) return ''
+  const key = storedApiKey.value
+  if (key.length <= 8) return '***'
+  return key.substring(0, 4) + '***' + key.substring(key.length - 4)
+})
+
+const apiKeyForm = reactive({
+  apiKey: ''
+})
+
+const clearStoredApiKey = () => {
+  session.setApiKey(null)
+  storedApiKey.value = null
+  apiKeyForm.apiKey = ''
+}
+
+const useStoredApiKey = async () => {
+  if (!storedApiKey.value) return
+  await handleApiKeyLogin(storedApiKey.value)
+}
+
+const handleApiKeyLogin = async (apiKeyValue?: string) => {
+  // Asegurar que no recibimos un evento
+  if (apiKeyValue && typeof apiKeyValue !== 'string') {
+    console.warn('handleApiKeyLogin recibió un valor no string:', apiKeyValue)
+    apiKeyValue = undefined
+  }
+  
+  const apiKey = apiKeyValue || apiKeyForm.apiKey.trim()
+  if (!apiKey) {
+    session.lastError.value = 'Por favor ingresa una API Key'
+    return
+  }
+
+  try {
+    console.log('[login] Enviando API Key:', apiKey.substring(0, 10) + '...')
+    await session.loginWithApiKey(apiKey)
+    storedApiKey.value = apiKey
+    showApiKeyModal.value = false
+    
+    // Si hay empresas, el modal se abrirá automáticamente
+    // Esperar a que se seleccione empresa y luego redirigir
+    if (session.empresas.value.length > 0) {
+      // Watch para redirigir cuando se seleccione empresa
+      const stopWatcher = watch(() => session.selectedEmpresa.value, (empresa) => {
+        if (empresa) {
+          stopWatcher() // Detener el watcher
+          navigateTo('/subdomain/retail')
+        }
+      })
+    } else {
+      // Si no hay empresas, redirigir directamente
+      navigateTo('/subdomain/retail')
+    }
+  } catch (error) {
+    console.error('Error en login con API Key:', error)
+  }
+}
 
 const loginForm = reactive({
   username: '',
@@ -341,5 +479,128 @@ hr {
   border: none;
   border-top: 1px solid var(--border-color);
   margin: 1.5rem 0;
+}
+
+.api-key-link {
+  margin-top: 1rem;
+  text-align: center;
+}
+
+.api-key-link {
+  margin-top: 1rem;
+  text-align: center;
+  padding: 0.5rem;
+}
+
+.api-key-btn {
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  color: #3b82f6;
+  font-size: 0.9rem;
+  padding: 0.6rem 1.2rem;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: all 0.2s;
+  font-weight: 500;
+}
+
+.api-key-btn:hover {
+  background: rgba(59, 130, 246, 0.2);
+  border-color: rgba(59, 130, 246, 0.5);
+  transform: translateY(-1px);
+}
+
+/* Modal */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background: var(--bg-primary);
+  border-radius: var(--border-radius);
+  padding: 2rem;
+  max-width: 500px;
+  width: 90%;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.modal-content h3 {
+  margin: 0 0 1.5rem 0;
+}
+
+.stored-key-section {
+  margin-bottom: 1.5rem;
+  padding: 1rem;
+  background: var(--bg-secondary);
+  border-radius: var(--border-radius);
+}
+
+.stored-key-label {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.5rem;
+}
+
+.stored-key-display {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.stored-key-display code {
+  flex: 1;
+  padding: 0.5rem;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 0.9rem;
+}
+
+.btn-small {
+  padding: 0.4rem 0.8rem;
+  font-size: 0.85rem;
+}
+
+.btn-danger {
+  background: #ef4444;
+  color: white;
+}
+
+.btn-secondary {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+}
+
+.modal-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 1rem;
+}
+
+.or-text {
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  margin: 1rem 0;
+}
+
+.error-text {
+  color: #ef4444;
+  font-size: 0.85rem;
+  margin-top: 1rem;
 }
 </style>

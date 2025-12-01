@@ -50,51 +50,84 @@ const fallbackCompanies: Record<string, CompanyInfo> = {
   }
 }
 
+const storageKey = 'dev-subdomain'
+
 export const useSubdomain = () => {
-  const extractCompanyFromHost = (host?: string | null): string | null => {
-    if (!host) return null
-
-    const parts = host.split('.')
-    const modeKeywords = ['ecommerce', 'autopago', 'pro', 'pos', 'app']
-
-    if (modeKeywords.includes(parts[0]) && parts.length > 2) {
-      return parts[1]
-    }
-
-    return parts[0] || null
+  const normalize = (value?: string | null) => {
+    if (!value) return null
+    const cleaned = value.trim().toLowerCase()
+    return cleaned.length ? cleaned : null
   }
 
-  const getSubdomain = (): string => {
-    if (process.dev) {
-      const route = useRoute()
-      const querySubdomain = route.query.subdomain as string
-      if (querySubdomain) return querySubdomain
+  const extractCompanyFromHost = (host?: string | null): string | null => {
+    host = normalize(host)
+    if (!host) return null
 
-      if (process.client) {
-        return localStorage.getItem('dev-subdomain') || 'app'
-      }
-
-      return 'app'
+    const segments = host.split('.').filter(Boolean)
+    if (segments.length < 2) {
+      return null
     }
+
+    const lastSegment = segments[segments.length - 1]
+    if (lastSegment === 'localhost') {
+      if (segments.length >= 2) {
+        return segments.slice(0, segments.length - 1).join('.') || null
+      }
+      return null
+    }
+
+    return segments[0] || null
+  }
+
+  const getStoredSubdomain = () => {
+    if (process.client) {
+      const stored = localStorage.getItem(storageKey)
+      return normalize(stored)
+    }
+    return null
+  }
+
+  const setStoredSubdomain = (subdomain: string) => {
+    if (process.client) {
+      localStorage.setItem(storageKey, subdomain)
+    }
+  }
+
+  const getSubdomain = (): string | null => {
+    let resolved: string | null = null
 
     if (process.server) {
       const event = useRequestEvent()
       const host =
-        (event.node.req.headers['x-forwarded-host'] as string) ||
-        (event.node.req.headers.host as string)
-      return extractCompanyFromHost(host) || 'app'
+        (event?.node?.req?.headers['x-forwarded-host'] as string) ||
+        (event?.node?.req?.headers.host as string)
+      resolved = extractCompanyFromHost(host)
+      return resolved
     }
 
-    const host =
-      typeof window !== 'undefined' && window.location
-        ? window.location.hostname
-        : null
-    return extractCompanyFromHost(host) || 'app'
+    if (process.client) {
+      resolved = extractCompanyFromHost(window.location.hostname)
+      if (resolved) {
+        return resolved
+      }
+
+      const route = useRoute()
+      const querySubdomain = normalize(route.query.subdomain as string)
+      if (querySubdomain) {
+        setStoredSubdomain(querySubdomain)
+        return querySubdomain
+      }
+
+      return getStoredSubdomain()
+    }
+
+    return null
   }
 
   const setDevSubdomain = (subdomain: string) => {
-    if (process.dev && process.client) {
-      localStorage.setItem('dev-subdomain', subdomain)
+    const normalized = normalize(subdomain)
+    if (normalized && process.client) {
+      setStoredSubdomain(normalized)
       window.location.reload()
     }
   }
@@ -115,8 +148,13 @@ export const useSubdomain = () => {
     )
   }
 
-  const getCompanyInfo = async (): Promise<CompanyInfo> => {
-    const subdomain = getSubdomain()
+  const getCompanyInfo = async (
+    providedSubdomain?: string | null
+  ): Promise<CompanyInfo | null> => {
+    const subdomain = normalize(providedSubdomain) ?? getSubdomain()
+    if (!subdomain) {
+      return null
+    }
     const config = useRuntimeConfig()
 
     if (!config.public.enableBackend) {

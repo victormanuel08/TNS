@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Ticket de Error - Pago Exitoso</title>
+    <style>
+        body {
+            font-family: 'Arial Narrow', Arial, sans-serif;
+            font-size: 11px;
+            line-height: 1.3;
+            margin: 2mm;
+            padding: 0;
+            width: 76mm;
+            max-width: 76mm;
+            background: white;
+        }
+        
+        .ticket-container {
+            width: 100%;
+        }
+        
+        .error-header {
+            text-align: center;
+            background-color: #ffebee;
+            border: 2px solid #f44336;
+            padding: 3mm;
+            margin-bottom: 3mm;
+            border-radius: 2mm;
+        }
+        
+        .error-title {
+            font-weight: bold;
+            font-size: 13px;
+            color: #d32f2f;
+            text-transform: uppercase;
+            margin-bottom: 1mm;
+        }
+        
+        .error-message {
+            font-size: 10px;
+            color: #c62828;
+        }
+        
+        .header {
+            text-align: center;
+            border-bottom: 2px dashed #333;
+            padding-bottom: 2mm;
+            margin-bottom: 2mm;
+        }
+        
+        .company-name {
+            font-weight: bold;
+            font-size: 13px;
+            margin-bottom: 1mm;
+            text-transform: uppercase;
+        }
+        
+        .section {
+            margin: 2mm 0;
+            padding: 2mm;
+            background-color: #f9f9f9;
+            border-radius: 2mm;
+            border: 1px dashed #ccc;
+        }
+        
+        .section-title {
+            font-weight: bold;
+            font-size: 11px;
+            margin-bottom: 1mm;
+            text-transform: uppercase;
+            color: #333;
+        }
+        
+        .info-line {
+            font-size: 10px;
+            margin: 0.5mm 0;
+        }
+        
+        .items-section {
+            margin: 2mm 0;
+        }
+        
+        .item-line {
+            margin: 1mm 0;
+            font-size: 10px;
+            padding: 1mm;
+            background-color: white;
+            border-left: 2px solid #ccc;
+            padding-left: 2mm;
+        }
+        
+        .item-name {
+            font-weight: bold;
+        }
+        
+        .item-quantity {
+            color: #666;
+        }
+        
+        .payment-info {
+            background-color: #e3f2fd;
+            border-color: #2196f3;
+        }
+        
+        .payment-info .section-title {
+            color: #1976d2;
+        }
+        
+        .total {
+            text-align: center;
+            margin: 3mm 0;
+            padding: 2mm;
+            border-top: 2px dashed #333;
+            border-bottom: 2px dashed #333;
+            font-weight: bold;
+            font-size: 13px;
+            background-color: #fff9c4;
+        }
+        
+        .important {
+            background-color: #fff3e0;
+            border-color: #ff9800;
+        }
+        
+        .important .section-title {
+            color: #e65100;
+        }
+        
+        .footer {
+            text-align: center;
+            margin-top: 3mm;
+            font-size: 9px;
+            border-top: 1px dashed #ccc;
+            padding-top: 2mm;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="ticket-container">
+        <!-- Encabezado de Error -->
+        <div class="error-header">
+            <div class="error-title">⚠️ Error al Crear Factura</div>
+            <div class="error-message">Pago exitoso - Factura no creada</div>
+        </div>
+        
+        <!-- Encabezado de Empresa -->
+        <div class="header">
+            <div class="company-name">{{ request_api.company_name|default:"EMPRESA" }}</div>
+            <div style="font-size: 9px;">NIT: {{ request_api.company_nit|default:"" }}</div>
+        </div>
+        
+        <!-- Información del Pedido -->
+        <div class="section">
+            <div class="section-title">Información del Pedido</div>
+            <div class="info-line">Fecha: {{ request_api.date }}</div>
+            <div class="info-line">Hora: {{ request_api.time }}</div>
+            <div class="info-line">Referencia: {{ request_api.referencia }}</div>
+            {% if request_api.observaciones %}
+            <div class="info-line"><strong>Observaciones:</strong> {{ request_api.observaciones }}</div>
+            {% endif %}
+        </div>
+        
+        <!-- Items del Pedido -->
+        <div class="section items-section">
+            <div class="section-title">Productos</div>
+            {% for item in request_api.invoice_lines %}
+            <div class="item-line">
+                <span class="item-quantity">{{ item.invoiced_quantity }}x</span>
+                <span class="item-name">{{ item.description }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        
+        <!-- Información del Cliente -->
+        {% if request_api.customer %}
+        <div class="section">
+            <div class="section-title">Cliente</div>
+            <div class="info-line">Nombre: {{ request_api.customer.name }}</div>
+            {% if request_api.customer.identification_number %}
+            <div class="info-line">NIT/CC: {{ request_api.customer.identification_number }}{% if request_api.customer.dv %}-{{ request_api.customer.dv }}{% endif %}</div>
+            {% endif %}
+            {% if request_api.customer.phone %}
+            <div class="info-line">Tel: {{ request_api.customer.phone }}</div>
+            {% endif %}
+        </div>
+        {% endif %}
+        
+        <!-- Información de Pago -->
+        <div class="section payment-info">
+            <div class="section-title">Información de Pago</div>
+            <div class="info-line"><strong>Monto Pagado: ${{ request_api.legal_monetary_totals.payable_amount }}</strong></div>
+            {% if request_api.payment_data.numero_aprobacion %}
+            <div class="info-line">Aprobación: {{ request_api.payment_data.numero_aprobacion }}</div>
+            {% endif %}
+            {% if request_api.payment_data.ultimos_digitos %}
+            <div class="info-line">Tarjeta: ****{{ request_api.payment_data.ultimos_digitos }}</div>
+            {% endif %}
+            {% if request_api.payment_data.franquicia %}
+            <div class="info-line">Franquicia: {{ request_api.payment_data.franquicia }}</div>
+            {% endif %}
+            {% if request_api.payment_data.tipo_cuenta %}
+            <div class="info-line">Tipo: {{ request_api.payment_data.tipo_cuenta }}</div>
+            {% endif %}
+            {% if request_api.payment_data.referencia %}
+            <div class="info-line">Referencia Pago: {{ request_api.payment_data.referencia }}</div>
+            {% endif %}
+            {% if request_api.payment_data.rrn %}
+            <div class="info-line">RRN: {{ request_api.payment_data.rrn }}</div>
+            {% endif %}
+            {% if request_api.payment_data.codigo_autorizacion %}
+            <div class="info-line">Código Autorización: {{ request_api.payment_data.codigo_autorizacion }}</div>
+            {% endif %}
+        </div>
+        
+        <!-- Información Importante para Reclamos -->
+        <div class="section important">
+            <div class="section-title">⚠️ Información para Reclamos</div>
+            <div class="info-line"><strong>ID Transacción:</strong> {{ request_api.transaction_id|default:request_api.referencia }}</div>
+            <div class="info-line"><strong>Fecha/Hora:</strong> {{ request_api.date }} {{ request_api.time }}</div>
+            <div class="info-line"><strong>Monto:</strong> ${{ request_api.legal_monetary_totals.payable_amount }}</div>
+            {% if request_api.payment_data.numero_aprobacion %}
+            <div class="info-line"><strong>Aprobación:</strong> {{ request_api.payment_data.numero_aprobacion }}</div>
+            {% endif %}
+            <div class="info-line" style="margin-top: 2mm; font-size: 9px; color: #d32f2f;">
+                <strong>Conserve este ticket para cualquier reclamo</strong>
+            </div>
+        </div>
+        
+        <!-- Total -->
+        <div class="total">
+            TOTAL PAGADO: ${{ request_api.legal_monetary_totals.payable_amount }}
+        </div>
+        
+        <!-- Pie de Página -->
+        <div class="footer">
+            <div>Este ticket confirma que el pago fue exitoso</div>
+            <div>pero hubo un error al crear la factura en el sistema.</div>
+            <div style="margin-top: 2mm;">Por favor contacte al establecimiento</div>
+            <div>con la información de este ticket.</div>
+        </div>
+    </div>
+</body>
+</html>
+

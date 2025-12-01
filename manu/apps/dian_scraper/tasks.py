@@ -1,4 +1,5 @@
 import asyncio
+import re
 from datetime import timedelta
 
 from celery import shared_task
@@ -53,6 +54,14 @@ def run_dian_scraping_task(session_id):
                 session.ejecutado_hasta = fecha_hasta
                 
                 # Crear registros de documentos procesados
+                actual_nit = _extract_actual_nit(
+                    processing_result['documents'],
+                    session.tipo,
+                    session.nit,
+                )
+                if actual_nit:
+                    session.nit = actual_nit
+
                 for doc_data in processing_result['documents']:
                     DocumentProcessed.objects.create(
                         session=session,
@@ -87,6 +96,24 @@ def run_dian_scraping_task(session_id):
 def run_dian_scraping_sync(session_id):
     """Versión síncrona para desarrollo/testing"""
     return run_dian_scraping_task(session_id)
+
+
+def _extract_actual_nit(documents, tipo, fallback):
+    target_field = 'NIT del Emisor'
+    if tipo and str(tipo).lower().startswith('rece'):
+        target_field = 'NIT del Receptor'
+
+    for doc in documents or []:
+        candidate = _normalize_nit(doc.get(target_field, ''))
+        if candidate:
+            return candidate
+    return _normalize_nit(fallback)
+
+
+def _normalize_nit(value):
+    if not value:
+        return ''
+    return re.sub(r'\D', '', str(value))
 
 
 def _merge_coverage(nit: str, tipo: str, start, end):
