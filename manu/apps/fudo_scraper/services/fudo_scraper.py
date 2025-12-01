@@ -5,7 +5,7 @@ import time
 import firebirdsql
 import platform
 import tempfile
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional, List
 from django.conf import settings
 from apps.sistema_analitico.models import EmpresaServidor, Servidor
@@ -55,7 +55,7 @@ class FudoScraperService:
     def obtener_token(self):
         """Obtiene y almacena el token de autenticación con su fecha de expiración"""
         if self.token_info['token'] and self.token_info['expires_at']:
-            now = datetime.now(UTC)
+            now = datetime.now(timezone.utc)
             if now < self.token_info['expires_at']:
                 return self.token_info['token']
 
@@ -65,7 +65,7 @@ class FudoScraperService:
 
         if response.status_code == 200:
             self.token_info['token'] = response.json()["token"]
-            self.token_info['expires_at'] = datetime.now(UTC) + timedelta(hours=1)
+            self.token_info['expires_at'] = datetime.now(timezone.utc) + timedelta(hours=1)
             return self.token_info['token']
         raise Exception(
             f"Error en autenticación: {response.status_code} - {response.text}")
@@ -78,7 +78,7 @@ class FudoScraperService:
 
         # Verificar caché
         if not os.getenv('FORCE_CACHE', '0') == '1':
-            today = datetime.now(UTC).date()
+            today = datetime.now(timezone.utc).date()
             if (self.cache.get(cache_key, {}).get('data') is not None and
                     self.cache[cache_key]['last_updated'] == today):
                 if item_id is None:
@@ -105,7 +105,7 @@ class FudoScraperService:
                          for k, v in datos.items()]
 
             # Actualizar caché
-            today = datetime.now(UTC).date()
+            today = datetime.now(timezone.utc).date()
             if endpoint == 'products' and params and params.get('a') == -1:
                 self.cache['products'] = {'data': datos, 'last_updated': today}
             else:
