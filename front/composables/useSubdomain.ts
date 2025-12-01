@@ -69,14 +69,26 @@ export const useSubdomain = () => {
     }
 
     const lastSegment = segments[segments.length - 1]
+    
+    // Para localhost, permitir subdominios (ej: pepito.localhost)
     if (lastSegment === 'localhost') {
-      if (segments.length >= 2) {
+      if (segments.length > 2) {
+        // Hay subdominio: pepito.localhost → pepito
         return segments.slice(0, segments.length - 1).join('.') || null
       }
+      // Solo localhost sin subdominio
       return null
     }
 
-    return segments[0] || null
+    // Para dominios reales, solo detectar subdominio si hay más de 2 segmentos
+    // eddeso.com → null (no hay subdominio)
+    // pepito.eddeso.com → pepito (hay subdominio)
+    if (segments.length > 2) {
+      return segments[0] || null
+    }
+
+    // Dominio base sin subdominio
+    return null
   }
 
   const getStoredSubdomain = () => {
