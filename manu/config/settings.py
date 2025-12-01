@@ -165,9 +165,9 @@ SIMPLE_JWT = {
 # Internationalization
 # https://docs.djangoproject.com/en/5.2/topics/i18n/
 
-LANGUAGE_CODE = 'en-us'
+LANGUAGE_CODE = 'es-co'  # Español Colombia
 
-TIME_ZONE = 'UTC'
+TIME_ZONE = 'America/Bogota'  # Zona horaria de Bogotá, Colombia
 
 USE_I18N = True
 
@@ -198,7 +198,7 @@ CELERY_RESULT_BACKEND = REDIS_URL
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
-CELERY_TIMEZONE = 'UTC'
+CELERY_TIMEZONE = 'America/Bogota'  # Zona horaria de Bogotá, Colombia
 
 # Configuración API DIAN
 API_DIAN_ROUTE = env('API_DIAN_ROUTE', default='http://45.149.204.184:81')
