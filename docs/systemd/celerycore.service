@@ -1,0 +1,42 @@
+[Unit]
+Description=Celery Worker for TNS Core
+After=network.target redis-server.service
+Requires=redis-server.service
+
+[Service]
+Type=notify
+User=victus
+Group=victus
+WorkingDirectory=/home/victus/projects/CORE/manu
+Environment="PATH=/home/victus/projects/CORE/manu/env/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=/home/victus/projects/CORE/manu/.env
+
+# Comando para iniciar Celery
+# -P prefork: Pool de procesos para Linux (NO usar -P solo que es para Windows)
+# -E: Habilitar eventos de tareas para monitoreo
+# -l info: Nivel de logging
+# --time-limit: Tiempo máximo por tarea (opcional)
+ExecStart=/home/victus/projects/CORE/manu/env/bin/celery -A config worker -l info -P prefork --concurrency=4 -E --time-limit=3600
+
+# Notificar a systemd cuando esté listo
+NotifyAccess=all
+
+# Timeouts aumentados para dar tiempo a Celery de iniciar
+TimeoutStartSec=300
+TimeoutStopSec=60
+
+# Reiniciar automáticamente si falla
+Restart=always
+RestartSec=10
+
+# Límites de recursos (opcional, ajustar según necesidades)
+LimitNOFILE=65536
+
+# Logs
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=celerycore
+
+[Install]
+WantedBy=multi-user.target
+

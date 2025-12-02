@@ -7,7 +7,11 @@ Este repositorio contiene el backend Django para scraping DIAN, analítica/ML y 
 2. Instala dependencias: `pip install -r requirements.txt`.
 3. Ejecuta migraciones con `python manage.py migrate` y crea un superusuario si lo necesitas.
 4. Levanta el servidor: `python manage.py runserver 0.0.0.0:8000`.
-5. Para tareas DIAN/TNS, ejecuta también el worker: `celery -A config worker -l info -P solo`.
+5. Para tareas DIAN/TNS, ejecuta también el worker: 
+   - **Linux**: `celery -A config worker -l info -P prefork --concurrency=4 -E`
+   - **Windows**: `celery -A config worker -l info -P solo`
+   
+   **Nota**: En producción Linux, usa el servicio systemd (ver `docs/systemd/celerycore.service`).
 
 ## Documentación
 
