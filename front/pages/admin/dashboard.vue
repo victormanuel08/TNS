@@ -83,17 +83,28 @@
               </p>
             </div>
             <div class="server-actions">
-              <button class="btn-small btn-primary" @click="scanEmpresas(server.id)" :disabled="scanningServer === server.id">
+              <button 
+                class="btn-small btn-primary" 
+                @click="scanEmpresas(server.id)" 
+                :disabled="scanningServer === server.id"
+                :title="activeScanTasks[server.id] ? 'Hay un proceso en curso. Haz clic para ver el progreso.' : 'Escanear empresas en este servidor'"
+              >
                 <svg v-if="scanningServer === server.id" class="spinner-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+                </svg>
+                <svg v-else-if="activeScanTasks[server.id]" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10"/>
+                  <polyline points="12 6 12 12 16 14"/>
                 </svg>
                 <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <circle cx="11" cy="11" r="8"/>
                   <path d="m21 21-4.35-4.35"/>
                 </svg>
-                Escanear Empresas
+                {{ activeScanTasks[server.id] ? 'Ver Progreso' : 'Escanear Empresas' }}
               </button>
-              <button class="btn-small btn-secondary" @click="viewServerDetails(server.id)">Ver Detalles</button>
+              <button class="btn-small btn-secondary" @click="editServer(server)">Editar</button>
+              <button class="btn-small btn-info" @click="viewServerDetails(server.id)">Detalles</button>
+              <button class="btn-small btn-danger" @click="deleteServer(server.id)">Eliminar</button>
             </div>
           </div>
         </div>
@@ -195,7 +206,14 @@
                     </span>
                   </td>
                   <td>
-                    <button class="btn-small btn-secondary">Actualizar</button>
+                    <div class="action-buttons">
+                      <button class="btn-small btn-primary" @click="openExtractDataModal(empresa)" title="Extraer datos">
+                        📥 Extraer Datos
+                      </button>
+                      <button class="btn-small btn-info" @click="viewEmpresaDetails(empresa.id)" title="Ver detalles">
+                        👁️
+                      </button>
+                    </div>
                   </td>
                 </tr>
               </tbody>
@@ -242,6 +260,123 @@
         </div>
       </section>
 
+      <!-- API Keys -->
+      <section v-if="activeSection === 'api-keys'" class="section">
+        <div class="section-header">
+          <h2>Gestión de API Keys</h2>
+          <div class="actions-bar">
+            <button class="btn-primary" @click="showCreateApiKey = true">
+              <span>+</span> Generar API Key
+            </button>
+            <button class="btn-secondary" @click="loadApiKeys" :disabled="loadingApiKeys">
+              <span v-if="loadingApiKeys">⟳</span>
+              <span v-else>↻</span>
+              Actualizar
+            </button>
+          </div>
+        </div>
+        
+        <div v-if="loadingApiKeys" class="loading-state">
+          <p>Cargando API Keys...</p>
+        </div>
+        
+        <div v-else-if="apiKeys.length === 0" class="empty-state">
+          <p>No hay API Keys generadas</p>
+        </div>
+        
+        <div v-else class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>NIT</th>
+                <th>Cliente</th>
+                <th>API Key</th>
+                <th>Empresas Asociadas</th>
+                <th>Estado</th>
+                <th>Fecha Creación</th>
+                <th>Fecha Caducidad</th>
+                <th>Peticiones</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="key in apiKeys" :key="key.id">
+                <td><code>{{ key.nit }}</code></td>
+                <td><strong>{{ key.nombre_cliente }}</strong></td>
+                <td>
+                  <div class="api-key-cell">
+                    <code v-if="!key.showKey" class="api-key-masked">{{ key.api_key_masked || '••••••••' }}</code>
+                    <code v-else class="api-key-visible">{{ key.api_key }}</code>
+                    <button 
+                      class="btn-tiny btn-secondary" 
+                      @click="toggleApiKeyVisibility(key.id)"
+                      :title="key.showKey ? 'Ocultar' : 'Mostrar'"
+                    >
+                      {{ key.showKey ? '👁️' : '👁️‍🗨️' }}
+                    </button>
+                    <button 
+                      class="btn-tiny btn-info" 
+                      @click="copyApiKey(key.api_key)"
+                      title="Copiar"
+                    >
+                      📋
+                    </button>
+                  </div>
+                </td>
+                <td>
+                  <span class="badge">{{ key.empresas_asociadas_count || 0 }}</span>
+                  <button 
+                    v-if="key.empresas_asociadas_count > 0"
+                    class="btn-tiny btn-info" 
+                    @click="viewApiKeyEmpresas(key.id)"
+                    title="Ver empresas"
+                  >
+                    👁️
+                  </button>
+                </td>
+                <td>
+                  <span class="status-badge" :class="key.activa && !key.expirada ? 'status-active' : 'status-inactive'">
+                    {{ key.activa && !key.expirada ? 'Activa' : (key.expirada ? 'Expirada' : 'Inactiva') }}
+                  </span>
+                </td>
+                <td>{{ formatDate(key.fecha_creacion) }}</td>
+                <td>
+                  <span :class="key.expirada ? 'text-danger' : ''">
+                    {{ formatDate(key.fecha_caducidad) }}
+                  </span>
+                </td>
+                <td>{{ key.contador_peticiones || 0 }}</td>
+                <td>
+                  <div class="action-buttons">
+                    <button 
+                      class="btn-small btn-primary" 
+                      @click="regenerateApiKey(key.id)"
+                      title="Regenerar"
+                    >
+                      🔄
+                    </button>
+                    <button 
+                      class="btn-small btn-secondary" 
+                      @click="toggleApiKeyStatus(key.id, !key.activa)"
+                      :title="key.activa ? 'Desactivar' : 'Activar'"
+                    >
+                      {{ key.activa ? '⏸️' : '▶️' }}
+                    </button>
+                    <button 
+                      class="btn-small btn-danger" 
+                      @click="revokeApiKey(key.id)"
+                      title="Revocar"
+                    >
+                      🗑️
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       <!-- Scrapers -->
       <section v-if="activeSection === 'scrapers'" class="section">
         <div class="section-header">
@@ -279,18 +414,83 @@
       <section v-if="activeSection === 'ml'" class="section">
         <div class="section-header">
           <h2>Modelos de Machine Learning</h2>
+          <div class="actions-bar">
+            <select v-model="mlFilterEmpresa" class="filter-select">
+              <option value="">Todas las empresas</option>
+              <option v-for="empresa in empresas" :key="empresa.id" :value="empresa.id">
+                {{ empresa.nombre }} ({{ empresa.nit }})
+              </option>
+            </select>
+            <button class="btn-secondary" @click="loadMLModels" :disabled="loadingML">
+              <span v-if="loadingML">⟳</span>
+              <span v-else>↻</span>
+              Actualizar
+            </button>
+          </div>
         </div>
-        <div v-if="mlModels.length === 0" class="empty-state">
+        
+        <div v-if="loadingML" class="loading-state">
+          <p>Cargando modelos...</p>
+        </div>
+        
+        <div v-else-if="filteredMLModels.length === 0" class="empty-state">
           <p>No hay modelos entrenados</p>
+          <p style="margin-top: 1rem; color: #666;">Selecciona una empresa y haz clic en "Entrenar Modelo" para comenzar</p>
         </div>
+        
         <div v-else class="models-grid">
-          <div v-for="model in mlModels" :key="model.id" class="model-card">
-            <h3>{{ model.nombre }}</h3>
-            <p class="model-info">Empresa: {{ model.empresa }}</p>
-            <p class="model-info">Última actualización: {{ model.updated }}</p>
+          <div v-for="model in filteredMLModels" :key="model.id" class="model-card">
+            <div class="model-header">
+              <h3>{{ model.nombre || `Modelo ${model.nit_empresa}` }}</h3>
+              <span class="model-badge">NIT: {{ model.nit_empresa }}</span>
+            </div>
+            <div class="model-info">
+              <p><strong>Fecha entrenamiento:</strong> {{ formatDate(model.fecha_entrenamiento) }}</p>
+              <p><strong>Filas de entrenamiento:</strong> {{ model.filas_entrenamiento || 0 }}</p>
+              <p v-if="model.mlflow_run_id"><strong>MLflow Run ID:</strong> <code>{{ model.mlflow_run_id }}</code></p>
+            </div>
             <div class="model-actions">
-              <button class="btn-small btn-primary">Entrenar</button>
-              <button class="btn-small btn-secondary">Visualizar</button>
+              <button 
+                class="btn-small btn-primary" 
+                @click="trainModel(model.empresa_servidor_id_original || model.empresa_servidor_id)"
+                :disabled="trainingModel === (model.empresa_servidor_id_original || model.empresa_servidor_id)"
+              >
+                <span v-if="trainingModel === (model.empresa_servidor_id_original || model.empresa_servidor_id)">⟳</span>
+                <span v-else>🔄 Re-entrenar</span>
+              </button>
+              <button 
+                v-if="model.mlflow_ui_url" 
+                class="btn-small btn-info" 
+                @click="window.open(model.mlflow_ui_url, '_blank')"
+              >
+                📊 Ver en MLflow
+              </button>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Botón para entrenar nuevo modelo -->
+        <div v-if="empresas.length > 0" class="section-footer" style="margin-top: 2rem; padding-top: 2rem; border-top: 1px solid #e5e7eb;">
+          <h3 style="margin-bottom: 1rem;">Entrenar Nuevo Modelo</h3>
+          <div class="form-row" style="max-width: 600px;">
+            <div class="form-group">
+              <label>Seleccionar Empresa *</label>
+              <select v-model="newModelEmpresaId" class="form-input" required>
+                <option value="">Seleccionar empresa...</option>
+                <option v-for="empresa in empresas" :key="empresa.id" :value="empresa.id">
+                  {{ empresa.nombre }} ({{ empresa.nit }}) - Año {{ empresa.anio_fiscal }}
+                </option>
+              </select>
+            </div>
+            <div class="form-group" style="display: flex; align-items: flex-end;">
+              <button 
+                class="btn-primary" 
+                @click="trainModel(newModelEmpresaId)"
+                :disabled="!newModelEmpresaId || trainingModel === newModelEmpresaId"
+              >
+                <span v-if="trainingModel === newModelEmpresaId">⟳</span>
+                <span v-else>🚀 Entrenar Modelo</span>
+              </button>
             </div>
           </div>
         </div>
@@ -1034,10 +1234,11 @@ const empresaPageSize = ref(10)
 
 const user = computed(() => session.user)
 
+// Secciones ordenadas de forma secuencial según el flujo del sistema
 const sections = [
   { 
     id: 'servidores', 
-    name: 'Servidores', 
+    name: '1. Servidores', 
     icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
       <line x1="8" y1="21" x2="16" y2="21"/>
@@ -1045,13 +1246,36 @@ const sections = [
     </svg>`
   },
   { 
+    id: 'vpn', 
+    name: '2. VPN', 
+    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+      <path d="M9 12l2 2 4-4"/>
+    </svg>`
+  },
+  { 
     id: 'empresas', 
-    name: 'Empresas', 
+    name: '3. Empresas', 
     icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
       <circle cx="9" cy="7" r="4"/>
       <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
       <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+    </svg>`
+  },
+  { 
+    id: 'api-keys', 
+    name: '4. API Keys', 
+    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>
+    </svg>`
+  },
+  { 
+    id: 'ml', 
+    name: '5. ML Models', 
+    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+      <path d="M2 17l10 5 10-5M2 12l10 5 10-5"/>
     </svg>`
   },
   { 
@@ -1061,22 +1285,6 @@ const sections = [
       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
       <polyline points="7 10 12 15 17 10"/>
       <line x1="12" y1="15" x2="12" y2="3"/>
-    </svg>`
-  },
-  { 
-    id: 'ml', 
-    name: 'ML Models', 
-    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <path d="M12 2L2 7l10 5 10-5-10-5z"/>
-      <path d="M2 17l10 5 10-5M2 12l10 5 10-5"/>
-    </svg>`
-  },
-  { 
-    id: 'vpn', 
-    name: 'VPN', 
-    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-      <path d="M9 12l2 2 4-4"/>
     </svg>`
   },
   { 
@@ -1101,15 +1309,30 @@ const sections = [
 const servers = ref<Servidor[]>([])
 const empresas = ref<Empresa[]>([])
 const mlModels = ref<any[]>([])
+const mlFilterEmpresa = ref('')
+const newModelEmpresaId = ref('')
+const trainingModel = ref<number | null>(null)
+const loadingML = ref(false)
 const vpnConfigs = ref<any[]>([])
+const apiKeys = ref<any[]>([])
 const loadingServers = ref(false)
 const loadingEmpresas = ref(false)
 const loadingVpn = ref(false)
+const loadingApiKeys = ref(false)
 const scanningServer = ref<number | null>(null)
+const activeScanTasks = ref<Record<number, string>>({}) // servidor_id -> task_id
 const showCreateServer = ref(false)
+const showEditServer = ref(false)
+const editingServer = ref<Servidor | null>(null)
 const showCreateVpn = ref(false)
+const showCreateApiKey = ref(false)
 const creatingServer = ref(false)
 const creatingVpn = ref(false)
+const creatingApiKey = ref(false)
+const showExtractDataModal = ref(false)
+const extractingData = ref(false)
+const selectedEmpresaForExtract = ref<Empresa | null>(null)
+const extractDateRange = ref({ fecha_inicio: '', fecha_fin: '' })
 const editingNameId = ref<number | null>(null)
 const editingNameValue = ref('')
 const nameInput = ref<any>(null)
@@ -1230,9 +1453,37 @@ const loadServers = async () => {
   try {
     const response = await api.get<Servidor[]>('/api/servidores/')
     servers.value = Array.isArray(response) ? response : (response as any).results || []
+    
+    // Verificar si hay procesos corriendo para cada servidor
+    for (const server of servers.value) {
+      if (activeScanTasks.value[server.id]) {
+        const taskId = activeScanTasks.value[server.id]
+        try {
+          const statusResponse = await api.get(`/api/sistema/estado-descubrimiento/?task_id=${taskId}`)
+          const status = statusResponse.status
+          
+          // Si el proceso ya terminó, limpiar
+          if (status === 'SUCCESS' || status === 'ERROR' || status === 'FAILED') {
+            delete activeScanTasks.value[server.id]
+          }
+        } catch (error) {
+          // Si hay error consultando, asumir que terminó
+          delete activeScanTasks.value[server.id]
+        }
+      }
+    }
   } catch (error) {
     console.error('Error cargando servidores:', error)
-    alert('Error al cargar servidores')
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: 'Error al cargar servidores',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: {
+        container: 'swal-z-index-fix'
+      }
+    })
   } finally {
     loadingServers.value = false
   }
@@ -1279,23 +1530,214 @@ const loadEmpresas = async () => {
     })
   } catch (error) {
     console.error('Error cargando empresas:', error)
-    alert('Error al cargar empresas')
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: 'Error al cargar empresas',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: {
+        container: 'swal-z-index-fix'
+      }
+    })
   } finally {
     loadingEmpresas.value = false
   }
 }
 
 const scanEmpresas = async (serverId: number) => {
+  // Verificar si ya hay un proceso corriendo
+  if (activeScanTasks.value[serverId]) {
+    const Swal = (await import('sweetalert2')).default
+    const taskId = activeScanTasks.value[serverId]
+    
+    // Consultar estado del proceso existente
+    try {
+      const statusResponse = await api.get(`/api/sistema/estado-descubrimiento/?task_id=${taskId}`)
+      const status = statusResponse.status
+      const meta = statusResponse.meta || {}
+      
+      if (status === 'PROCESSING' || status === 'PENDING') {
+        await Swal.fire({
+          title: 'Proceso en curso',
+          html: `
+            <div style="text-align: left;">
+              <p><strong>Servidor:</strong> ${meta.servidor_nombre || 'Desconocido'}</p>
+              <p><strong>Estado:</strong> ${meta.status || 'Procesando...'}</p>
+              <p><strong>Empresas encontradas hasta ahora:</strong> ${meta.empresas_encontradas || 0}</p>
+            </div>
+          `,
+          icon: 'info',
+          confirmButtonText: 'Cerrar',
+          customClass: {
+            container: 'swal-z-index-fix'
+          }
+        })
+        return
+      } else if (status === 'SUCCESS') {
+        // Proceso completado, limpiar y continuar
+        delete activeScanTasks.value[serverId]
+      }
+    } catch (error) {
+      console.error('Error consultando estado:', error)
+    }
+  }
+  
   scanningServer.value = serverId
+  const Swal = (await import('sweetalert2')).default
+  
   try {
-    await api.post('/api/sistema/descubrir_empresas/', { servidor_id: serverId })
-    alert('Escaneo iniciado correctamente')
-    await loadEmpresas()
+    // Iniciar proceso asíncrono
+    const response = await api.post('/api/sistema/descubrir_empresas/', { servidor_id: serverId })
+    const taskId = response.task_id
+    
+    if (!taskId) {
+      throw new Error('No se recibió task_id del servidor')
+    }
+    
+    // Guardar task_id activo
+    activeScanTasks.value[serverId] = taskId
+    
+    // Mostrar modal de progreso
+    const server = servers.value.find(s => s.id === serverId)
+    const serverName = server?.nombre || 'Servidor'
+    
+    Swal.fire({
+      title: 'Escaneando empresas...',
+      html: `
+        <div style="text-align: left;">
+          <p><strong>Servidor:</strong> ${serverName}</p>
+          <p id="scan-status">Conectando al servidor...</p>
+          <div style="margin-top: 15px;">
+            <div class="progress-bar" style="width: 100%; height: 20px; background: #f0f0f0; border-radius: 10px; overflow: hidden;">
+              <div id="scan-progress" style="width: 0%; height: 100%; background: linear-gradient(90deg, #4CAF50, #45a049); transition: width 0.3s;"></div>
+            </div>
+          </div>
+          <p id="scan-details" style="margin-top: 10px; font-size: 0.9em; color: #666;"></p>
+        </div>
+      `,
+      icon: 'info',
+      allowOutsideClick: false,
+      showConfirmButton: false,
+      didOpen: () => {
+        Swal.showLoading()
+      },
+      customClass: {
+        container: 'swal-z-index-fix'
+      }
+    })
+    
+    // Polling para ver el progreso
+    const pollInterval = setInterval(async () => {
+      try {
+        const statusResponse = await api.get(`/api/sistema/estado-descubrimiento/?task_id=${taskId}`)
+        const status = statusResponse.status
+        const meta = statusResponse.meta || {}
+        const result = statusResponse.result
+        
+        const statusElement = document.getElementById('scan-status')
+        const progressElement = document.getElementById('scan-progress')
+        const detailsElement = document.getElementById('scan-details')
+        
+        if (status === 'PROCESSING' || status === 'PENDING') {
+          if (statusElement) {
+            statusElement.textContent = meta.status || 'Procesando...'
+          }
+          if (detailsElement) {
+            detailsElement.textContent = `Empresas encontradas: ${meta.empresas_encontradas || 0}`
+          }
+          // Progreso aproximado (no tenemos porcentaje exacto, así que animamos)
+          if (progressElement) {
+            const currentWidth = parseInt(progressElement.style.width) || 0
+            if (currentWidth < 90) {
+              progressElement.style.width = `${Math.min(currentWidth + 5, 90)}%`
+            }
+          }
+        } else if (status === 'SUCCESS' && result) {
+          clearInterval(pollInterval)
+          delete activeScanTasks.value[serverId]
+          scanningServer.value = null
+          
+          await Swal.fire({
+            title: '¡Escaneo completado!',
+            html: `
+              <div style="text-align: left;">
+                <p><strong>Servidor:</strong> ${result.servidor_nombre || serverName}</p>
+                <p><strong>Total de empresas encontradas:</strong> <strong style="color: #4CAF50;">${result.total_empresas || 0}</strong></p>
+                <p style="margin-top: 10px; color: #666;">${result.mensaje || 'El escaneo se completó exitosamente.'}</p>
+              </div>
+            `,
+            icon: 'success',
+            confirmButtonText: 'Aceptar',
+            customClass: {
+              container: 'swal-z-index-fix'
+            }
+          })
+          
+          // Recargar empresas
+          await loadEmpresas()
+        } else if (status === 'ERROR' || status === 'FAILED') {
+          clearInterval(pollInterval)
+          delete activeScanTasks.value[serverId]
+          scanningServer.value = null
+          
+          await Swal.fire({
+            title: 'Error en el escaneo',
+            html: `
+              <div style="text-align: left;">
+                <p><strong>Error:</strong></p>
+                <p style="color: #d32f2f;">${statusResponse.error || 'Error desconocido'}</p>
+              </div>
+            `,
+            icon: 'error',
+            confirmButtonText: 'Aceptar',
+            customClass: {
+              container: 'swal-z-index-fix'
+            }
+          })
+        }
+      } catch (error: any) {
+        console.error('Error consultando progreso:', error)
+        // Continuar polling aunque haya error
+      }
+    }, 2000) // Polling cada 2 segundos
+    
+    // Timeout de seguridad (5 minutos)
+    setTimeout(() => {
+      clearInterval(pollInterval)
+      if (activeScanTasks.value[serverId]) {
+        delete activeScanTasks.value[serverId]
+        scanningServer.value = null
+        Swal.close()
+        Swal.fire({
+          title: 'Tiempo de espera agotado',
+          text: 'El proceso está tomando más tiempo del esperado. Puede que aún esté ejecutándose en segundo plano.',
+          icon: 'warning',
+          confirmButtonText: 'Aceptar',
+          customClass: {
+            container: 'swal-z-index-fix'
+          }
+        })
+      }
+    }, 300000) // 5 minutos
+    
   } catch (error: any) {
     console.error('Error escaneando empresas:', error)
-    alert(error?.data?.error || 'Error al escanear empresas')
-  } finally {
     scanningServer.value = null
+    
+    await Swal.fire({
+      title: 'Error al iniciar escaneo',
+      html: `
+        <div style="text-align: left;">
+          <p style="color: #d32f2f;">${error?.data?.error || error?.message || 'Error desconocido al iniciar el escaneo'}</p>
+        </div>
+      `,
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: {
+        container: 'swal-z-index-fix'
+      }
+    })
   }
 }
 
@@ -1308,7 +1750,16 @@ const createServer = async () => {
   creatingServer.value = true
   try {
     await api.post('/api/servidores/', newServer.value)
-    alert('Servidor creado exitosamente')
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: '¡Éxito!',
+      text: 'Servidor creado exitosamente',
+      icon: 'success',
+      confirmButtonText: 'Aceptar',
+      customClass: {
+        container: 'swal-z-index-fix'
+      }
+    })
     showCreateServer.value = false
     newServer.value = {
       nombre: '',
@@ -1322,7 +1773,16 @@ const createServer = async () => {
     await loadServers()
   } catch (error: any) {
     console.error('Error creando servidor:', error)
-    alert(error?.data?.error || error?.message || 'Error al crear servidor')
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al crear servidor',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: {
+        container: 'swal-z-index-fix'
+      }
+    })
   } finally {
     creatingServer.value = false
   }
@@ -1508,6 +1968,29 @@ const syncPeers = async () => {
   } finally {
     syncingPeers.value = false
   }
+}
+
+const viewEmpresaDetails = async (empresaId: number) => {
+  const empresa = empresas.value.find(e => e.id === empresaId)
+  if (!empresa) return
+  
+  const Swal = (await import('sweetalert2')).default
+  await Swal.fire({
+    title: 'Detalles de Empresa',
+    html: `
+      <div style="text-align: left;">
+        <p><strong>Nombre:</strong> ${empresa.nombre}</p>
+        <p><strong>NIT:</strong> ${empresa.nit}</p>
+        <p><strong>Año Fiscal:</strong> ${empresa.anio_fiscal}</p>
+        <p><strong>Código:</strong> ${empresa.codigo}</p>
+        <p><strong>Servidor:</strong> ${empresa.servidor_nombre || '-'}</p>
+        <p><strong>Estado:</strong> ${empresa.estado || 'ACTIVO'}</p>
+      </div>
+    `,
+    icon: 'info',
+    confirmButtonText: 'Cerrar',
+    customClass: { container: 'swal-z-index-fix' }
+  })
 }
 
 const viewServerDetails = async (serverId: number) => {
@@ -1748,12 +2231,473 @@ const terminalHistoryDown = () => {
   }
 }
 
+// ========== API KEYS FUNCTIONS ==========
+const newApiKey = ref({
+  nit: '',
+  nombre_cliente: '',
+  dias_validez: 365
+})
+
+const loadApiKeys = async () => {
+  loadingApiKeys.value = true
+  try {
+    const response = await api.get<any>('/api/api-keys/listar_api_keys/')
+    const data = response.api_keys || []
+    apiKeys.value = data.map((key: any) => ({
+      ...key,
+      showKey: false,
+      api_key_masked: key.api_key ? `${key.api_key.substring(0, 8)}...${key.api_key.substring(key.api_key.length - 4)}` : '',
+      expirada: new Date(key.fecha_caducidad) < new Date(),
+      empresas_asociadas_count: key.empresas_asociadas?.length || 0
+    }))
+  } catch (error: any) {
+    console.error('Error cargando API Keys:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al cargar API Keys',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    loadingApiKeys.value = false
+  }
+}
+
+const createApiKey = async () => {
+  creatingApiKey.value = true
+  try {
+    const response = await api.post('/api/api-keys/generar_api_key/', newApiKey.value)
+    const Swal = (await import('sweetalert2')).default
+    
+    // Mostrar la API Key generada (solo se muestra una vez)
+    await Swal.fire({
+      title: '¡API Key Generada!',
+      html: `
+        <div style="text-align: left;">
+          <p><strong>NIT:</strong> ${response.nit}</p>
+          <p><strong>Cliente:</strong> ${response.nombre_cliente}</p>
+          <p><strong>Empresas asociadas:</strong> ${response.empresas_asociadas || 0}</p>
+          <div style="margin-top: 15px; padding: 10px; background: #f5f5f5; border-radius: 5px;">
+            <p style="margin-bottom: 5px;"><strong>API Key (GUARDA ESTA KEY):</strong></p>
+            <code style="font-size: 0.9em; word-break: break-all;">${response.api_key}</code>
+          </div>
+          <p style="margin-top: 10px; color: #d32f2f; font-size: 0.9em;">
+            ⚠️ Esta es la única vez que podrás ver esta clave. Guárdala en un lugar seguro.
+          </p>
+        </div>
+      `,
+      icon: 'success',
+      confirmButtonText: 'Copiar y Cerrar',
+      customClass: { container: 'swal-z-index-fix' },
+      didOpen: () => {
+        // Copiar automáticamente al portapapeles
+        navigator.clipboard.writeText(response.api_key).catch(() => {})
+      }
+    })
+    
+    showCreateApiKey.value = false
+    newApiKey.value = { nit: '', nombre_cliente: '', dias_validez: 365 }
+    await loadApiKeys()
+  } catch (error: any) {
+    console.error('Error generando API Key:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al generar API Key',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    creatingApiKey.value = false
+  }
+}
+
+const toggleApiKeyVisibility = (keyId: number) => {
+  const key = apiKeys.value.find(k => k.id === keyId)
+  if (key) {
+    key.showKey = !key.showKey
+  }
+}
+
+const copyApiKey = async (apiKey: string) => {
+  try {
+    await navigator.clipboard.writeText(apiKey)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Copiado',
+      text: 'API Key copiada al portapapeles',
+      icon: 'success',
+      timer: 1500,
+      showConfirmButton: false,
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } catch (error) {
+    console.error('Error copiando:', error)
+  }
+}
+
+const regenerateApiKey = async (keyId: number) => {
+  const Swal = (await import('sweetalert2')).default
+  const result = await Swal.fire({
+    title: '¿Regenerar API Key?',
+    text: 'Esto generará una nueva clave. La clave anterior dejará de funcionar.',
+    icon: 'warning',
+    showCancelButton: true,
+    confirmButtonText: 'Sí, regenerar',
+    cancelButtonText: 'Cancelar',
+    customClass: { container: 'swal-z-index-fix' }
+  })
+  
+  if (result.isConfirmed) {
+    try {
+      const key = apiKeys.value.find(k => k.id === keyId)
+      if (!key) return
+      
+      const response = await api.post('/api/api-keys/generar_api_key/', {
+        nit: key.nit,
+        nombre_cliente: key.nombre_cliente,
+        dias_validez: Math.ceil((new Date(key.fecha_caducidad).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+      })
+      
+      await Swal.fire({
+        title: '¡API Key Regenerada!',
+        html: `
+          <div style="text-align: left;">
+            <p><strong>Nueva API Key:</strong></p>
+            <code style="font-size: 0.9em; word-break: break-all;">${response.api_key}</code>
+            <p style="margin-top: 10px; color: #d32f2f; font-size: 0.9em;">
+              ⚠️ Guarda esta nueva clave. La anterior ya no funcionará.
+            </p>
+          </div>
+        `,
+        icon: 'success',
+        confirmButtonText: 'Copiar y Cerrar',
+        customClass: { container: 'swal-z-index-fix' },
+        didOpen: () => {
+          navigator.clipboard.writeText(response.api_key).catch(() => {})
+        }
+      })
+      
+      await loadApiKeys()
+    } catch (error: any) {
+      await Swal.fire({
+        title: 'Error',
+        text: error?.data?.error || error?.message || 'Error al regenerar API Key',
+        icon: 'error',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' }
+      })
+    }
+  }
+}
+
+const toggleApiKeyStatus = async (keyId: number, newStatus: boolean) => {
+  try {
+    await api.post('/api/api-keys/revocar_api_key/', {
+      api_key_id: keyId,
+      revocar: !newStatus
+    })
+    await loadApiKeys()
+  } catch (error: any) {
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al cambiar estado',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  }
+}
+
+const revokeApiKey = async (keyId: number) => {
+  const Swal = (await import('sweetalert2')).default
+  const result = await Swal.fire({
+    title: '¿Revocar API Key?',
+    text: 'Esta acción no se puede deshacer. La API Key dejará de funcionar inmediatamente.',
+    icon: 'warning',
+    showCancelButton: true,
+    confirmButtonText: 'Sí, revocar',
+    cancelButtonText: 'Cancelar',
+    confirmButtonColor: '#d32f2f',
+    customClass: { container: 'swal-z-index-fix' }
+  })
+  
+  if (result.isConfirmed) {
+    try {
+      await api.post('/api/api-keys/revocar_api_key/', {
+        api_key_id: keyId,
+        revocar: true
+      })
+      await Swal.fire({
+        title: 'Revocada',
+        text: 'API Key revocada exitosamente',
+        icon: 'success',
+        timer: 1500,
+        showConfirmButton: false,
+        customClass: { container: 'swal-z-index-fix' }
+      })
+      await loadApiKeys()
+    } catch (error: any) {
+      await Swal.fire({
+        title: 'Error',
+        text: error?.data?.error || error?.message || 'Error al revocar API Key',
+        icon: 'error',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' }
+      })
+    }
+  }
+}
+
+// ========== ML MODELS FUNCTIONS ==========
+const filteredMLModels = computed(() => {
+  if (!mlFilterEmpresa.value) return mlModels.value
+  return mlModels.value.filter(m => 
+    m.empresa_servidor_id_original === Number(mlFilterEmpresa.value) || 
+    m.empresa_servidor_id === Number(mlFilterEmpresa.value)
+  )
+})
+
+const loadMLModels = async () => {
+  loadingML.value = true
+  try {
+    // Por ahora, cargar desde el sistema de archivos o desde una lista
+    // En el futuro, esto podría venir de un endpoint
+    mlModels.value = []
+    // TODO: Implementar carga de modelos desde backend
+  } catch (error: any) {
+    console.error('Error cargando modelos:', error)
+  } finally {
+    loadingML.value = false
+  }
+}
+
+const trainModel = async (empresaId: number | string) => {
+  if (!empresaId) return
+  const empresaIdNum = Number(empresaId)
+  trainingModel.value = empresaIdNum
+  
+  const Swal = (await import('sweetalert2')).default
+  try {
+    Swal.fire({
+      title: 'Entrenando modelo...',
+      html: 'Esto puede tardar varios minutos. Por favor, espera.',
+      icon: 'info',
+      allowOutsideClick: false,
+      showConfirmButton: false,
+      didOpen: () => {
+        Swal.showLoading()
+      },
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    
+    const response = await api.post('/api/ml/entrenar_modelos/', {
+      empresa_servidor_id: empresaIdNum
+    })
+    
+    await Swal.fire({
+      title: '¡Modelo Entrenado!',
+      html: `
+        <div style="text-align: left;">
+          <p><strong>Estado:</strong> ${response.estado || 'Completado'}</p>
+          ${response.prophet ? `<p><strong>Prophet:</strong> Entrenado</p>` : ''}
+          ${response.xgboost ? `<p><strong>XGBoost:</strong> Entrenado</p>` : ''}
+          ${response.mlflow_ui_url ? `
+            <p style="margin-top: 10px;">
+              <a href="${response.mlflow_ui_url}" target="_blank" style="color: #1976d2; text-decoration: underline;">
+                📊 Ver en MLflow
+              </a>
+            </p>
+          ` : ''}
+        </div>
+      `,
+      icon: 'success',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    
+    await loadMLModels()
+    newModelEmpresaId.value = ''
+  } catch (error: any) {
+    console.error('Error entrenando modelo:', error)
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al entrenar modelo',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    trainingModel.value = null
+  }
+}
+
+const viewApiKeyEmpresas = async (keyId: number) => {
+  const key = apiKeys.value.find(k => k.id === keyId)
+  if (!key) return
+  
+  const Swal = (await import('sweetalert2')).default
+  await Swal.fire({
+    title: 'Empresas Asociadas',
+    html: `
+      <div style="text-align: left;">
+        <p><strong>NIT:</strong> ${key.nit}</p>
+        <p><strong>Total:</strong> ${key.empresas_asociadas_count} empresas</p>
+        ${key.empresas_asociadas?.length > 0 ? `
+          <ul style="margin-top: 10px;">
+            ${key.empresas_asociadas.map((emp: any) => `
+              <li>${emp.nombre} (${emp.nit}) - Año ${emp.anio_fiscal}</li>
+            `).join('')}
+          </ul>
+        ` : '<p>No hay empresas asociadas</p>'}
+      </div>
+    `,
+    icon: 'info',
+    confirmButtonText: 'Cerrar',
+    customClass: { container: 'swal-z-index-fix' }
+  })
+}
+
+// ========== SERVER EDIT/DELETE FUNCTIONS ==========
+const editServer = (server: Servidor) => {
+  editingServer.value = { ...server }
+  showEditServer.value = true
+}
+
+const updateServer = async () => {
+  if (!editingServer.value) return
+  creatingServer.value = true
+  try {
+    await api.put(`/api/servidores/${editingServer.value.id}/`, editingServer.value)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: '¡Éxito!',
+      text: 'Servidor actualizado exitosamente',
+      icon: 'success',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    showEditServer.value = false
+    editingServer.value = null
+    await loadServers()
+  } catch (error: any) {
+    console.error('Error actualizando servidor:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al actualizar servidor',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    creatingServer.value = false
+  }
+}
+
+const deleteServer = async (serverId: number) => {
+  const Swal = (await import('sweetalert2')).default
+  const result = await Swal.fire({
+    title: '¿Eliminar servidor?',
+    text: 'Esta acción no se puede deshacer. Se eliminarán también todas las empresas asociadas.',
+    icon: 'warning',
+    showCancelButton: true,
+    confirmButtonText: 'Sí, eliminar',
+    cancelButtonText: 'Cancelar',
+    confirmButtonColor: '#d32f2f',
+    customClass: { container: 'swal-z-index-fix' }
+  })
+  
+  if (result.isConfirmed) {
+    try {
+      await api.delete(`/api/servidores/${serverId}/`)
+      await Swal.fire({
+        title: 'Eliminado',
+        text: 'Servidor eliminado exitosamente',
+        icon: 'success',
+        timer: 1500,
+        showConfirmButton: false,
+        customClass: { container: 'swal-z-index-fix' }
+      })
+      await loadServers()
+      await loadEmpresas()
+    } catch (error: any) {
+      await Swal.fire({
+        title: 'Error',
+        text: error?.data?.error || error?.message || 'Error al eliminar servidor',
+        icon: 'error',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' }
+      })
+    }
+  }
+}
+
+// ========== EMPRESA EXTRACT DATA FUNCTION ==========
+const openExtractDataModal = (empresa: Empresa) => {
+  selectedEmpresaForExtract.value = empresa
+  const today = new Date()
+  const lastYear = new Date(today.getFullYear() - 1, 0, 1)
+  extractDateRange.value = {
+    fecha_inicio: lastYear.toISOString().split('T')[0],
+    fecha_fin: today.toISOString().split('T')[0]
+  }
+  showExtractDataModal.value = true
+}
+
+const extractData = async () => {
+  if (!selectedEmpresaForExtract.value) return
+  extractingData.value = true
+  try {
+    const response = await api.post('/api/sistema/extraer_datos/', {
+      empresa_servidor_id: selectedEmpresaForExtract.value.id,
+      fecha_inicio: extractDateRange.value.fecha_inicio,
+      fecha_fin: extractDateRange.value.fecha_fin
+    })
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: '¡Extracción completada!',
+      html: `
+        <div style="text-align: left;">
+          <p><strong>Estado:</strong> ${response.estado}</p>
+          <p><strong>Registros guardados:</strong> ${response.registros_guardados || 0}</p>
+          <p><strong>Total encontrados:</strong> ${response.total_encontrados || 0}</p>
+          ${response.chunks_procesados ? `<p><strong>Chunks procesados:</strong> ${response.chunks_procesados}</p>` : ''}
+        </div>
+      `,
+      icon: 'success',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    showExtractDataModal.value = false
+    selectedEmpresaForExtract.value = null
+  } catch (error: any) {
+    console.error('Error extrayendo datos:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al extraer datos',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    extractingData.value = false
+  }
+}
+
 onMounted(async () => {
   // Cargar servidores primero para poder mapear correctamente los nombres
   await loadServers()
   // Luego cargar empresas (necesitan los servidores para mapear nombres)
   await loadEmpresas()
   loadVpnConfigs()
+  loadApiKeys()
+  loadMLModels()
   // Cargar información del sistema si estamos en la pestaña de servicios
   if (activeSection.value === 'servicios') {
     loadSystemInfo()
@@ -1767,6 +2711,49 @@ onMounted(async () => {
 .admin-dashboard {
   min-height: 100vh;
   background: #ffffff;
+}
+
+/* API Keys Styles */
+.api-key-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.api-key-masked,
+.api-key-visible {
+  font-family: 'Courier New', monospace;
+  font-size: 0.85em;
+  padding: 0.25rem 0.5rem;
+  background: #f5f5f5;
+  border-radius: 4px;
+  flex: 1;
+  word-break: break-all;
+}
+
+.api-key-visible {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
+.btn-tiny {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  min-width: auto;
+}
+
+.text-danger {
+  color: #d32f2f;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.25rem 0.5rem;
+  background: #e3f2fd;
+  color: #1976d2;
+  border-radius: 12px;
+  font-size: 0.85em;
+  font-weight: 500;
 }
 
 .admin-header {
@@ -2191,6 +3178,22 @@ onMounted(async () => {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+.progress-bar {
+  width: 100%;
+  height: 20px;
+  background: #f0f0f0;
+  border-radius: 10px;
+  overflow: hidden;
+  position: relative;
+}
+
+.progress-bar > div {
+  height: 100%;
+  background: linear-gradient(90deg, #4CAF50, #45a049);
+  transition: width 0.3s ease;
+  border-radius: 10px;
 }
 
 .scraper-card p,

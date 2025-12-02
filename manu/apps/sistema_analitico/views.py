@@ -462,19 +462,74 @@ class SistemaViewSet(viewsets.ViewSet):
     
     @action(detail=False, methods=['post'])
     def descubrir_empresas(self, request):
+        """
+        Inicia el descubrimiento de empresas en un servidor de forma asíncrona.
+        Retorna un task_id para consultar el progreso.
+        """
+        from .tasks import descubrir_empresas_task
+        
         serializer = DescubrirEmpresasSerializer(data=request.data)
         if serializer.is_valid():
-            try:
-                empresas = self.data_manager.descubrir_empresas(
-                    serializer.validated_data['servidor_id']
-                )
-                return Response({
-                    'estado': 'empresas_descubiertas',
-                    'total_empresas': len(empresas)
-                })
-            except Exception as e:
-                return Response({'error': str(e)}, status=500)
+            servidor_id = serializer.validated_data['servidor_id']
+            
+            # Iniciar tarea asíncrona
+            task = descubrir_empresas_task.delay(servidor_id)
+            
+            return Response({
+                'estado': 'procesando',
+                'task_id': task.id,
+                'mensaje': 'El descubrimiento de empresas se está procesando en segundo plano. Usa el task_id para consultar el progreso.',
+                'endpoint_progreso': f'/api/sistema/estado-descubrimiento/?task_id={task.id}'
+            }, status=status.HTTP_202_ACCEPTED)
+        
         return Response(serializer.errors, status=400)
+    
+    @action(detail=False, methods=['get'], url_path='estado-descubrimiento')
+    def estado_descubrimiento(self, request):
+        """
+        Consulta el estado del descubrimiento de empresas.
+        
+        Query params:
+        - task_id: ID de la tarea Celery
+        
+        Returns:
+        {
+            "task_id": "abc-123",
+            "status": "SUCCESS|FAILED|PENDING|PROCESSING",
+            "result": {...}  # Solo si está completada
+        }
+        """
+        from celery.result import AsyncResult
+        
+        task_id = request.query_params.get('task_id')
+        if not task_id:
+            return Response(
+                {'error': 'Debes indicar task_id'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        task_result = AsyncResult(task_id)
+        
+        response_data = {
+            'task_id': task_id,
+            'status': task_result.state
+        }
+        
+        if task_result.ready():
+            if task_result.successful():
+                result = task_result.result
+                response_data['result'] = result
+                response_data['status'] = result.get('status', 'SUCCESS') if isinstance(result, dict) else 'SUCCESS'
+                if isinstance(result, dict) and result.get('status') == 'SUCCESS':
+                    response_data['total_empresas'] = result.get('total_empresas', 0)
+                    response_data['empresas'] = result.get('empresas', [])
+            else:
+                response_data['error'] = str(task_result.info)
+                response_data['status'] = 'ERROR'
+        elif task_result.state == 'PROCESSING':
+            response_data['meta'] = task_result.info if isinstance(task_result.info, dict) else {}
+        
+        return Response(response_data)
     
     @action(detail=False, methods=['post'])
     def extraer_datos(self, request):
@@ -6793,37 +6848,62 @@ class VpnConfigViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
     def download_config(self, request, pk=None):
         """
         Descarga el archivo .conf de una configuración VPN.
+        Si no existe, lo genera dinámicamente.
         """
         try:
             vpn_config = self.get_object()
             
-            if not vpn_config.config_file_path:
-                return Response(
-                    {'error': 'Archivo de configuración no encontrado'},
-                    status=status.HTTP_404_NOT_FOUND
-                )
-            
-            # Leer archivo
             from pathlib import Path
-            config_path = Path(vpn_config.config_file_path)
+            from .services.wireguard_manager import WireGuardManager
+            wg_manager = WireGuardManager()
             
-            if not config_path.exists():
-                # Regenerar si no existe
-                from .services.wireguard_manager import WireGuardManager
-                wg_manager = WireGuardManager()
-                config_content = wg_manager.create_client_config(
-                    client_name=vpn_config.nombre,
-                    client_private_key=vpn_config.private_key,
-                    client_public_key=vpn_config.public_key,
-                    client_ip=vpn_config.ip_address
-                )
+            config_content = None
+            config_path = None
+            
+            # Intentar leer archivo existente
+            if vpn_config.config_file_path:
+                config_path = Path(vpn_config.config_file_path)
+                if config_path.exists():
+                    config_content = config_path.read_text()
+            
+            # Si no existe archivo o no hay contenido, generar dinámicamente
+            if not config_content:
+                # Si no hay private_key (peer sincronizado), generar template
+                if not vpn_config.private_key:
+                    # Obtener clave pública del servidor usando el método mejorado
+                    server_public_key = wg_manager._get_server_public_key()
+                    
+                    config_content = f"""# Configuración WireGuard para {vpn_config.nombre}
+# Generado automáticamente por EDDESO
+# NOTA: Este peer fue importado desde el servidor. Necesitas agregar tu PrivateKey manualmente.
+# La PrivateKey debe ser la misma que usaste para generar la PublicKey: {vpn_config.public_key}
+
+[Interface]
+PrivateKey = TU_CLAVE_PRIVADA_AQUI
+Address = {vpn_config.ip_address or '10.8.3.X'}/24
+DNS = 8.8.8.8
+
+[Peer]
+PublicKey = {server_public_key}
+Endpoint = {wg_manager.server_endpoint or 'TU_SERVIDOR:51820'}
+AllowedIPs = {vpn_config.ip_address or '10.8.3.X'}/32
+PersistentKeepalive = 25
+"""
+                else:
+                    # Generar configuración completa con private_key
+                    config_content = wg_manager.create_client_config(
+                        client_name=vpn_config.nombre,
+                        client_private_key=vpn_config.private_key,
+                        client_public_key=vpn_config.public_key,
+                        client_ip=vpn_config.ip_address or '10.8.3.X'
+                    )
+                
+                # Guardar archivo generado
                 config_path = Path(wg_manager.save_config_file(vpn_config.nombre, config_content))
                 vpn_config.config_file_path = str(config_path)
                 vpn_config.save()
             
-            # Leer y retornar
-            config_content = config_path.read_text()
-            
+            # Retornar archivo
             from django.http import HttpResponse
             response = HttpResponse(config_content, content_type='text/plain')
             response['Content-Disposition'] = f'attachment; filename="wg-{vpn_config.nombre.replace(" ", "_")}.conf"'

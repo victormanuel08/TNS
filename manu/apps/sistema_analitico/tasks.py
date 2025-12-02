@@ -61,3 +61,63 @@ def procesar_factura_dian_task(self, nit_normalizado, kardex_id, empresa_servido
             'error': str(e)
         }
 
+
+@shared_task(bind=True, name='sistema_analitico.descubrir_empresas')
+def descubrir_empresas_task(self, servidor_id):
+    """
+    Tarea Celery para descubrir empresas en un servidor de forma asíncrona
+    
+    Args:
+        servidor_id: ID del servidor donde se buscarán las empresas
+    
+    Returns:
+        dict con resultado del descubrimiento
+    """
+    from .services.data_manager import DataManager
+    from .models import Servidor
+    
+    try:
+        logger.info(f"Iniciando descubrimiento de empresas: servidor_id={servidor_id}")
+        
+        # Obtener servidor
+        try:
+            servidor = Servidor.objects.get(id=servidor_id)
+        except Servidor.DoesNotExist:
+            return {
+                'status': 'ERROR',
+                'error': f'Servidor con ID {servidor_id} no existe'
+            }
+        
+        # Actualizar estado de la tarea
+        self.update_state(
+            state='PROCESSING',
+            meta={
+                'servidor_id': servidor_id,
+                'servidor_nombre': servidor.nombre,
+                'status': 'Conectando al servidor...',
+                'empresas_encontradas': 0
+            }
+        )
+        
+        # Descubrir empresas
+        data_manager = DataManager()
+        empresas = data_manager.descubrir_empresas(servidor_id)
+        
+        logger.info(f"Descubrimiento completado: {len(empresas)} empresas encontradas")
+        
+        return {
+            'status': 'SUCCESS',
+            'servidor_id': servidor_id,
+            'servidor_nombre': servidor.nombre,
+            'total_empresas': len(empresas),
+            'empresas': empresas,
+            'mensaje': f'Se encontraron {len(empresas)} empresas en el servidor {servidor.nombre}'
+        }
+    
+    except Exception as e:
+        logger.error(f"Excepción en tarea descubrir_empresas: {e}", exc_info=True)
+        return {
+            'status': 'ERROR',
+            'error': str(e),
+            'servidor_id': servidor_id
+        }

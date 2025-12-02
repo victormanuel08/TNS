@@ -112,6 +112,91 @@ class WireGuardManager:
         finally:
             client.close()
         
+    def _get_server_public_key(self) -> str:
+        """
+        Obtiene la clave pública del servidor WireGuard.
+        Intenta múltiples métodos hasta encontrar la clave.
+        Prioriza 'wg show' porque es el más confiable (muestra la clave real de la interfaz activa).
+        
+        Returns:
+            Clave pública del servidor o placeholder si no se encuentra
+        """
+        # Método 1: Leer desde wg show (interfaz activa) - MÁS CONFIABLE (PRIORIDAD)
+        # Este método muestra la clave pública real de la interfaz activa
+        try:
+            exit_status, wg_output, stderr = self._execute_ssh_command(
+                f'sudo wg show {self.interface}'
+            )
+            if exit_status == 0:
+                for line in wg_output.split('\n'):
+                    line_lower = line.lower()
+                    # Buscar línea con "public key:" (puede tener espacios antes)
+                    if 'public key:' in line_lower:
+                        # Extraer la clave después de "public key:"
+                        # El formato es: "  public key: UPgAgldMaBpK9/cAGh3C5+HXkX+n4NtHqAbQjkfL3h0="
+                        parts = line.split(':')
+                        if len(parts) >= 2:
+                            key = parts[-1].strip()  # Tomar la última parte después del último ":"
+                            if key and len(key) > 20:  # Validar que sea una clave válida (mínimo 20 caracteres)
+                                logger.info(f"✅ Clave pública del servidor obtenida desde 'wg show {self.interface}': {key[:20]}...")
+                                return key
+        except Exception as e:
+            logger.warning(f"No se pudo leer clave pública desde 'wg show': {e}")
+        
+        # Método 2: Leer desde archivo public.key (fallback)
+        try:
+            exit_status, server_pub_key, stderr = self._execute_ssh_command(
+                f'cat {WG_SERVER_PUBLIC_KEY_PATH} 2>/dev/null || echo ""'
+            )
+            if exit_status == 0 and server_pub_key.strip():
+                key = server_pub_key.strip()
+                if key and key != "REEMPLAZAR_CON_CLAVE_PUBLICA_DEL_SERVIDOR" and len(key) > 20:
+                    logger.info(f"Clave pública del servidor obtenida desde {WG_SERVER_PUBLIC_KEY_PATH}")
+                    return key
+        except Exception as e:
+            logger.warning(f"No se pudo leer clave pública desde archivo: {e}")
+        
+        # Método 3: Leer desde archivo de configuración del servidor
+        try:
+            config_file = f'{self.config_dir}/{self.interface}.conf'
+            exit_status, config_content, stderr = self._execute_ssh_command(
+                f'cat {config_file} 2>/dev/null | grep -i "publickey" | head -1 || echo ""'
+            )
+            if exit_status == 0 and config_content.strip():
+                # Buscar clave pública en el contenido
+                for line in config_content.split('\n'):
+                    if 'PublicKey' in line or 'PUBLICKEY' in line.upper():
+                        parts = line.split('=')
+                        if len(parts) > 1:
+                            key = parts[1].strip()
+                            if key:
+                                logger.info(f"Clave pública del servidor obtenida desde {config_file}")
+                                return key
+        except Exception as e:
+            logger.warning(f"No se pudo leer clave pública desde archivo de configuración: {e}")
+        
+        # Método 4: Generar desde clave privada si existe
+        try:
+            private_key_file = f'{self.config_dir}/{self.interface}.key'
+            exit_status, private_key, stderr = self._execute_ssh_command(
+                f'cat {private_key_file} 2>/dev/null || echo ""'
+            )
+            if exit_status == 0 and private_key.strip():
+                # Generar clave pública desde la privada
+                exit_status, public_key, stderr = self._execute_ssh_command(
+                    f'echo "{private_key.strip()}" | wg pubkey'
+                )
+                if exit_status == 0 and public_key.strip():
+                    key = public_key.strip()
+                    logger.info(f"Clave pública del servidor generada desde clave privada")
+                    return key
+        except Exception as e:
+            logger.warning(f"No se pudo generar clave pública desde clave privada: {e}")
+        
+        # Si no se encontró, retornar placeholder
+        logger.error(f"No se pudo obtener la clave pública del servidor. Revisa la configuración.")
+        return "REEMPLAZAR_CON_CLAVE_PUBLICA_DEL_SERVIDOR"
+    
     def generate_keypair(self) -> Tuple[str, str]:
         """
         Genera un par de claves pública/privada para WireGuard en el servidor remoto.
@@ -198,19 +283,7 @@ class WireGuardManager:
         """
         # Leer clave pública del servidor si no se proporciona
         if not server_public_key:
-            try:
-                # Leer desde el servidor remoto vía SSH
-                exit_status, server_public_key, stderr = self._execute_ssh_command(
-                    f'cat {WG_SERVER_PUBLIC_KEY_PATH} 2>/dev/null || echo ""'
-                )
-                if exit_status == 0 and server_public_key.strip():
-                    server_public_key = server_public_key.strip()
-                else:
-                    logger.warning(f"Clave pública del servidor no encontrada en {WG_SERVER_PUBLIC_KEY_PATH}")
-                    server_public_key = "REEMPLAZAR_CON_CLAVE_PUBLICA_DEL_SERVIDOR"
-            except Exception as e:
-                logger.error(f"Error leyendo clave pública del servidor: {e}")
-                server_public_key = "REEMPLAZAR_CON_CLAVE_PUBLICA_DEL_SERVIDOR"
+            server_public_key = self._get_server_public_key()
         
         # Configuración de red: Cliente solo puede acceder a su propia IP
         # El servidor puede acceder al cliente porque tiene AllowedIPs = client_ip/32 en el servidor

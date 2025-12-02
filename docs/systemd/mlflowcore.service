@@ -1,0 +1,17 @@
+[Unit]
+Description=MLflow Tracking Server (CORE)
+After=network.target
+
+[Service]
+Type=simple
+User=victus
+Group=victus
+WorkingDirectory=/home/victus/projects/CORE/manu
+Environment="PATH=/home/victus/projects/CORE/manu/env/bin"
+ExecStart=/home/victus/projects/CORE/manu/env/bin/python -m mlflow ui --port 5050 --host 0.0.0.0 --allowed-hosts mlflow.eddeso.com,localhost,127.0.0.1
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+
