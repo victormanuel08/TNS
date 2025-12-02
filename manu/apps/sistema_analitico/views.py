@@ -435,10 +435,92 @@ class EmpresaServidorViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(servidor_id=servidor_id)
         return queryset
     
-class UsuarioEmpresaViewSet(viewsets.ModelViewSet):
-    queryset = UsuarioEmpresa.objects.all()
+class UsuarioEmpresaViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
+    """
+    ViewSet para gestionar permisos de usuarios a empresas.
+    Permite crear, listar, editar y eliminar relaciones usuario-empresa.
+    """
+    queryset = UsuarioEmpresa.objects.all().select_related('usuario', 'empresa_servidor', 'empresa_servidor__servidor')
     serializer_class = UsuarioEmpresaSerializer
-    permission_classes = [TienePermisoEmpresa]
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        # Solo superusuarios pueden ver todos los permisos
+        if not self.request.user.is_superuser:
+            return UsuarioEmpresa.objects.none()
+        return UsuarioEmpresa.objects.all().select_related('usuario', 'empresa_servidor', 'empresa_servidor__servidor')
+    
+    def create(self, request, *args, **kwargs):
+        """Crear nuevo permiso usuario-empresa"""
+        if not request.user.is_superuser:
+            return Response(
+                {'error': 'Solo los superusuarios pueden crear permisos'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        return super().create(request, *args, **kwargs)
+    
+    def update(self, request, *args, **kwargs):
+        """Actualizar permiso"""
+        if not request.user.is_superuser:
+            return Response(
+                {'error': 'Solo los superusuarios pueden editar permisos'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        return super().update(request, *args, **kwargs)
+    
+    def destroy(self, request, *args, **kwargs):
+        """Eliminar permiso"""
+        if not request.user.is_superuser:
+            return Response(
+                {'error': 'Solo los superusuarios pueden eliminar permisos'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        return super().destroy(request, *args, **kwargs)
+
+class UserTenantProfileViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
+    """
+    ViewSet para gestionar perfiles de tenant de usuarios.
+    Permite crear, listar, editar y eliminar perfiles de tenant.
+    """
+    from .models import UserTenantProfile
+    from .serializers import UserTenantProfileSerializer
+    
+    queryset = UserTenantProfile.objects.all().select_related('user')
+    serializer_class = UserTenantProfileSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        # Solo superusuarios pueden ver todos los perfiles
+        if not self.request.user.is_superuser:
+            return UserTenantProfile.objects.none()
+        return UserTenantProfile.objects.all().select_related('user')
+    
+    def create(self, request, *args, **kwargs):
+        """Crear nuevo perfil de tenant"""
+        if not request.user.is_superuser:
+            return Response(
+                {'error': 'Solo los superusuarios pueden crear perfiles de tenant'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        return super().create(request, *args, **kwargs)
+    
+    def update(self, request, *args, **kwargs):
+        """Actualizar perfil de tenant"""
+        if not request.user.is_superuser:
+            return Response(
+                {'error': 'Solo los superusuarios pueden editar perfiles de tenant'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        return super().update(request, *args, **kwargs)
+    
+    def destroy(self, request, *args, **kwargs):
+        """Eliminar perfil de tenant"""
+        if not request.user.is_superuser:
+            return Response(
+                {'error': 'Solo los superusuarios pueden eliminar perfiles de tenant'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        return super().destroy(request, *args, **kwargs)
 
 class MovimientoInventarioViewSet(viewsets.ModelViewSet):
     queryset = MovimientoInventario.objects.all()
@@ -4303,6 +4385,97 @@ class UserManagementViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
         
         return Response({'message': 'Contraseña actualizada exitosamente'})
 
+
+class PasarelaPagoViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
+    """
+    ViewSet para gestionar pasarelas de pago.
+    Permite crear, listar, editar y eliminar pasarelas.
+    """
+    from .models import PasarelaPago
+    from .serializers import PasarelaPagoSerializer
+    
+    queryset = PasarelaPago.objects.all().order_by('-fecha_creacion')
+    serializer_class = PasarelaPagoSerializer
+    permission_classes = [IsAuthenticated]
+    lookup_field = 'codigo'
+    
+    def get_queryset(self):
+        # Solo superusuarios pueden ver todas las pasarelas
+        if not self.request.user.is_superuser:
+            return PasarelaPago.objects.none()
+        return PasarelaPago.objects.all().order_by('-fecha_creacion')
+    
+    def create(self, request, *args, **kwargs):
+        """Crear nueva pasarela"""
+        if not request.user.is_superuser:
+            return Response(
+                {'error': 'Solo los superusuarios pueden crear pasarelas'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        return super().create(request, *args, **kwargs)
+    
+    def update(self, request, *args, **kwargs):
+        """Actualizar pasarela"""
+        if not request.user.is_superuser:
+            return Response(
+                {'error': 'Solo los superusuarios pueden editar pasarelas'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        return super().update(request, *args, **kwargs)
+    
+    def destroy(self, request, *args, **kwargs):
+        """Eliminar pasarela"""
+        if not request.user.is_superuser:
+            return Response(
+                {'error': 'Solo los superusuarios pueden eliminar pasarelas'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        return super().destroy(request, *args, **kwargs)
+
+class EmpresaDominioViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
+    """
+    ViewSet para gestionar dominios de empresas.
+    Permite crear, listar, editar y eliminar dominios.
+    """
+    from .models import EmpresaDominio
+    from .serializers import EmpresaDominioSerializer
+    
+    queryset = EmpresaDominio.objects.all().order_by('-fecha_creacion')
+    serializer_class = EmpresaDominioSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        # Solo superusuarios pueden ver todos los dominios
+        if not self.request.user.is_superuser:
+            return EmpresaDominio.objects.none()
+        return EmpresaDominio.objects.all().select_related('empresa_servidor').order_by('-fecha_creacion')
+    
+    def create(self, request, *args, **kwargs):
+        """Crear nuevo dominio"""
+        if not request.user.is_superuser:
+            return Response(
+                {'error': 'Solo los superusuarios pueden crear dominios'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        return super().create(request, *args, **kwargs)
+    
+    def update(self, request, *args, **kwargs):
+        """Actualizar dominio"""
+        if not request.user.is_superuser:
+            return Response(
+                {'error': 'Solo los superusuarios pueden editar dominios'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        return super().update(request, *args, **kwargs)
+    
+    def destroy(self, request, *args, **kwargs):
+        """Eliminar dominio"""
+        if not request.user.is_superuser:
+            return Response(
+                {'error': 'Solo los superusuarios pueden eliminar dominios'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        return super().destroy(request, *args, **kwargs)
 
 class TestingViewSet(viewsets.ViewSet):
     def __init__(self, **kwargs):

@@ -7,7 +7,8 @@ router = DefaultRouter()
 router.register('servidores', views.ServidorViewSet)
 router.register('empresas-servidor', views.EmpresaServidorViewSet)
 router.register('movimientos', views.MovimientoInventarioViewSet)
-router.register('permisos-usuarios', views.UsuarioEmpresaViewSet)
+router.register('permisos-usuarios', views.UsuarioEmpresaViewSet, basename='permisos-usuarios')
+router.register('tenant-profiles', views.UserTenantProfileViewSet, basename='tenant-profiles')
 router.register('sistema', views.SistemaViewSet, basename='sistema')
 router.register('ml', views.MLViewSet, basename='ml')
 router.register('consulta-natural', views.ConsultaNaturalViewSet, basename='consulta-natural')
@@ -22,6 +23,8 @@ router.register('vpn/configs', views.VpnConfigViewSet, basename='vpn-configs')
 router.register('server', views.ServerManagementViewSet, basename='server-management')
 router.register('notas-rapidas', views.NotaRapidaViewSet, basename='notas-rapidas')
 router.register('usuarios', views.UserManagementViewSet, basename='usuarios')
+router.register('empresa-dominios', views.EmpresaDominioViewSet, basename='empresa-dominios')
+router.register('pasarelas-pago', views.PasarelaPagoViewSet, basename='pasarelas-pago')
 
 urlpatterns = [
     path('api/', include(router.urls)),

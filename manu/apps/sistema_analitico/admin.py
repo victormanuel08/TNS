@@ -110,24 +110,41 @@ class MovimientoInventarioAdmin(admin.ModelAdmin):
 # ========== USUARIO EMPRESA ADMIN OPTIMIZADO ==========
 @admin.register(UsuarioEmpresa)
 class UsuarioEmpresaAdmin(admin.ModelAdmin):
-    list_display = ['usuario', 'empresa_link', 'puede_ver', 'puede_editar', 'permisos_badge', 'fecha_asignacion']
-    list_filter = ['puede_ver', 'puede_editar', 'fecha_asignacion']
-    search_fields = ['usuario__username', 'empresa_servidor__nombre']
-    list_editable = ['puede_ver', 'puede_editar']
-    list_per_page = 30
-    ordering = ['usuario__username', 'empresa_servidor__nombre']  # ✅ Ordenar lista principal
+    list_display = ['usuario', 'empresa_link', 'puede_ver', 'puede_editar', 'preferred_template', 'permisos_badge', 'fecha_asignacion']
+    list_filter = ['puede_ver', 'puede_editar', 'preferred_template', 'fecha_asignacion']
+    search_fields = ['usuario__username', 'usuario__email', 'empresa_servidor__nombre', 'empresa_servidor__nit']
+    list_editable = ['puede_ver', 'puede_editar', 'preferred_template']
+    list_per_page = 50
+    ordering = ['usuario__username', 'empresa_servidor__nombre']
+    fieldsets = (
+        ('Información Principal', {
+            'fields': ('usuario', 'empresa_servidor')
+        }),
+        ('Permisos', {
+            'fields': ('puede_ver', 'puede_editar', 'preferred_template')
+        }),
+        ('Información Adicional', {
+            'fields': ('fecha_asignacion',),
+            'classes': ('collapse',)
+        }),
+    )
+    readonly_fields = ['fecha_asignacion']
     
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "usuario":
             kwargs["queryset"] = User.objects.all().order_by('username')
         elif db_field.name == "empresa_servidor":
-            # ✅ ORDEN CORREGIDO: nombre ASC, año_fiscal DESC
             kwargs["queryset"] = EmpresaServidor.objects.all().order_by('nombre', '-anio_fiscal')
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
     
     def empresa_link(self, obj):
-        return format_html('<a href="/admin/sistema_analitico/empresaservidor/{}/change/">{}</a>', 
-                          obj.empresa_servidor.id, f"{obj.empresa_servidor.nombre} ({obj.empresa_servidor.anio_fiscal})")
+        return format_html(
+            '<a href="/admin/sistema_analitico/empresaservidor/{}/change/">{}</a><br><small style="color: #666;">NIT: {} | Servidor: {}</small>', 
+            obj.empresa_servidor.id, 
+            f"{obj.empresa_servidor.nombre} ({obj.empresa_servidor.anio_fiscal})",
+            obj.empresa_servidor.nit or 'N/A',
+            obj.empresa_servidor.servidor.nombre
+        )
     empresa_link.short_description = 'Empresa'
     
     def permisos_badge(self, obj):
@@ -142,6 +159,9 @@ class UsuarioEmpresaAdmin(admin.ModelAdmin):
             texto = 'SIN ACCESO'
         return format_html('<span style="background-color: {}; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.8em;">{}</span>', color, texto)
     permisos_badge.short_description = 'Permisos'
+    
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('usuario', 'empresa_servidor', 'empresa_servidor__servidor')
 
 # ========== API KEYS ADMIN OPTIMIZADO ==========
 @admin.register(APIKeyCliente)
@@ -247,9 +267,39 @@ class APIKeyClienteAdmin(admin.ModelAdmin):
 
 
 @admin.register(UserTenantProfile)
+# ========== USER TENANT PROFILE ADMIN OPTIMIZADO ==========
+@admin.register(UserTenantProfile)
 class UserTenantProfileAdmin(admin.ModelAdmin):
-    list_display = ['user', 'subdomain', 'preferred_template']
-    search_fields = ['user__username', 'subdomain']
+    list_display = ['user', 'subdomain', 'preferred_template', 'user_info']
+    list_filter = ['preferred_template']
+    search_fields = ['user__username', 'user__email', 'subdomain']
+    list_editable = ['preferred_template']
+    list_per_page = 50
+    ordering = ['user__username']
+    fieldsets = (
+        ('Información Principal', {
+            'fields': ('user', 'subdomain')
+        }),
+        ('Preferencias', {
+            'fields': ('preferred_template',)
+        }),
+    )
+    
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == "user":
+            kwargs["queryset"] = User.objects.all().order_by('username')
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+    
+    def user_info(self, obj):
+        return format_html(
+            '<strong>{}</strong><br><small style="color: #666;">Email: {}</small>',
+            obj.user.username,
+            obj.user.email or 'N/A'
+        )
+    user_info.short_description = 'Información Usuario'
+    
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('user')
 
 # ========== NOTAS RÁPIDAS ADMIN ==========
 @admin.register(NotaRapida)

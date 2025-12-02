@@ -5,7 +5,7 @@ from .models import (
     PasarelaPago, TransaccionPago,
     Servidor, EmpresaServidor, MovimientoInventario, UsuarioEmpresa,
     EmpresaPersonalizacion, GrupoMaterialImagen, MaterialImagen, CajaAutopago,
-    VpnConfig, EmpresaEcommerceConfig, APIKeyCliente
+    VpnConfig, EmpresaEcommerceConfig, APIKeyCliente, EmpresaDominio, UserTenantProfile
 )
 
 
@@ -51,10 +51,33 @@ class EmpresaServidorSerializer(serializers.ModelSerializer):
 
 
 class UsuarioEmpresaSerializer(serializers.ModelSerializer):
+    usuario_username = serializers.CharField(source='usuario.username', read_only=True)
+    usuario_email = serializers.CharField(source='usuario.email', read_only=True)
+    empresa_nombre = serializers.CharField(source='empresa_servidor.nombre', read_only=True)
+    empresa_nit = serializers.CharField(source='empresa_servidor.nit', read_only=True)
+    empresa_anio_fiscal = serializers.IntegerField(source='empresa_servidor.anio_fiscal', read_only=True)
+    empresa_servidor_nombre = serializers.CharField(source='empresa_servidor.servidor.nombre', read_only=True)
+    
     class Meta:
         model = UsuarioEmpresa
-        fields = '__all__'
+        fields = [
+            'id', 'usuario', 'usuario_username', 'usuario_email',
+            'empresa_servidor', 'empresa_nombre', 'empresa_nit', 
+            'empresa_anio_fiscal', 'empresa_servidor_nombre',
+            'puede_ver', 'puede_editar', 'preferred_template', 
+            'fecha_asignacion'
+        ]
+        read_only_fields = ['id', 'fecha_asignacion']
 
+
+class UserTenantProfileSerializer(serializers.ModelSerializer):
+    user_username = serializers.CharField(source='user.username', read_only=True)
+    user_email = serializers.CharField(source='user.email', read_only=True)
+    
+    class Meta:
+        model = UserTenantProfile
+        fields = ['id', 'user', 'user_username', 'user_email', 'subdomain', 'preferred_template']
+        read_only_fields = ['id']
 
 class MovimientoInventarioSerializer(serializers.ModelSerializer):
     class Meta:
@@ -227,10 +250,17 @@ class EmpresaPersonalizacionSerializer(serializers.ModelSerializer):
 
 
 class PasarelaPagoSerializer(serializers.ModelSerializer):
+    configuracion_str = serializers.SerializerMethodField()
+    
     class Meta:
         model = PasarelaPago
-        fields = ['id', 'codigo', 'nombre', 'activa', 'configuracion']
-        read_only_fields = ['id']
+        fields = ['id', 'codigo', 'nombre', 'activa', 'configuracion', 'configuracion_str', 'fecha_creacion', 'fecha_actualizacion']
+        read_only_fields = ['id', 'fecha_creacion', 'fecha_actualizacion']
+    
+    def get_configuracion_str(self, obj):
+        """Retorna configuración como string JSON formateado"""
+        import json
+        return json.dumps(obj.configuracion or {}, indent=2)
 
 
 class TransaccionPagoSerializer(serializers.ModelSerializer):
@@ -538,6 +568,41 @@ class CreateUserSerializer(serializers.ModelSerializer):
         user.save()
         return user
 
+
+class EmpresaDominioSerializer(serializers.ModelSerializer):
+    empresa_servidor_nombre = serializers.CharField(source='empresa_servidor.nombre', read_only=True)
+    empresa_servidor_nit = serializers.CharField(source='empresa_servidor.nit', read_only=True)
+    
+    class Meta:
+        model = EmpresaDominio
+        fields = [
+            'id', 'dominio', 'nit', 'empresa_servidor', 'empresa_servidor_nombre', 
+            'empresa_servidor_nit', 'anio_fiscal', 'modo', 'activo',
+            'fecha_creacion', 'fecha_actualizacion'
+        ]
+        read_only_fields = ['id', 'fecha_creacion', 'fecha_actualizacion']
+    
+    def validate_nit(self, value):
+        """Normalizar NIT: eliminar puntos, guiones y espacios"""
+        if not value:
+            return value
+        import re
+        return re.sub(r"\D", "", str(value))
+    
+    def validate(self, attrs):
+        """Auto-llenar empresa_servidor y anio_fiscal si se proporciona NIT"""
+        nit = attrs.get('nit')
+        if nit and not attrs.get('empresa_servidor'):
+            # Normalizar NIT
+            nit_normalizado = self.validate_nit(nit)
+            if nit_normalizado:
+                # Buscar empresa con año fiscal más reciente
+                empresas = EmpresaServidor.objects.filter(nit=nit_normalizado).order_by('-anio_fiscal')
+                if empresas.exists():
+                    empresa_mas_reciente = empresas.first()
+                    attrs['empresa_servidor'] = empresa_mas_reciente
+                    attrs['anio_fiscal'] = empresa_mas_reciente.anio_fiscal
+        return attrs
 
 class ExtraerDatosSerializer(serializers.Serializer):
     """Serializer para extraer datos de una empresa"""

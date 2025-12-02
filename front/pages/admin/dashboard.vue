@@ -210,6 +210,12 @@
                       <button class="btn-small btn-primary" @click="openExtractDataModal(empresa)" title="Extraer datos">
                         📥 Extraer Datos
                       </button>
+                      <button class="btn-small btn-secondary" @click="editEmpresaSQL(empresa)" title="Editar Consulta SQL">
+                        📝 SQL
+                      </button>
+                      <button class="btn-small btn-secondary" @click="editEmpresaConfig(empresa)" title="Editar Configuración">
+                        ⚙️ Config
+                      </button>
                       <button class="btn-small btn-info" @click="viewEmpresaDetails(empresa.id)" title="Ver detalles">
                         👁️
                       </button>
@@ -458,6 +464,296 @@
                       @click="revokeApiKey(key.id)"
                       title="Revocar"
                     >
+                      🗑️
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Dominios -->
+      <section v-if="activeSection === 'dominios'" class="section">
+        <div class="section-header">
+          <h2>Gestión de Dominios</h2>
+          <div class="actions-bar">
+            <button class="btn-primary" @click="showCreateDominio = true">
+              <span>+</span> Crear Dominio
+            </button>
+            <button class="btn-secondary" @click="loadDominios" :disabled="loadingDominios">
+              <span v-if="loadingDominios">⟳</span>
+              <span v-else>↻</span>
+              Actualizar
+            </button>
+          </div>
+        </div>
+        
+        <div v-if="loadingDominios" class="loading-state">
+          <p>Cargando dominios...</p>
+        </div>
+        
+        <div v-else-if="dominios.length === 0" class="empty-state">
+          <p>No hay dominios registrados</p>
+        </div>
+        
+        <div v-else class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Dominio</th>
+                <th>NIT</th>
+                <th>Empresa</th>
+                <th>Año Fiscal</th>
+                <th>Modo</th>
+                <th>Estado</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="dominio in dominios" :key="dominio.id">
+                <td><code>{{ dominio.dominio }}</code></td>
+                <td>{{ dominio.nit || '-' }}</td>
+                <td>{{ dominio.empresa_servidor_nombre || '-' }}</td>
+                <td>{{ dominio.anio_fiscal || '-' }}</td>
+                <td>
+                  <span class="status-badge" :class="{
+                    'status-active': dominio.modo === 'ecommerce',
+                    'status-warning': dominio.modo === 'autopago',
+                    'status-inactive': dominio.modo === 'pro'
+                  }">
+                    {{ dominio.modo === 'ecommerce' ? 'E-commerce' : dominio.modo === 'autopago' ? 'Autopago' : 'Profesional' }}
+                  </span>
+                </td>
+                <td>
+                  <span class="status-badge" :class="dominio.activo ? 'status-active' : 'status-inactive'">
+                    {{ dominio.activo ? 'Activo' : 'Inactivo' }}
+                  </span>
+                </td>
+                <td>
+                  <div class="action-buttons">
+                    <button class="btn-small btn-secondary" @click="editDominio(dominio)" title="Editar">
+                      ✏️
+                    </button>
+                    <button class="btn-small btn-danger" @click="deleteDominio(dominio)" title="Eliminar">
+                      🗑️
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Pasarelas de Pago -->
+      <section v-if="activeSection === 'pasarelas'" class="section">
+        <div class="section-header">
+          <h2>Gestión de Pasarelas de Pago</h2>
+          <div class="actions-bar">
+            <button class="btn-primary" @click="showCreatePasarela = true">
+              <span>+</span> Crear Pasarela
+            </button>
+            <button class="btn-secondary" @click="loadPasarelas" :disabled="loadingPasarelas">
+              <span v-if="loadingPasarelas">⟳</span>
+              <span v-else>↻</span>
+              Actualizar
+            </button>
+          </div>
+        </div>
+        
+        <div v-if="loadingPasarelas" class="loading-state">
+          <p>Cargando pasarelas...</p>
+        </div>
+        
+        <div v-else-if="pasarelas.length === 0" class="empty-state">
+          <p>No hay pasarelas registradas</p>
+        </div>
+        
+        <div v-else class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Código</th>
+                <th>Nombre</th>
+                <th>Estado</th>
+                <th>Configuración</th>
+                <th>Fecha Creación</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="pasarela in pasarelas" :key="pasarela.id">
+                <td><code>{{ pasarela.codigo }}</code></td>
+                <td><strong>{{ pasarela.nombre }}</strong></td>
+                <td>
+                  <span class="status-badge" :class="pasarela.activa ? 'status-active' : 'status-inactive'">
+                    {{ pasarela.activa ? 'Activa' : 'Inactiva' }}
+                  </span>
+                </td>
+                <td>
+                  <button class="btn-small btn-info" @click="viewPasarelaConfig(pasarela)" title="Ver configuración">
+                    👁️ Ver
+                  </button>
+                </td>
+                <td>{{ formatDate(pasarela.fecha_creacion) }}</td>
+                <td>
+                  <div class="action-buttons">
+                    <button class="btn-small btn-secondary" @click="editPasarela(pasarela)" title="Editar">
+                      ✏️
+                    </button>
+                    <button class="btn-small btn-danger" @click="deletePasarela(pasarela)" title="Eliminar">
+                      🗑️
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Permisos Usuarios -->
+      <section v-if="activeSection === 'permisos'" class="section">
+        <div class="section-header">
+          <h2>Gestión de Permisos Usuario-Empresa</h2>
+          <div class="actions-bar">
+            <button class="btn-primary" @click="showCreatePermiso = true">
+              <span>+</span> Crear Permiso
+            </button>
+            <button class="btn-secondary" @click="loadPermisos" :disabled="loadingPermisos">
+              <span v-if="loadingPermisos">⟳</span>
+              <span v-else>↻</span>
+              Actualizar
+            </button>
+          </div>
+        </div>
+        
+        <div v-if="loadingPermisos" class="loading-state">
+          <p>Cargando permisos...</p>
+        </div>
+        
+        <div v-else-if="permisosUsuarios.length === 0" class="empty-state">
+          <p>No hay permisos registrados</p>
+        </div>
+        
+        <div v-else class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Usuario</th>
+                <th>Empresa</th>
+                <th>Puede Ver</th>
+                <th>Puede Editar</th>
+                <th>Template</th>
+                <th>Fecha Asignación</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="permiso in permisosUsuarios" :key="permiso.id">
+                <td>
+                  <strong>{{ permiso.usuario_username }}</strong><br>
+                  <small style="color: #666;">{{ permiso.usuario_email || 'Sin email' }}</small>
+                </td>
+                <td>
+                  <strong>{{ permiso.empresa_nombre }}</strong><br>
+                  <small style="color: #666;">NIT: {{ permiso.empresa_nit || 'N/A' }} | Año: {{ permiso.empresa_anio_fiscal }}</small><br>
+                  <small style="color: #999;">Servidor: {{ permiso.empresa_servidor_nombre }}</small>
+                </td>
+                <td>
+                  <span class="status-badge" :class="permiso.puede_ver ? 'status-active' : 'status-inactive'">
+                    {{ permiso.puede_ver ? 'Sí' : 'No' }}
+                  </span>
+                </td>
+                <td>
+                  <span class="status-badge" :class="permiso.puede_editar ? 'status-active' : 'status-inactive'">
+                    {{ permiso.puede_editar ? 'Sí' : 'No' }}
+                  </span>
+                </td>
+                <td>
+                  <span class="status-badge" :class="{
+                    'status-active': permiso.preferred_template === 'pro',
+                    'status-warning': permiso.preferred_template === 'retail',
+                    'status-inactive': permiso.preferred_template === 'restaurant'
+                  }">
+                    {{ permiso.preferred_template === 'pro' ? 'Pro' : permiso.preferred_template === 'retail' ? 'Retail' : 'Restaurant' }}
+                  </span>
+                </td>
+                <td>{{ formatDate(permiso.fecha_asignacion) }}</td>
+                <td>
+                  <div class="action-buttons">
+                    <button class="btn-small btn-secondary" @click="editPermiso(permiso)" title="Editar">
+                      ✏️
+                    </button>
+                    <button class="btn-small btn-danger" @click="deletePermiso(permiso)" title="Eliminar">
+                      🗑️
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Tenant Profiles -->
+      <section v-if="activeSection === 'tenant-profiles'" class="section">
+        <div class="section-header">
+          <h2>Gestión de Tenant Profiles</h2>
+          <div class="actions-bar">
+            <button class="btn-primary" @click="showCreateTenantProfile = true">
+              <span>+</span> Crear Tenant Profile
+            </button>
+            <button class="btn-secondary" @click="loadTenantProfiles" :disabled="loadingTenantProfiles">
+              <span v-if="loadingTenantProfiles">⟳</span>
+              <span v-else>↻</span>
+              Actualizar
+            </button>
+          </div>
+        </div>
+        
+        <div v-if="loadingTenantProfiles" class="loading-state">
+          <p>Cargando tenant profiles...</p>
+        </div>
+        
+        <div v-else-if="tenantProfiles.length === 0" class="empty-state">
+          <p>No hay tenant profiles registrados</p>
+        </div>
+        
+        <div v-else class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Usuario</th>
+                <th>Subdomain</th>
+                <th>Template Preferido</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="profile in tenantProfiles" :key="profile.id">
+                <td>
+                  <strong>{{ profile.user_username }}</strong><br>
+                  <small style="color: #666;">{{ profile.user_email || 'Sin email' }}</small>
+                </td>
+                <td><code>{{ profile.subdomain }}</code></td>
+                <td>
+                  <span class="status-badge" :class="{
+                    'status-active': profile.preferred_template === 'pro',
+                    'status-warning': profile.preferred_template === 'retail',
+                    'status-inactive': profile.preferred_template === 'restaurant'
+                  }">
+                    {{ profile.preferred_template === 'pro' ? 'Pro' : profile.preferred_template === 'retail' ? 'Retail' : 'Restaurant' }}
+                  </span>
+                </td>
+                <td>
+                  <div class="action-buttons">
+                    <button class="btn-small btn-secondary" @click="editTenantProfile(profile)" title="Editar">
+                      ✏️
+                    </button>
+                    <button class="btn-small btn-danger" @click="deleteTenantProfile(profile)" title="Eliminar">
                       🗑️
                     </button>
                   </div>
@@ -1487,6 +1783,642 @@
         </div>
       </div>
     </div>
+
+    <!-- Modal: Crear Usuario -->
+    <div v-if="showCreateUser" class="modal-overlay" @click="showCreateUser = false">
+      <div class="modal-content" @click.stop>
+        <div class="modal-header">
+          <h2>Crear Nuevo Usuario</h2>
+          <button class="modal-close" @click="showCreateUser = false">×</button>
+        </div>
+        <form @submit.prevent="createUser" class="modal-form">
+          <div class="form-group">
+            <label>Usuario *</label>
+            <input v-model="newUser.username" type="text" required class="form-input" placeholder="nombre_usuario" />
+          </div>
+          <div class="form-group">
+            <label>Email</label>
+            <input v-model="newUser.email" type="email" class="form-input" placeholder="usuario@ejemplo.com" />
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Nombre</label>
+              <input v-model="newUser.first_name" type="text" class="form-input" placeholder="Nombre" />
+            </div>
+            <div class="form-group">
+              <label>Apellido</label>
+              <input v-model="newUser.last_name" type="text" class="form-input" placeholder="Apellido" />
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Contraseña *</label>
+            <input v-model="newUser.password" type="password" required class="form-input" placeholder="Mínimo 8 caracteres" />
+          </div>
+          <div class="form-group">
+            <label>
+              <input type="checkbox" v-model="newUser.is_active" />
+              Usuario Activo
+            </label>
+          </div>
+          <div class="form-group">
+            <label>
+              <input type="checkbox" v-model="newUser.is_staff" />
+              Es Staff (acceso al admin)
+            </label>
+          </div>
+          <div class="form-group">
+            <label>
+              <input type="checkbox" v-model="newUser.is_superuser" />
+              Es Superusuario (todos los permisos)
+            </label>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn-secondary" @click="showCreateUser = false">Cancelar</button>
+            <button type="submit" class="btn-primary">Crear Usuario</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Modal: Editar Usuario -->
+    <div v-if="showEditUser && editingUser" class="modal-overlay" @click="showEditUser = false">
+      <div class="modal-content" @click.stop>
+        <div class="modal-header">
+          <h2>Editar Usuario: {{ editingUser.username }}</h2>
+          <button class="modal-close" @click="showEditUser = false">×</button>
+        </div>
+        <form @submit.prevent="updateUser" class="modal-form">
+          <div class="form-group">
+            <label>Usuario *</label>
+            <input v-model="editingUser.username" type="text" required class="form-input" />
+          </div>
+          <div class="form-group">
+            <label>Email</label>
+            <input v-model="editingUser.email" type="email" class="form-input" />
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Nombre</label>
+              <input v-model="editingUser.first_name" type="text" class="form-input" />
+            </div>
+            <div class="form-group">
+              <label>Apellido</label>
+              <input v-model="editingUser.last_name" type="text" class="form-input" />
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Nueva Contraseña (opcional)</label>
+            <input v-model="editingUser.password" type="password" class="form-input" placeholder="Dejar vacío para no cambiar" />
+            <small>Dejar vacío si no quieres cambiar la contraseña</small>
+          </div>
+          <div class="form-group">
+            <label>
+              <input type="checkbox" v-model="editingUser.is_active" />
+              Usuario Activo
+            </label>
+          </div>
+          <div class="form-group">
+            <label>
+              <input type="checkbox" v-model="editingUser.is_staff" />
+              Es Staff (acceso al admin)
+            </label>
+          </div>
+          <div class="form-group">
+            <label>
+              <input type="checkbox" v-model="editingUser.is_superuser" />
+              Es Superusuario (todos los permisos)
+            </label>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn-secondary" @click="showEditUser = false">Cancelar</button>
+            <button type="submit" class="btn-primary">Guardar Cambios</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Modal: Editar Consulta SQL -->
+    <div v-if="showEditEmpresaSQL && editingEmpresaSQL" class="modal-overlay" @click="showEditEmpresaSQL = false">
+      <div class="modal-content" style="max-width: 900px;" @click.stop>
+        <div class="modal-header">
+          <h2>Editar Consulta SQL: {{ editingEmpresaSQL.nombre }}</h2>
+          <button class="modal-close" @click="showEditEmpresaSQL = false">×</button>
+        </div>
+        <div class="modal-form">
+          <div class="form-group">
+            <label>Consulta SQL Personalizada</label>
+            <textarea 
+              v-model="empresaSQLContent" 
+              class="form-input" 
+              rows="15"
+              placeholder="SELECT TIPO_DOCUMENTO, FECHA, ARTICULO_CODIGO, ARTICULO_NOMBRE, CANTIDAD, PRECIO_UNITARIO FROM MOVIMIENTOS WHERE FECHA BETWEEN ? AND ?"
+              style="font-family: 'Courier New', monospace; font-size: 0.9em;"
+            ></textarea>
+            <small>
+              <strong>Nota:</strong> Esta consulta se usa para extraer datos de la base de datos. 
+              Debe retornar los campos requeridos. Usa ? como placeholders para parámetros de fecha.
+              Si está vacía, se usará la consulta por defecto del sistema.
+            </small>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn-secondary" @click="showEditEmpresaSQL = false">Cancelar</button>
+            <button type="button" class="btn-primary" @click="saveEmpresaSQL">Guardar Consulta SQL</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Editar Configuración -->
+    <div v-if="showEditEmpresaConfig && editingEmpresaConfig" class="modal-overlay" @click="showEditEmpresaConfig = false">
+      <div class="modal-content" style="max-width: 900px;" @click.stop>
+        <div class="modal-header">
+          <h2>Editar Configuración: {{ editingEmpresaConfig.nombre }}</h2>
+          <button class="modal-close" @click="showEditEmpresaConfig = false">×</button>
+        </div>
+        <div class="modal-form">
+          <div class="form-group">
+            <label>Configuración (JSON)</label>
+            <textarea 
+              v-model="empresaConfigContent" 
+              class="form-input" 
+              rows="20"
+              placeholder='{"parametro1": "valor1", "parametro2": "valor2"}'
+              style="font-family: 'Courier New', monospace; font-size: 0.9em;"
+            ></textarea>
+            <small>
+              <strong>Nota:</strong> Esta configuración es un objeto JSON que permite parametrizar el comportamiento de la extracción de datos.
+              Ejemplos de parámetros: filtros adicionales, mapeos de campos, configuraciones específicas por empresa.
+              Debe ser un JSON válido.
+            </small>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn-secondary" @click="showEditEmpresaConfig = false">Cancelar</button>
+            <button type="button" class="btn-primary" @click="saveEmpresaConfig">Guardar Configuración</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Crear API Key -->
+    <div v-if="showCreateApiKey" class="modal-overlay" @click="showCreateApiKey = false">
+      <div class="modal-content" @click.stop>
+        <div class="modal-header">
+          <h2>Generar Nueva API Key</h2>
+          <button class="modal-close" @click="showCreateApiKey = false">×</button>
+        </div>
+        <form @submit.prevent="createApiKey" class="modal-form">
+          <div class="form-group">
+            <label>NIT *</label>
+            <select 
+              v-model="newApiKey.nit" 
+              required 
+              class="form-input"
+              @change="onNitSelected"
+            >
+              <option value="">Seleccionar NIT...</option>
+              <option v-for="nitOption in uniqueNits" :key="nitOption.nit" :value="nitOption.nit">
+                {{ nitOption.nit }} - {{ nitOption.nombre }}
+              </option>
+            </select>
+            <small>Selecciona un NIT y el nombre se llenará automáticamente</small>
+          </div>
+          <div class="form-group">
+            <label>Nombre del Cliente *</label>
+            <input 
+              v-model="newApiKey.nombre_cliente" 
+              type="text" 
+              required 
+              class="form-input" 
+              placeholder="Se llena automáticamente al seleccionar NIT"
+            />
+          </div>
+          <div class="form-group">
+            <label>Días de Validez</label>
+            <input 
+              v-model.number="newApiKey.dias_validez" 
+              type="number" 
+              min="1" 
+              max="3650" 
+              class="form-input" 
+              placeholder="365"
+            />
+            <small>Número de días que la API Key será válida (por defecto: 365 días)</small>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn-secondary" @click="showCreateApiKey = false">Cancelar</button>
+            <button type="submit" class="btn-primary" :disabled="creatingApiKey || !newApiKey.nit || !newApiKey.nombre_cliente">
+              <span v-if="creatingApiKey">⟳</span>
+              <span v-else>Generar API Key</span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Modal: Crear Dominio -->
+    <div v-if="showCreateDominio" class="modal-overlay" @click="showCreateDominio = false">
+      <div class="modal-content" @click.stop>
+        <div class="modal-header">
+          <h2>Crear Nuevo Dominio</h2>
+          <button class="modal-close" @click="showCreateDominio = false">×</button>
+        </div>
+        <form @submit.prevent="createDominio" class="modal-form">
+          <div class="form-group">
+            <label>Dominio *</label>
+            <input 
+              v-model="newDominio.dominio" 
+              type="text" 
+              required 
+              class="form-input" 
+              placeholder="pepito.ecommerce.miapp.com"
+            />
+            <small>Dominio completo (ej: pepito.ecommerce.miapp.com)</small>
+          </div>
+          <div class="form-group">
+            <label>NIT *</label>
+            <select 
+              v-model="newDominio.nit" 
+              required 
+              class="form-input"
+              @change="onDominioNitSelected"
+            >
+              <option value="">Seleccionar NIT...</option>
+              <option v-for="nitOption in uniqueNits" :key="nitOption.nit" :value="nitOption.nit">
+                {{ nitOption.nit }} - {{ nitOption.nombre }}
+              </option>
+            </select>
+            <small>Selecciona un NIT. El sistema buscará automáticamente la empresa con el año fiscal más reciente.</small>
+          </div>
+          <div class="form-group">
+            <label>Modo *</label>
+            <select v-model="newDominio.modo" required class="form-input">
+              <option value="ecommerce">E-commerce público</option>
+              <option value="autopago">Autopago / Retail</option>
+              <option value="pro">Profesional</option>
+            </select>
+            <small>Modo principal de este dominio</small>
+          </div>
+          <div class="form-group">
+            <label>
+              <input type="checkbox" v-model="newDominio.activo" />
+              Dominio Activo
+            </label>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn-secondary" @click="showCreateDominio = false">Cancelar</button>
+            <button type="submit" class="btn-primary">Crear Dominio</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Modal: Editar Dominio -->
+    <div v-if="showEditDominio && editingDominio" class="modal-overlay" @click="showEditDominio = false">
+      <div class="modal-content" @click.stop>
+        <div class="modal-header">
+          <h2>Editar Dominio: {{ editingDominio.dominio }}</h2>
+          <button class="modal-close" @click="showEditDominio = false">×</button>
+        </div>
+        <form @submit.prevent="updateDominio" class="modal-form">
+          <div class="form-group">
+            <label>Dominio *</label>
+            <input 
+              v-model="editingDominio.dominio" 
+              type="text" 
+              required 
+              class="form-input"
+            />
+          </div>
+          <div class="form-group">
+            <label>NIT</label>
+            <input 
+              v-model="editingDominio.nit" 
+              type="text" 
+              class="form-input"
+              placeholder="Sin puntos ni guiones"
+            />
+            <small>Si cambias el NIT, el sistema buscará automáticamente la empresa con el año fiscal más reciente.</small>
+          </div>
+          <div class="form-group">
+            <label>Modo *</label>
+            <select v-model="editingDominio.modo" required class="form-input">
+              <option value="ecommerce">E-commerce público</option>
+              <option value="autopago">Autopago / Retail</option>
+              <option value="pro">Profesional</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>
+              <input type="checkbox" v-model="editingDominio.activo" />
+              Dominio Activo
+            </label>
+          </div>
+          <div v-if="editingDominio.empresa_servidor_nombre" class="form-group" style="padding: 10px; background: #f5f5f5; border-radius: 5px;">
+            <small>
+              <strong>Empresa asociada:</strong> {{ editingDominio.empresa_servidor_nombre }} ({{ editingDominio.empresa_servidor_nit }})<br>
+              <strong>Año fiscal:</strong> {{ editingDominio.anio_fiscal || 'N/A' }}
+            </small>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn-secondary" @click="showEditDominio = false">Cancelar</button>
+            <button type="submit" class="btn-primary">Guardar Cambios</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Modal: Crear Pasarela -->
+    <div v-if="showCreatePasarela" class="modal-overlay" @click="showCreatePasarela = false">
+      <div class="modal-content" style="max-width: 900px;" @click.stop>
+        <div class="modal-header">
+          <h2>Crear Nueva Pasarela de Pago</h2>
+          <button class="modal-close" @click="showCreatePasarela = false">×</button>
+        </div>
+        <form @submit.prevent="createPasarela" class="modal-form">
+          <div class="form-group">
+            <label>Código *</label>
+            <input 
+              v-model="newPasarela.codigo" 
+              type="text" 
+              required 
+              class="form-input" 
+              placeholder="credibanco"
+            />
+            <small>Código único de la pasarela (ej: credibanco, payu, etc.)</small>
+          </div>
+          <div class="form-group">
+            <label>Nombre *</label>
+            <input 
+              v-model="newPasarela.nombre" 
+              type="text" 
+              required 
+              class="form-input" 
+              placeholder="Credibanco"
+            />
+            <small>Nombre descriptivo de la pasarela</small>
+          </div>
+          <div class="form-group">
+            <label>Configuración (JSON)</label>
+            <textarea 
+              v-model="pasarelaConfigContent" 
+              class="form-input" 
+              rows="15"
+              placeholder='{"url_base": "https://api.credibanco.com", "endpoint_pago": "/pagos", ...}'
+              style="font-family: 'Courier New', monospace; font-size: 0.9em;"
+            ></textarea>
+            <small>
+              <strong>Nota:</strong> Configuración específica de la pasarela en formato JSON.
+              Puede incluir URLs, endpoints, campos adicionales, etc. Debe ser un JSON válido.
+            </small>
+          </div>
+          <div class="form-group">
+            <label>
+              <input type="checkbox" v-model="newPasarela.activa" />
+              Pasarela Activa
+            </label>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn-secondary" @click="showCreatePasarela = false">Cancelar</button>
+            <button type="submit" class="btn-primary">Crear Pasarela</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Modal: Editar Pasarela -->
+    <div v-if="showEditPasarela && editingPasarela" class="modal-overlay" @click="showEditPasarela = false">
+      <div class="modal-content" style="max-width: 900px;" @click.stop>
+        <div class="modal-header">
+          <h2>Editar Pasarela: {{ editingPasarela.nombre }}</h2>
+          <button class="modal-close" @click="showEditPasarela = false">×</button>
+        </div>
+        <form @submit.prevent="updatePasarela" class="modal-form">
+          <div class="form-group">
+            <label>Código *</label>
+            <input 
+              v-model="editingPasarela.codigo" 
+              type="text" 
+              required 
+              class="form-input"
+              readonly
+            />
+            <small>El código no se puede modificar</small>
+          </div>
+          <div class="form-group">
+            <label>Nombre *</label>
+            <input 
+              v-model="editingPasarela.nombre" 
+              type="text" 
+              required 
+              class="form-input"
+            />
+          </div>
+          <div class="form-group">
+            <label>Configuración (JSON)</label>
+            <textarea 
+              v-model="pasarelaConfigContent" 
+              class="form-input" 
+              rows="15"
+              style="font-family: 'Courier New', monospace; font-size: 0.9em;"
+            ></textarea>
+            <small>
+              <strong>Nota:</strong> Configuración específica de la pasarela en formato JSON.
+              Debe ser un JSON válido.
+            </small>
+          </div>
+          <div class="form-group">
+            <label>
+              <input type="checkbox" v-model="editingPasarela.activa" />
+              Pasarela Activa
+            </label>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn-secondary" @click="showEditPasarela = false">Cancelar</button>
+            <button type="submit" class="btn-primary">Guardar Cambios</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Modal: Crear Permiso -->
+    <div v-if="showCreatePermiso" class="modal-overlay" @click="showCreatePermiso = false">
+      <div class="modal-content" @click.stop>
+        <div class="modal-header">
+          <h2>Crear Permiso Usuario-Empresa</h2>
+          <button class="modal-close" @click="showCreatePermiso = false">×</button>
+        </div>
+        <form @submit.prevent="createPermiso" class="modal-form">
+          <div class="form-group">
+            <label>Usuario *</label>
+            <select v-model.number="newPermiso.usuario" required class="form-input">
+              <option :value="null">Seleccionar usuario...</option>
+              <option v-for="user in users" :key="user.id" :value="user.id">
+                {{ user.username }} {{ user.email ? `(${user.email})` : '' }}
+              </option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Empresa *</label>
+            <select v-model.number="newPermiso.empresa_servidor" required class="form-input">
+              <option :value="null">Seleccionar empresa...</option>
+              <option v-for="empresa in empresas" :key="empresa.id" :value="empresa.id">
+                {{ empresa.nombre }} ({{ empresa.nit }}) - {{ empresa.anio_fiscal }}
+              </option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>
+              <input type="checkbox" v-model="newPermiso.puede_ver" />
+              Puede Ver
+            </label>
+          </div>
+          <div class="form-group">
+            <label>
+              <input type="checkbox" v-model="newPermiso.puede_editar" />
+              Puede Editar
+            </label>
+          </div>
+          <div class="form-group">
+            <label>Template Preferido</label>
+            <select v-model="newPermiso.preferred_template" class="form-input">
+              <option value="pro">Profesional</option>
+              <option value="retail">Retail / Autopago</option>
+              <option value="restaurant">Restaurante</option>
+            </select>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn-secondary" @click="showCreatePermiso = false">Cancelar</button>
+            <button type="submit" class="btn-primary">Crear Permiso</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Modal: Editar Permiso -->
+    <div v-if="showEditPermiso && editingPermiso" class="modal-overlay" @click="showEditPermiso = false">
+      <div class="modal-content" @click.stop>
+        <div class="modal-header">
+          <h2>Editar Permiso</h2>
+          <button class="modal-close" @click="showEditPermiso = false">×</button>
+        </div>
+        <form @submit.prevent="updatePermiso" class="modal-form">
+          <div class="form-group" style="padding: 10px; background: #f5f5f5; border-radius: 5px;">
+            <small>
+              <strong>Usuario:</strong> {{ editingPermiso.usuario_username }}<br>
+              <strong>Empresa:</strong> {{ editingPermiso.empresa_nombre }} ({{ editingPermiso.empresa_nit }})
+            </small>
+          </div>
+          <div class="form-group">
+            <label>
+              <input type="checkbox" v-model="editingPermiso.puede_ver" />
+              Puede Ver
+            </label>
+          </div>
+          <div class="form-group">
+            <label>
+              <input type="checkbox" v-model="editingPermiso.puede_editar" />
+              Puede Editar
+            </label>
+          </div>
+          <div class="form-group">
+            <label>Template Preferido</label>
+            <select v-model="editingPermiso.preferred_template" class="form-input">
+              <option value="pro">Profesional</option>
+              <option value="retail">Retail / Autopago</option>
+              <option value="restaurant">Restaurante</option>
+            </select>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn-secondary" @click="showEditPermiso = false">Cancelar</button>
+            <button type="submit" class="btn-primary">Guardar Cambios</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Modal: Crear Tenant Profile -->
+    <div v-if="showCreateTenantProfile" class="modal-overlay" @click="showCreateTenantProfile = false">
+      <div class="modal-content" @click.stop>
+        <div class="modal-header">
+          <h2>Crear Tenant Profile</h2>
+          <button class="modal-close" @click="showCreateTenantProfile = false">×</button>
+        </div>
+        <form @submit.prevent="createTenantProfile" class="modal-form">
+          <div class="form-group">
+            <label>Usuario *</label>
+            <select v-model.number="newTenantProfile.user" required class="form-input">
+              <option :value="null">Seleccionar usuario...</option>
+              <option v-for="user in users" :key="user.id" :value="user.id">
+                {{ user.username }} {{ user.email ? `(${user.email})` : '' }}
+              </option>
+            </select>
+            <small>El usuario no debe tener ya un tenant profile</small>
+          </div>
+          <div class="form-group">
+            <label>Subdomain *</label>
+            <input 
+              v-model="newTenantProfile.subdomain" 
+              type="text" 
+              required 
+              class="form-input" 
+              placeholder="empresa"
+            />
+            <small>Subdomain único para este usuario (ej: empresa, cliente, etc.)</small>
+          </div>
+          <div class="form-group">
+            <label>Template Preferido</label>
+            <select v-model="newTenantProfile.preferred_template" class="form-input">
+              <option value="pro">Profesional</option>
+              <option value="retail">Retail / Autopago</option>
+              <option value="restaurant">Restaurante</option>
+            </select>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn-secondary" @click="showCreateTenantProfile = false">Cancelar</button>
+            <button type="submit" class="btn-primary">Crear Tenant Profile</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Modal: Editar Tenant Profile -->
+    <div v-if="showEditTenantProfile && editingTenantProfile" class="modal-overlay" @click="showEditTenantProfile = false">
+      <div class="modal-content" @click.stop>
+        <div class="modal-header">
+          <h2>Editar Tenant Profile</h2>
+          <button class="modal-close" @click="showEditTenantProfile = false">×</button>
+        </div>
+        <form @submit.prevent="updateTenantProfile" class="modal-form">
+          <div class="form-group" style="padding: 10px; background: #f5f5f5; border-radius: 5px;">
+            <small>
+              <strong>Usuario:</strong> {{ editingTenantProfile.user_username }}<br>
+              <strong>Email:</strong> {{ editingTenantProfile.user_email || 'N/A' }}
+            </small>
+          </div>
+          <div class="form-group">
+            <label>Subdomain *</label>
+            <input 
+              v-model="editingTenantProfile.subdomain" 
+              type="text" 
+              required 
+              class="form-input"
+            />
+          </div>
+          <div class="form-group">
+            <label>Template Preferido</label>
+            <select v-model="editingTenantProfile.preferred_template" class="form-input">
+              <option value="pro">Profesional</option>
+              <option value="retail">Retail / Autopago</option>
+              <option value="restaurant">Restaurante</option>
+            </select>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn-secondary" @click="showEditTenantProfile = false">Cancelar</button>
+            <button type="submit" class="btn-primary">Guardar Cambios</button>
+          </div>
+        </form>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -1572,7 +2504,45 @@ const sections = [
   },
   { 
     id: 'api-keys', 
-    name: '4. API Keys', 
+    name: '4. API Keys',
+    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+      <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+    </svg>`
+  },
+  { 
+    id: 'dominios', 
+    name: '5. Dominios',
+    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="12" cy="12" r="10"/>
+      <line x1="2" y1="12" x2="22" y2="12"/>
+      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+    </svg>`
+  },
+  { 
+    id: 'pasarelas', 
+    name: '6. Pasarelas',
+    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <rect x="1" y="4" width="22" height="16" rx="2" ry="2"/>
+      <line x1="1" y1="10" x2="23" y2="10"/>
+    </svg>`
+  },
+  { 
+    id: 'permisos', 
+    name: '7. Permisos Usuarios',
+    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+      <path d="M9 12l2 2 4-4"/>
+    </svg>`
+  },
+  { 
+    id: 'tenant-profiles', 
+    name: '8. Tenant Profiles',
+    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <rect x="3" y="3" width="18" height="18" rx="2"/>
+      <path d="M3 9h18M9 3v18"/>
+    </svg>`
+  }, 
     icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>
     </svg>`
@@ -1637,6 +2607,63 @@ const loadingServers = ref(false)
 const loadingEmpresas = ref(false)
 const loadingVpn = ref(false)
 const loadingApiKeys = ref(false)
+const users = ref<any[]>([])
+const loadingUsers = ref(false)
+const userSearch = ref('')
+const showCreateUser = ref(false)
+const showEditUser = ref(false)
+const editingUser = ref<any>(null)
+const showEditEmpresaSQL = ref(false)
+const showEditEmpresaConfig = ref(false)
+const editingEmpresaSQL = ref<any>(null)
+const editingEmpresaConfig = ref<any>(null)
+const empresaSQLContent = ref('')
+const empresaConfigContent = ref('')
+const dominios = ref<any[]>([])
+const loadingDominios = ref(false)
+const showCreateDominio = ref(false)
+const showEditDominio = ref(false)
+const editingDominio = ref<any>(null)
+const newDominio = ref({
+  dominio: '',
+  nit: '',
+  modo: 'ecommerce',
+  activo: true
+})
+const pasarelas = ref<any[]>([])
+const loadingPasarelas = ref(false)
+const showCreatePasarela = ref(false)
+const showEditPasarela = ref(false)
+const editingPasarela = ref<any>(null)
+const newPasarela = ref({
+  codigo: '',
+  nombre: '',
+  activa: true,
+  configuracion: {}
+})
+const pasarelaConfigContent = ref('{}')
+const permisosUsuarios = ref<any[]>([])
+const loadingPermisos = ref(false)
+const showCreatePermiso = ref(false)
+const showEditPermiso = ref(false)
+const editingPermiso = ref<any>(null)
+const newPermiso = ref({
+  usuario: null,
+  empresa_servidor: null,
+  puede_ver: true,
+  puede_editar: false,
+  preferred_template: 'pro'
+})
+const tenantProfiles = ref<any[]>([])
+const loadingTenantProfiles = ref(false)
+const showCreateTenantProfile = ref(false)
+const showEditTenantProfile = ref(false)
+const editingTenantProfile = ref<any>(null)
+const newTenantProfile = ref({
+  user: null,
+  subdomain: '',
+  preferred_template: 'pro'
+})
 const scanningServer = ref<number | null>(null)
 const activeScanTasks = ref<Record<number, string>>({}) // servidor_id -> task_id
 const showCreateServer = ref(false)
@@ -1719,6 +2746,17 @@ const newVpn = ref({
   activo: true
 })
 
+const newUser = ref({
+  username: '',
+  email: '',
+  first_name: '',
+  last_name: '',
+  password: '',
+  is_active: true,
+  is_staff: false,
+  is_superuser: false
+})
+
 const sortedAndFilteredEmpresas = computed(() => {
   let result = [...empresas.value]
   
@@ -1773,6 +2811,17 @@ const paginatedEmpresas = computed(() => {
   const start = (empresaCurrentPage.value - 1) * empresaPageSize.value
   const end = start + empresaPageSize.value
   return sortedAndFilteredEmpresas.value.slice(start, end)
+})
+
+const filteredUsers = computed(() => {
+  if (!userSearch.value) return users.value
+  const search = userSearch.value.toLowerCase()
+  return users.value.filter(u => 
+    u.username.toLowerCase().includes(search) ||
+    (u.email || '').toLowerCase().includes(search) ||
+    (u.first_name || '').toLowerCase().includes(search) ||
+    (u.last_name || '').toLowerCase().includes(search)
+  )
 })
 
 const sortEmpresas = (field: string) => {
@@ -2448,6 +3497,127 @@ const viewEmpresaDetails = async (empresaId: number) => {
   })
 }
 
+const editEmpresaSQL = async (empresa: any) => {
+  try {
+    // Cargar datos completos de la empresa
+    const response = await api.get(`/api/empresas-servidor/${empresa.id}/`)
+    editingEmpresaSQL.value = response
+    empresaSQLContent.value = response.consulta_sql || ''
+    showEditEmpresaSQL.value = true
+  } catch (error: any) {
+    console.error('Error cargando empresa:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al cargar empresa',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  }
+}
+
+const saveEmpresaSQL = async () => {
+  if (!editingEmpresaSQL.value) return
+  
+  try {
+    await api.patch(`/api/empresas-servidor/${editingEmpresaSQL.value.id}/`, {
+      consulta_sql: empresaSQLContent.value
+    })
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: '¡Consulta SQL Guardada!',
+      text: `Consulta SQL de ${editingEmpresaSQL.value.nombre} actualizada exitosamente`,
+      icon: 'success',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    showEditEmpresaSQL.value = false
+    editingEmpresaSQL.value = null
+    empresaSQLContent.value = ''
+    await loadEmpresas()
+  } catch (error: any) {
+    console.error('Error guardando consulta SQL:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al guardar consulta SQL',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  }
+}
+
+const editEmpresaConfig = async (empresa: any) => {
+  try {
+    // Cargar datos completos de la empresa
+    const response = await api.get(`/api/empresas-servidor/${empresa.id}/`)
+    editingEmpresaConfig.value = response
+    // Convertir configuracion a JSON string para edición
+    empresaConfigContent.value = JSON.stringify(response.configuracion || {}, null, 2)
+    showEditEmpresaConfig.value = true
+  } catch (error: any) {
+    console.error('Error cargando empresa:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al cargar empresa',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  }
+}
+
+const saveEmpresaConfig = async () => {
+  if (!editingEmpresaConfig.value) return
+  
+  try {
+    // Validar que sea JSON válido
+    let configObj
+    try {
+      configObj = JSON.parse(empresaConfigContent.value)
+    } catch (e) {
+      const Swal = (await import('sweetalert2')).default
+      await Swal.fire({
+        title: 'Error de Formato',
+        text: 'La configuración debe ser un JSON válido',
+        icon: 'error',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' }
+      })
+      return
+    }
+    
+    await api.patch(`/api/empresas-servidor/${editingEmpresaConfig.value.id}/`, {
+      configuracion: configObj
+    })
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: '¡Configuración Guardada!',
+      text: `Configuración de ${editingEmpresaConfig.value.nombre} actualizada exitosamente`,
+      icon: 'success',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    showEditEmpresaConfig.value = false
+    editingEmpresaConfig.value = null
+    empresaConfigContent.value = ''
+    await loadEmpresas()
+  } catch (error: any) {
+    console.error('Error guardando configuración:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al guardar configuración',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  }
+}
+
 const viewServerDetails = async (serverId: number) => {
   loadingServerDetails.value = true
   try {
@@ -2764,6 +3934,33 @@ watch(activeSection, (newSection) => {
     loadSystemdServices()
     loadPm2Processes()
     loadCeleryTasksList()
+  } else if (newSection === 'usuarios') {
+    // Cargar usuarios automáticamente al cambiar a esta pestaña
+    loadUsers()
+  } else if (newSection === 'api-keys') {
+    // Cargar API Keys y empresas automáticamente
+    if (empresas.value.length === 0) {
+      loadEmpresas()
+    }
+    loadApiKeys()
+  } else if (newSection === 'dominios') {
+    // Cargar dominios y empresas automáticamente
+    if (empresas.value.length === 0) {
+      loadEmpresas()
+    }
+    loadDominios()
+  } else if (newSection === 'pasarelas') {
+    // Cargar pasarelas automáticamente
+    loadPasarelas()
+  } else if (newSection === 'permisos') {
+    // Cargar permisos, usuarios y empresas automáticamente
+    if (users.value.length === 0) loadUsers()
+    if (empresas.value.length === 0) loadEmpresas()
+    loadPermisos()
+  } else if (newSection === 'tenant-profiles') {
+    // Cargar tenant profiles y usuarios automáticamente
+    if (users.value.length === 0) loadUsers()
+    loadTenantProfiles()
   } else if (newSection === 'terminal') {
     // Enfocar el input del terminal cuando se cambia a esa pestaña
     setTimeout(() => {
@@ -2868,6 +4065,28 @@ const newApiKey = ref({
   nombre_cliente: '',
   dias_validez: 365
 })
+
+// Lista de NITs únicos para el selector
+const uniqueNits = computed(() => {
+  const nitsMap = new Map<string, string>()
+  empresas.value.forEach(emp => {
+    if (emp.nit && !nitsMap.has(emp.nit)) {
+      // Usar el nombre de la primera empresa con ese NIT
+      nitsMap.set(emp.nit, emp.nombre)
+    }
+  })
+  return Array.from(nitsMap.entries()).map(([nit, nombre]) => ({ nit, nombre }))
+})
+
+// Auto-llenar nombre cuando se selecciona NIT
+const onNitSelected = () => {
+  if (newApiKey.value.nit) {
+    const selected = uniqueNits.value.find(n => n.nit === newApiKey.value.nit)
+    if (selected) {
+      newApiKey.value.nombre_cliente = selected.nombre
+    }
+  }
+}
 
 const loadApiKeys = async () => {
   loadingApiKeys.value = true
@@ -3191,6 +4410,821 @@ const viewApiKeyEmpresas = async (keyId: number) => {
     confirmButtonText: 'Cerrar',
     customClass: { container: 'swal-z-index-fix' }
   })
+}
+
+// ========== USER MANAGEMENT FUNCTIONS ==========
+const loadUsers = async () => {
+  loadingUsers.value = true
+  try {
+    const response = await api.get<any[]>('/api/usuarios/')
+    users.value = Array.isArray(response) ? response : (response as any).results || []
+    // Agregar formato de fecha
+    users.value = users.value.map((u: any) => ({
+      ...u,
+      last_login_formatted: u.last_login_formatted || 'Nunca'
+    }))
+  } catch (error: any) {
+    console.error('Error cargando usuarios:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al cargar usuarios',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    loadingUsers.value = false
+  }
+}
+
+const createUser = async () => {
+  if (!newUser.value.username || !newUser.value.password) {
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: 'Usuario y contraseña son requeridos',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    return
+  }
+  
+  try {
+    await api.post('/api/usuarios/', newUser.value)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: '¡Usuario Creado!',
+      text: `Usuario ${newUser.value.username} creado exitosamente`,
+      icon: 'success',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    showCreateUser.value = false
+    newUser.value = {
+      username: '',
+      email: '',
+      first_name: '',
+      last_name: '',
+      password: '',
+      is_active: true,
+      is_staff: false,
+      is_superuser: false
+    }
+    await loadUsers()
+  } catch (error: any) {
+    console.error('Error creando usuario:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al crear usuario',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  }
+}
+
+const editUser = (usr: any) => {
+  editingUser.value = { ...usr }
+  // No incluir password al editar
+  delete editingUser.value.password
+  showEditUser.value = true
+}
+
+const updateUser = async () => {
+  if (!editingUser.value) return
+  
+  try {
+    const updateData = { ...editingUser.value }
+    // Si no hay password, no enviarlo
+    if (!updateData.password) {
+      delete updateData.password
+    }
+    
+    await api.patch(`/api/usuarios/${editingUser.value.id}/`, updateData)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: '¡Usuario Actualizado!',
+      text: `Usuario ${editingUser.value.username} actualizado exitosamente`,
+      icon: 'success',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    showEditUser.value = false
+    editingUser.value = null
+    await loadUsers()
+  } catch (error: any) {
+    console.error('Error actualizando usuario:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al actualizar usuario',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  }
+}
+
+const deleteUser = async (usr: any) => {
+  const Swal = (await import('sweetalert2')).default
+  const result = await Swal.fire({
+    title: '¿Eliminar Usuario?',
+    text: `¿Estás seguro de eliminar el usuario "${usr.username}"? Esta acción no se puede deshacer.`,
+    icon: 'warning',
+    showCancelButton: true,
+    confirmButtonText: 'Sí, eliminar',
+    cancelButtonText: 'Cancelar',
+    customClass: { container: 'swal-z-index-fix' }
+  })
+  
+  if (result.isConfirmed) {
+    try {
+      await api.delete(`/api/usuarios/${usr.id}/`)
+      await Swal.fire({
+        title: '¡Usuario Eliminado!',
+        text: `Usuario ${usr.username} eliminado exitosamente`,
+        icon: 'success',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' }
+      })
+      await loadUsers()
+    } catch (error: any) {
+      console.error('Error eliminando usuario:', error)
+      await Swal.fire({
+        title: 'Error',
+        text: error?.data?.error || error?.message || 'Error al eliminar usuario',
+        icon: 'error',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' }
+      })
+    }
+  }
+}
+
+const resetUserPassword = async (usr: any) => {
+  const Swal = (await import('sweetalert2')).default
+  const { value: newPassword } = await Swal.fire({
+    title: `Resetear Contraseña de ${usr.username}`,
+    input: 'text',
+    inputLabel: 'Nueva Contraseña',
+    inputPlaceholder: 'Ingresa la nueva contraseña',
+    showCancelButton: true,
+    confirmButtonText: 'Resetear',
+    cancelButtonText: 'Cancelar',
+    customClass: { container: 'swal-z-index-fix' },
+    inputValidator: (value) => {
+      if (!value) {
+        return 'Debes ingresar una contraseña'
+      }
+      if (value.length < 8) {
+        return 'La contraseña debe tener al menos 8 caracteres'
+      }
+    }
+  })
+  
+  if (newPassword) {
+    try {
+      await api.post(`/api/usuarios/${usr.id}/reset_password/`, {
+        new_password: newPassword
+      })
+      await Swal.fire({
+        title: '¡Contraseña Actualizada!',
+        text: `La contraseña de ${usr.username} ha sido actualizada exitosamente`,
+        icon: 'success',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' }
+      })
+    } catch (error: any) {
+      console.error('Error reseteando contraseña:', error)
+      await Swal.fire({
+        title: 'Error',
+        text: error?.data?.error || error?.message || 'Error al resetear contraseña',
+        icon: 'error',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' }
+      })
+    }
+  }
+}
+
+// ========== DOMINIOS FUNCTIONS ==========
+const loadDominios = async () => {
+  loadingDominios.value = true
+  try {
+    const response = await api.get<any[]>('/api/empresa-dominios/')
+    dominios.value = Array.isArray(response) ? response : (response as any).results || []
+  } catch (error: any) {
+    console.error('Error cargando dominios:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al cargar dominios',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    loadingDominios.value = false
+  }
+}
+
+const onDominioNitSelected = async () => {
+  if (newDominio.value.nit) {
+    // Buscar empresa con año fiscal más reciente para este NIT
+    const empresasMismoNit = empresas.value
+      .filter(e => e.nit === newDominio.value.nit)
+      .sort((a, b) => b.anio_fiscal - a.anio_fiscal)
+    
+    if (empresasMismoNit.length > 0) {
+      const empresaMasReciente = empresasMismoNit[0]
+      // El backend se encargará de asignar empresa_servidor y anio_fiscal automáticamente
+      // Solo mostramos información al usuario
+      console.log(`Empresa más reciente encontrada: ${empresaMasReciente.nombre} (Año: ${empresaMasReciente.anio_fiscal})`)
+    }
+  }
+}
+
+const createDominio = async () => {
+  if (!newDominio.value.dominio || !newDominio.value.nit) {
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: 'Dominio y NIT son requeridos',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    return
+  }
+  
+  try {
+    await api.post('/api/empresa-dominios/', newDominio.value)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: '¡Dominio Creado!',
+      text: `Dominio ${newDominio.value.dominio} creado exitosamente`,
+      icon: 'success',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    showCreateDominio.value = false
+    newDominio.value = {
+      dominio: '',
+      nit: '',
+      modo: 'ecommerce',
+      activo: true
+    }
+    await loadDominios()
+  } catch (error: any) {
+    console.error('Error creando dominio:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al crear dominio',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  }
+}
+
+const editDominio = (dominio: any) => {
+  editingDominio.value = { ...dominio }
+  showEditDominio.value = true
+}
+
+const updateDominio = async () => {
+  if (!editingDominio.value) return
+  
+  try {
+    await api.patch(`/api/empresa-dominios/${editingDominio.value.id}/`, editingDominio.value)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: '¡Dominio Actualizado!',
+      text: `Dominio ${editingDominio.value.dominio} actualizado exitosamente`,
+      icon: 'success',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    showEditDominio.value = false
+    editingDominio.value = null
+    await loadDominios()
+  } catch (error: any) {
+    console.error('Error actualizando dominio:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al actualizar dominio',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  }
+}
+
+const deleteDominio = async (dominio: any) => {
+  const Swal = (await import('sweetalert2')).default
+  const result = await Swal.fire({
+    title: '¿Eliminar Dominio?',
+    text: `¿Estás seguro de eliminar el dominio "${dominio.dominio}"? Esta acción no se puede deshacer.`,
+    icon: 'warning',
+    showCancelButton: true,
+    confirmButtonText: 'Sí, eliminar',
+    cancelButtonText: 'Cancelar',
+    customClass: { container: 'swal-z-index-fix' }
+  })
+  
+  if (result.isConfirmed) {
+    try {
+      await api.delete(`/api/empresa-dominios/${dominio.id}/`)
+      await Swal.fire({
+        title: '¡Dominio Eliminado!',
+        text: `Dominio ${dominio.dominio} eliminado exitosamente`,
+        icon: 'success',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' }
+      })
+      await loadDominios()
+    } catch (error: any) {
+      console.error('Error eliminando dominio:', error)
+      await Swal.fire({
+        title: 'Error',
+        text: error?.data?.error || error?.message || 'Error al eliminar dominio',
+        icon: 'error',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' }
+      })
+    }
+  }
+}
+
+// ========== PASARELAS FUNCTIONS ==========
+const loadPasarelas = async () => {
+  loadingPasarelas.value = true
+  try {
+    const response = await api.get<any[]>('/api/pasarelas-pago/')
+    pasarelas.value = Array.isArray(response) ? response : (response as any).results || []
+  } catch (error: any) {
+    console.error('Error cargando pasarelas:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al cargar pasarelas',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    loadingPasarelas.value = false
+  }
+}
+
+const createPasarela = async () => {
+  if (!newPasarela.value.codigo || !newPasarela.value.nombre) {
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: 'Código y nombre son requeridos',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    return
+  }
+  
+  try {
+    // Validar y parsear configuración JSON
+    let configObj = {}
+    if (pasarelaConfigContent.value.trim()) {
+      try {
+        configObj = JSON.parse(pasarelaConfigContent.value)
+      } catch (e) {
+        const Swal = (await import('sweetalert2')).default
+        await Swal.fire({
+          title: 'Error de Formato',
+          text: 'La configuración debe ser un JSON válido',
+          icon: 'error',
+          confirmButtonText: 'Aceptar',
+          customClass: { container: 'swal-z-index-fix' }
+        })
+        return
+      }
+    }
+    
+    await api.post('/api/pasarelas-pago/', {
+      ...newPasarela.value,
+      configuracion: configObj
+    })
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: '¡Pasarela Creada!',
+      text: `Pasarela ${newPasarela.value.nombre} creada exitosamente`,
+      icon: 'success',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    showCreatePasarela.value = false
+    newPasarela.value = {
+      codigo: '',
+      nombre: '',
+      activa: true,
+      configuracion: {}
+    }
+    pasarelaConfigContent.value = '{}'
+    await loadPasarelas()
+  } catch (error: any) {
+    console.error('Error creando pasarela:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al crear pasarela',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  }
+}
+
+const editPasarela = (pasarela: any) => {
+  editingPasarela.value = { ...pasarela }
+  // Convertir configuración a JSON string para edición
+  pasarelaConfigContent.value = JSON.stringify(pasarela.configuracion || {}, null, 2)
+  showEditPasarela.value = true
+}
+
+const updatePasarela = async () => {
+  if (!editingPasarela.value) return
+  
+  try {
+    // Validar y parsear configuración JSON
+    let configObj = {}
+    if (pasarelaConfigContent.value.trim()) {
+      try {
+        configObj = JSON.parse(pasarelaConfigContent.value)
+      } catch (e) {
+        const Swal = (await import('sweetalert2')).default
+        await Swal.fire({
+          title: 'Error de Formato',
+          text: 'La configuración debe ser un JSON válido',
+          icon: 'error',
+          confirmButtonText: 'Aceptar',
+          customClass: { container: 'swal-z-index-fix' }
+        })
+        return
+      }
+    }
+    
+    await api.patch(`/api/pasarelas-pago/${editingPasarela.value.codigo}/`, {
+      ...editingPasarela.value,
+      configuracion: configObj
+    })
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: '¡Pasarela Actualizada!',
+      text: `Pasarela ${editingPasarela.value.nombre} actualizada exitosamente`,
+      icon: 'success',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    showEditPasarela.value = false
+    editingPasarela.value = null
+    pasarelaConfigContent.value = '{}'
+    await loadPasarelas()
+  } catch (error: any) {
+    console.error('Error actualizando pasarela:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al actualizar pasarela',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  }
+}
+
+const deletePasarela = async (pasarela: any) => {
+  const Swal = (await import('sweetalert2')).default
+  const result = await Swal.fire({
+    title: '¿Eliminar Pasarela?',
+    text: `¿Estás seguro de eliminar la pasarela "${pasarela.nombre}"? Esta acción no se puede deshacer.`,
+    icon: 'warning',
+    showCancelButton: true,
+    confirmButtonText: 'Sí, eliminar',
+    cancelButtonText: 'Cancelar',
+    customClass: { container: 'swal-z-index-fix' }
+  })
+  
+  if (result.isConfirmed) {
+    try {
+      await api.delete(`/api/pasarelas-pago/${pasarela.codigo}/`)
+      await Swal.fire({
+        title: '¡Pasarela Eliminada!',
+        text: `Pasarela ${pasarela.nombre} eliminada exitosamente`,
+        icon: 'success',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' }
+      })
+      await loadPasarelas()
+    } catch (error: any) {
+      console.error('Error eliminando pasarela:', error)
+      await Swal.fire({
+        title: 'Error',
+        text: error?.data?.error || error?.message || 'Error al eliminar pasarela',
+        icon: 'error',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' }
+      })
+    }
+  }
+}
+
+const viewPasarelaConfig = (pasarela: any) => {
+  const Swal = (await import('sweetalert2')).default
+  Swal.fire({
+    title: `Configuración: ${pasarela.nombre}`,
+    html: `
+      <div style="text-align: left;">
+        <pre style="background: #f5f5f5; padding: 15px; border-radius: 5px; overflow-x: auto; max-height: 400px; text-align: left;">${JSON.stringify(pasarela.configuracion || {}, null, 2)}</pre>
+      </div>
+    `,
+    icon: 'info',
+    confirmButtonText: 'Cerrar',
+    customClass: { container: 'swal-z-index-fix' }
+  })
+}
+
+// ========== PERMISOS USUARIOS FUNCTIONS ==========
+const loadPermisos = async () => {
+  loadingPermisos.value = true
+  try {
+    const response = await api.get<any[]>('/api/permisos-usuarios/')
+    permisosUsuarios.value = Array.isArray(response) ? response : (response as any).results || []
+  } catch (error: any) {
+    console.error('Error cargando permisos:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al cargar permisos',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    loadingPermisos.value = false
+  }
+}
+
+const createPermiso = async () => {
+  if (!newPermiso.value.usuario || !newPermiso.value.empresa_servidor) {
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: 'Usuario y Empresa son requeridos',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    return
+  }
+  
+  try {
+    await api.post('/api/permisos-usuarios/', newPermiso.value)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: '¡Permiso Creado!',
+      text: 'Permiso usuario-empresa creado exitosamente',
+      icon: 'success',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    showCreatePermiso.value = false
+    newPermiso.value = {
+      usuario: null,
+      empresa_servidor: null,
+      puede_ver: true,
+      puede_editar: false,
+      preferred_template: 'pro'
+    }
+    await loadPermisos()
+  } catch (error: any) {
+    console.error('Error creando permiso:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al crear permiso',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  }
+}
+
+const editPermiso = (permiso: any) => {
+  editingPermiso.value = { ...permiso }
+  showEditPermiso.value = true
+}
+
+const updatePermiso = async () => {
+  if (!editingPermiso.value) return
+  
+  try {
+    await api.patch(`/api/permisos-usuarios/${editingPermiso.value.id}/`, editingPermiso.value)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: '¡Permiso Actualizado!',
+      text: 'Permiso actualizado exitosamente',
+      icon: 'success',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    showEditPermiso.value = false
+    editingPermiso.value = null
+    await loadPermisos()
+  } catch (error: any) {
+    console.error('Error actualizando permiso:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al actualizar permiso',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  }
+}
+
+const deletePermiso = async (permiso: any) => {
+  const Swal = (await import('sweetalert2')).default
+  const result = await Swal.fire({
+    title: '¿Eliminar Permiso?',
+    text: `¿Estás seguro de eliminar el permiso de ${permiso.usuario_username} a ${permiso.empresa_nombre}?`,
+    icon: 'warning',
+    showCancelButton: true,
+    confirmButtonText: 'Sí, eliminar',
+    cancelButtonText: 'Cancelar',
+    customClass: { container: 'swal-z-index-fix' }
+  })
+  
+  if (result.isConfirmed) {
+    try {
+      await api.delete(`/api/permisos-usuarios/${permiso.id}/`)
+      await Swal.fire({
+        title: '¡Permiso Eliminado!',
+        text: 'Permiso eliminado exitosamente',
+        icon: 'success',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' }
+      })
+      await loadPermisos()
+    } catch (error: any) {
+      console.error('Error eliminando permiso:', error)
+      await Swal.fire({
+        title: 'Error',
+        text: error?.data?.error || error?.message || 'Error al eliminar permiso',
+        icon: 'error',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' }
+      })
+    }
+  }
+}
+
+// ========== TENANT PROFILES FUNCTIONS ==========
+const loadTenantProfiles = async () => {
+  loadingTenantProfiles.value = true
+  try {
+    const response = await api.get<any[]>('/api/tenant-profiles/')
+    tenantProfiles.value = Array.isArray(response) ? response : (response as any).results || []
+  } catch (error: any) {
+    console.error('Error cargando tenant profiles:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al cargar tenant profiles',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    loadingTenantProfiles.value = false
+  }
+}
+
+const createTenantProfile = async () => {
+  if (!newTenantProfile.value.user || !newTenantProfile.value.subdomain) {
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: 'Usuario y Subdomain son requeridos',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    return
+  }
+  
+  try {
+    await api.post('/api/tenant-profiles/', newTenantProfile.value)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: '¡Tenant Profile Creado!',
+      text: 'Tenant profile creado exitosamente',
+      icon: 'success',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    showCreateTenantProfile.value = false
+    newTenantProfile.value = {
+      user: null,
+      subdomain: '',
+      preferred_template: 'pro'
+    }
+    await loadTenantProfiles()
+  } catch (error: any) {
+    console.error('Error creando tenant profile:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al crear tenant profile',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  }
+}
+
+const editTenantProfile = (profile: any) => {
+  editingTenantProfile.value = { ...profile }
+  showEditTenantProfile.value = true
+}
+
+const updateTenantProfile = async () => {
+  if (!editingTenantProfile.value) return
+  
+  try {
+    await api.patch(`/api/tenant-profiles/${editingTenantProfile.value.id}/`, editingTenantProfile.value)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: '¡Tenant Profile Actualizado!',
+      text: 'Tenant profile actualizado exitosamente',
+      icon: 'success',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    showEditTenantProfile.value = false
+    editingTenantProfile.value = null
+    await loadTenantProfiles()
+  } catch (error: any) {
+    console.error('Error actualizando tenant profile:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al actualizar tenant profile',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  }
+}
+
+const deleteTenantProfile = async (profile: any) => {
+  const Swal = (await import('sweetalert2')).default
+  const result = await Swal.fire({
+    title: '¿Eliminar Tenant Profile?',
+    text: `¿Estás seguro de eliminar el tenant profile de ${profile.user_username}?`,
+    icon: 'warning',
+    showCancelButton: true,
+    confirmButtonText: 'Sí, eliminar',
+    cancelButtonText: 'Cancelar',
+    customClass: { container: 'swal-z-index-fix' }
+  })
+  
+  if (result.isConfirmed) {
+    try {
+      await api.delete(`/api/tenant-profiles/${profile.id}/`)
+      await Swal.fire({
+        title: '¡Tenant Profile Eliminado!',
+        text: 'Tenant profile eliminado exitosamente',
+        icon: 'success',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' }
+      })
+      await loadTenantProfiles()
+    } catch (error: any) {
+      console.error('Error eliminando tenant profile:', error)
+      await Swal.fire({
+        title: 'Error',
+        text: error?.data?.error || error?.message || 'Error al eliminar tenant profile',
+        icon: 'error',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' }
+      })
+    }
+  }
 }
 
 // ========== SERVER EDIT/DELETE FUNCTIONS ==========
