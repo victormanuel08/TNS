@@ -430,4 +430,109 @@ class ServerManager:
                 'command': command,
                 'output': f'Error: {str(e)}'
             }
+    
+    def get_celery_logs(self, lines: int = 100, log_file: str = None) -> str:
+        """
+        Obtiene logs de Celery worker.
+        
+        Args:
+            lines: Número de líneas a obtener
+            log_file: Ruta al archivo de log (opcional, si no se especifica usa journalctl)
+        
+        Returns:
+            Logs de Celery
+        """
+        try:
+            if log_file:
+                # Leer desde archivo de log
+                exit_status, stdout, stderr = self._execute_command(
+                    f"tail -n {lines} {log_file}",
+                    use_sudo=False
+                )
+            else:
+                # Intentar obtener desde journalctl (servicio systemd)
+                exit_status, stdout, stderr = self._execute_command(
+                    f"journalctl -u celery* -n {lines} --no-pager --merge",
+                    use_sudo=True
+                )
+                # Si falla, intentar sin merge
+                if exit_status != 0:
+                    exit_status, stdout, stderr = self._execute_command(
+                        f"journalctl -u celerycore.service -n {lines} --no-pager",
+                        use_sudo=True
+                    )
+            
+            return stdout if exit_status == 0 else stderr
+        except Exception as e:
+            logger.error(f"Error obteniendo logs de Celery: {e}")
+            raise Exception(f"Error obteniendo logs de Celery: {str(e)}")
+    
+    def get_celery_task_logs(self, task_name: str = None, lines: int = 100) -> str:
+        """
+        Obtiene logs de tareas específicas de Celery filtrando por nombre de tarea.
+        
+        Args:
+            task_name: Nombre de la tarea a filtrar (ej: 'descubrir_empresas')
+            lines: Número de líneas a obtener
+        
+        Returns:
+            Logs filtrados de la tarea
+        """
+        try:
+            # Obtener logs de Celery
+            all_logs = self.get_celery_logs(lines=lines * 2)  # Obtener más líneas para filtrar
+            
+            if task_name:
+                # Filtrar líneas que contengan el nombre de la tarea
+                filtered_lines = []
+                for line in all_logs.split('\n'):
+                    if task_name.lower() in line.lower():
+                        filtered_lines.append(line)
+                
+                # Tomar las últimas 'lines' líneas
+                return '\n'.join(filtered_lines[-lines:])
+            
+            return all_logs
+        except Exception as e:
+            logger.error(f"Error obteniendo logs de tarea Celery: {e}")
+            raise Exception(f"Error obteniendo logs de tarea: {str(e)}")
+    
+    def get_pm2_logs(self, process_name: str = None, lines: int = 100, log_type: str = 'out') -> str:
+        """
+        Obtiene logs de PM2.
+        
+        Args:
+            process_name: Nombre del proceso (si None, obtiene todos)
+            lines: Número de líneas a obtener
+            log_type: 'out', 'error', o 'all'
+        
+        Returns:
+            Logs de PM2
+        """
+        try:
+            if process_name:
+                if log_type == 'all':
+                    # Obtener ambos tipos de log
+                    exit_status1, stdout1, _ = self._execute_command(
+                        f"pm2 logs {process_name} --lines {lines} --nostream --out"
+                    )
+                    exit_status2, stdout2, _ = self._execute_command(
+                        f"pm2 logs {process_name} --lines {lines} --nostream --err"
+                    )
+                    return f"=== STDOUT ===\n{stdout1}\n\n=== STDERR ===\n{stdout2}"
+                else:
+                    log_flag = '--out' if log_type == 'out' else '--err'
+                    exit_status, stdout, stderr = self._execute_command(
+                        f"pm2 logs {process_name} --lines {lines} --nostream {log_flag}"
+                    )
+            else:
+                # Todos los procesos
+                exit_status, stdout, stderr = self._execute_command(
+                    f"pm2 logs --lines {lines} --nostream"
+                )
+            
+            return stdout if exit_status == 0 else stderr
+        except Exception as e:
+            logger.error(f"Error obteniendo logs de PM2: {e}")
+            raise Exception(f"Error obteniendo logs de PM2: {str(e)}")
 

@@ -4198,6 +4198,112 @@ class APIKeyManagementViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
             return Response({'error': 'Error al validar API Key'}, status=500)
     
 
+# ========== USER MANAGEMENT VIEWSET ==========
+
+class UserManagementViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
+    """
+    ViewSet para gestionar usuarios del sistema.
+    Solo accesible para superusuarios.
+    """
+    from django.contrib.auth.models import User
+    from .serializers import UserSerializer, CreateUserSerializer
+    
+    queryset = User.objects.all().order_by('-date_joined')
+    serializer_class = UserSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        # Solo superusuarios pueden ver todos los usuarios
+        if not self.request.user.is_superuser:
+            return User.objects.none()
+        return User.objects.all().order_by('-date_joined')
+    
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return CreateUserSerializer
+        return UserSerializer
+    
+    def create(self, request, *args, **kwargs):
+        """Crear nuevo usuario"""
+        if not request.user.is_superuser:
+            return Response(
+                {'error': 'Solo los superusuarios pueden crear usuarios'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        
+        return Response({
+            'id': user.id,
+            'username': user.username,
+            'email': user.email,
+            'message': 'Usuario creado exitosamente'
+        }, status=status.HTTP_201_CREATED)
+    
+    def update(self, request, *args, **kwargs):
+        """Actualizar usuario"""
+        if not request.user.is_superuser:
+            return Response(
+                {'error': 'Solo los superusuarios pueden editar usuarios'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        return super().update(request, *args, **kwargs)
+    
+    def destroy(self, request, *args, **kwargs):
+        """Eliminar usuario"""
+        if not request.user.is_superuser:
+            return Response(
+                {'error': 'Solo los superusuarios pueden eliminar usuarios'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        user = self.get_object()
+        
+        # No permitir eliminar el propio usuario
+        if user.id == request.user.id:
+            return Response(
+                {'error': 'No puedes eliminar tu propio usuario'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        user.delete()
+        return Response({'message': 'Usuario eliminado exitosamente'}, status=status.HTTP_204_NO_CONTENT)
+    
+    @action(detail=True, methods=['post'])
+    def reset_password(self, request, pk=None):
+        """Resetear contraseña de un usuario"""
+        if not request.user.is_superuser:
+            return Response(
+                {'error': 'Solo los superusuarios pueden resetear contraseñas'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        user = self.get_object()
+        new_password = request.data.get('new_password')
+        
+        if not new_password:
+            return Response(
+                {'error': 'Debes proporcionar new_password'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        from django.contrib.auth.password_validation import validate_password
+        try:
+            validate_password(new_password, user)
+        except Exception as e:
+            return Response(
+                {'error': f'Contraseña inválida: {", ".join(e.messages)}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        user.set_password(new_password)
+        user.save()
+        
+        return Response({'message': 'Contraseña actualizada exitosamente'})
+
+
 class TestingViewSet(viewsets.ViewSet):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -6904,33 +7010,33 @@ Endpoint = {wg_manager.server_endpoint or 'TU_SERVIDOR:51820'}
 AllowedIPs = {vpn_config.ip_address or '10.8.3.X'}/32
 PersistentKeepalive = 25
 """
-                else:
-                    # Generar configuración completa con private_key
-                    # Obtener clave pública del servidor primero para validar
-                    server_public_key = wg_manager._get_server_public_key()
-                    if server_public_key == "REEMPLAZAR_CON_CLAVE_PUBLICA_DEL_SERVIDOR":
-                        logger.error(f"No se pudo obtener la clave pública del servidor para {vpn_config.nombre}")
-                        return Response(
-                            {'error': 'No se pudo obtener la clave pública del servidor. Verifica la configuración de WireGuard.'},
-                            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                        )
-                    
-                    # Generar config pasando la clave pública del servidor explícitamente
-                    config_content = wg_manager.create_client_config(
-                        client_name=vpn_config.nombre,
-                        client_private_key=vpn_config.private_key,
-                        client_public_key=vpn_config.public_key,
-                        client_ip=vpn_config.ip_address or '10.8.3.X',
-                        server_public_key=server_public_key  # Pasar explícitamente
+            else:
+                # Generar configuración completa con private_key
+                # Obtener clave pública del servidor primero para validar
+                server_public_key = wg_manager._get_server_public_key()
+                if server_public_key == "REEMPLAZAR_CON_CLAVE_PUBLICA_DEL_SERVIDOR":
+                    logger.error(f"No se pudo obtener la clave pública del servidor para {vpn_config.nombre}")
+                    return Response(
+                        {'error': 'No se pudo obtener la clave pública del servidor. Verifica la configuración de WireGuard.'},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
                     )
-                    
-                    # Asegurar que la clave pública del servidor en el config sea la correcta
-                    # Reemplazar si está el placeholder (por si acaso)
-                    if 'PublicKey = REEMPLAZAR_CON_CLAVE_PUBLICA_DEL_SERVIDOR' in config_content:
-                        config_content = config_content.replace(
-                            'PublicKey = REEMPLAZAR_CON_CLAVE_PUBLICA_DEL_SERVIDOR',
-                            f'PublicKey = {server_public_key}'
-                        )
+                
+                # Generar config pasando la clave pública del servidor explícitamente
+                config_content = wg_manager.create_client_config(
+                    client_name=vpn_config.nombre,
+                    client_private_key=vpn_config.private_key,
+                    client_public_key=vpn_config.public_key,
+                    client_ip=vpn_config.ip_address or '10.8.3.X',
+                    server_public_key=server_public_key  # Pasar explícitamente
+                )
+                
+                # Asegurar que la clave pública del servidor en el config sea la correcta
+                # Reemplazar si está el placeholder (por si acaso)
+                if 'PublicKey = REEMPLAZAR_CON_CLAVE_PUBLICA_DEL_SERVIDOR' in config_content:
+                    config_content = config_content.replace(
+                        'PublicKey = REEMPLAZAR_CON_CLAVE_PUBLICA_DEL_SERVIDOR',
+                        f'PublicKey = {server_public_key}'
+                    )
             
             # Guardar archivo generado
             config_path = Path(wg_manager.save_config_file(vpn_config.nombre, config_content))
@@ -7307,6 +7413,171 @@ class ServerManagementViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
         except Exception as e:
             logger.error(f"Error ejecutando comando: {e}")
             return Response({'error': str(e)}, status=500)
+    
+    @action(detail=False, methods=['get'])
+    def celery_logs(self, request):
+        """Obtiene logs de Celery worker"""
+        if not self.server_manager:
+            return Response({'error': 'ServerManager no está configurado'}, status=500)
+        
+        lines = int(request.query_params.get('lines', 100))
+        log_file = request.query_params.get('log_file', None)
+        
+        try:
+            logs = self.server_manager.get_celery_logs(lines=lines, log_file=log_file)
+            return Response({'logs': logs, 'lines': lines, 'type': 'celery'})
+        except Exception as e:
+            logger.error(f"Error obteniendo logs de Celery: {e}")
+            return Response({'error': str(e)}, status=500)
+    
+    @action(detail=False, methods=['get'])
+    def celery_task_logs(self, request):
+        """Obtiene logs de una tarea específica de Celery"""
+        if not self.server_manager:
+            return Response({'error': 'ServerManager no está configurado'}, status=500)
+        
+        task_name = request.query_params.get('task_name', None)
+        lines = int(request.query_params.get('lines', 100))
+        
+        if not task_name:
+            return Response({'error': 'task_name es requerido'}, status=400)
+        
+        try:
+            logs = self.server_manager.get_celery_task_logs(task_name=task_name, lines=lines)
+            return Response({'logs': logs, 'task_name': task_name, 'lines': lines, 'type': 'celery_task'})
+        except Exception as e:
+            logger.error(f"Error obteniendo logs de tarea Celery: {e}")
+            return Response({'error': str(e)}, status=500)
+    
+    @action(detail=False, methods=['get'])
+    def pm2_logs(self, request):
+        """Obtiene logs de PM2"""
+        if not self.server_manager:
+            return Response({'error': 'ServerManager no está configurado'}, status=500)
+        
+        process_name = request.query_params.get('process_name', None)
+        lines = int(request.query_params.get('lines', 100))
+        log_type = request.query_params.get('log_type', 'out')
+        
+        try:
+            logs = self.server_manager.get_pm2_logs(
+                process_name=process_name, 
+                lines=lines, 
+                log_type=log_type
+            )
+            return Response({
+                'logs': logs, 
+                'process_name': process_name or 'all',
+                'lines': lines, 
+                'type': 'pm2'
+            })
+        except Exception as e:
+            logger.error(f"Error obteniendo logs de PM2: {e}")
+            return Response({'error': str(e)}, status=500)
+    
+    @action(detail=False, methods=['get'])
+    def celery_tasks_list(self, request):
+        """Lista todas las tareas registradas en Celery"""
+        try:
+            from config.celery import app as celery_app
+            
+            # Obtener todas las tareas registradas
+            registered_tasks = {}
+            for task_name, task in celery_app.tasks.items():
+                # Filtrar tareas internas de Celery
+                if not task_name.startswith('celery.'):
+                    registered_tasks[task_name] = {
+                        'name': task_name,
+                        'routing_key': getattr(task, 'routing_key', None),
+                        'queue': getattr(task, 'queue', None),
+                    }
+            
+            return Response({
+                'tasks': list(registered_tasks.values()),
+                'total': len(registered_tasks)
+            })
+        except Exception as e:
+            logger.error(f"Error listando tareas de Celery: {e}")
+            return Response({'error': str(e)}, status=500)
+    
+    @action(detail=False, methods=['get'])
+    def celery_active_tasks(self, request):
+        """Obtiene tareas activas de Celery en tiempo real"""
+        try:
+            from config.celery import app as celery_app
+            
+            # Usar inspect para obtener tareas activas
+            inspect = celery_app.control.inspect()
+            
+            # Obtener información de workers activos (puede retornar None si no hay workers)
+            active = inspect.active() or {}
+            scheduled = inspect.scheduled() or {}
+            reserved = inspect.reserved() or {}
+            stats = inspect.stats() or {}
+            
+            # Formatear tareas activas
+            active_tasks = []
+            if active:
+                for worker_name, tasks in active.items():
+                    if tasks:
+                        for task in tasks:
+                            active_tasks.append({
+                                'worker': worker_name,
+                                'task_id': task.get('id'),
+                                'task_name': task.get('name'),
+                                'args': task.get('args', []),
+                                'kwargs': task.get('kwargs', {}),
+                                'time_start': task.get('time_start'),
+                                'status': 'ACTIVE'
+                            })
+            
+            # Formatear tareas programadas
+            scheduled_tasks = []
+            if scheduled:
+                for worker_name, tasks in scheduled.items():
+                    if tasks:
+                        for task in tasks:
+                            request_data = task.get('request', {})
+                            scheduled_tasks.append({
+                                'worker': worker_name,
+                                'task_id': request_data.get('id'),
+                                'task_name': request_data.get('task'),
+                                'eta': task.get('eta'),
+                                'status': 'SCHEDULED'
+                            })
+            
+            # Formatear tareas reservadas
+            reserved_tasks = []
+            if reserved:
+                for worker_name, tasks in reserved.items():
+                    if tasks:
+                        for task in tasks:
+                            reserved_tasks.append({
+                                'worker': worker_name,
+                                'task_id': task.get('id'),
+                                'task_name': task.get('name'),
+                                'args': task.get('args', []),
+                                'kwargs': task.get('kwargs', {}),
+                                'status': 'RESERVED'
+                            })
+            
+            return Response({
+                'active': active_tasks,
+                'scheduled': scheduled_tasks,
+                'reserved': reserved_tasks,
+                'workers': list(stats.keys()) if stats else [],
+                'stats': stats
+            })
+        except Exception as e:
+            logger.error(f"Error obteniendo tareas activas de Celery: {e}", exc_info=True)
+            return Response({
+                'active': [],
+                'scheduled': [],
+                'reserved': [],
+                'workers': [],
+                'stats': {},
+                'error': str(e)
+            }, status=200)  # Retornar 200 con estructura vacía en lugar de error
 
 
 @api_view(['GET'])

@@ -1,4 +1,6 @@
 from rest_framework import serializers
+from django.contrib.auth.models import User
+from django.contrib.auth.password_validation import validate_password
 from .models import (
     PasarelaPago, TransaccionPago,
     Servidor, EmpresaServidor, MovimientoInventario, UsuarioEmpresa,
@@ -451,6 +453,90 @@ class GenerarAPIKeySerializer(serializers.Serializer):
         """Normalizar NIT (eliminar puntos, guiones, espacios)"""
         import re
         return re.sub(r"\D", "", str(value))
+
+
+# ========== User Management Serializers ==========
+
+class UserSerializer(serializers.ModelSerializer):
+    """Serializer para gestión de usuarios"""
+    password = serializers.CharField(write_only=True, required=False, validators=[validate_password])
+    is_superuser_display = serializers.SerializerMethodField()
+    is_staff_display = serializers.SerializerMethodField()
+    date_joined_formatted = serializers.SerializerMethodField()
+    last_login_formatted = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = User
+        fields = [
+            'id', 'username', 'email', 'first_name', 'last_name',
+            'is_active', 'is_staff', 'is_superuser',
+            'is_superuser_display', 'is_staff_display',
+            'date_joined', 'date_joined_formatted',
+            'last_login', 'last_login_formatted',
+            'password'
+        ]
+        read_only_fields = ['id', 'date_joined', 'last_login']
+    
+    def get_is_superuser_display(self, obj):
+        return 'Sí' if obj.is_superuser else 'No'
+    
+    def get_is_staff_display(self, obj):
+        return 'Sí' if obj.is_staff else 'No'
+    
+    def get_date_joined_formatted(self, obj):
+        if obj.date_joined:
+            return obj.date_joined.strftime('%Y-%m-%d %H:%M:%S')
+        return None
+    
+    def get_last_login_formatted(self, obj):
+        if obj.last_login:
+            return obj.last_login.strftime('%Y-%m-%d %H:%M:%S')
+        return 'Nunca'
+    
+    def create(self, validated_data):
+        password = validated_data.pop('password', None)
+        if not password:
+            raise serializers.ValidationError({'password': 'La contraseña es requerida al crear un usuario'})
+        
+        user = User.objects.create_user(**validated_data)
+        user.set_password(password)
+        user.save()
+        return user
+    
+    def update(self, instance, validated_data):
+        password = validated_data.pop('password', None)
+        
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        
+        if password:
+            instance.set_password(password)
+        
+        instance.save()
+        return instance
+
+
+class CreateUserSerializer(serializers.ModelSerializer):
+    """Serializer específico para crear usuarios"""
+    password = serializers.CharField(write_only=True, required=True, validators=[validate_password])
+    password_confirm = serializers.CharField(write_only=True, required=True)
+    
+    class Meta:
+        model = User
+        fields = ['username', 'email', 'first_name', 'last_name', 'password', 'password_confirm', 'is_active', 'is_staff', 'is_superuser']
+    
+    def validate(self, attrs):
+        if attrs['password'] != attrs['password_confirm']:
+            raise serializers.ValidationError({'password_confirm': 'Las contraseñas no coinciden'})
+        return attrs
+    
+    def create(self, validated_data):
+        validated_data.pop('password_confirm')
+        password = validated_data.pop('password')
+        user = User.objects.create_user(**validated_data)
+        user.set_password(password)
+        user.save()
+        return user
 
 
 class ExtraerDatosSerializer(serializers.Serializer):

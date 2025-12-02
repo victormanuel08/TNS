@@ -21,6 +21,7 @@ router.register('dian-processor', views.DianProcessorViewSet, basename='dian-pro
 router.register('vpn/configs', views.VpnConfigViewSet, basename='vpn-configs')
 router.register('server', views.ServerManagementViewSet, basename='server-management')
 router.register('notas-rapidas', views.NotaRapidaViewSet, basename='notas-rapidas')
+router.register('usuarios', views.UserManagementViewSet, basename='usuarios')
 
 urlpatterns = [
     path('api/', include(router.urls)),

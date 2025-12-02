@@ -260,6 +260,97 @@
         </div>
       </section>
 
+      <!-- Usuarios -->
+      <section v-if="activeSection === 'usuarios'" class="section">
+        <div class="section-header">
+          <h2>Gestión de Usuarios</h2>
+          <div class="actions-bar">
+            <input
+              v-model="userSearch"
+              type="text"
+              placeholder="Buscar usuarios..."
+              class="search-input"
+            />
+            <button class="btn-primary" @click="showCreateUser = true">
+              <span>+</span> Crear Usuario
+            </button>
+            <button class="btn-secondary" @click="loadUsers" :disabled="loadingUsers">
+              <span v-if="loadingUsers">⟳</span>
+              <span v-else>↻</span>
+              Actualizar
+            </button>
+          </div>
+        </div>
+
+        <div v-if="loadingUsers" class="loading-state">
+          <p>Cargando usuarios...</p>
+        </div>
+
+        <div v-else-if="filteredUsers.length === 0" class="empty-state">
+          <p>No hay usuarios</p>
+        </div>
+
+        <div v-else class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Usuario</th>
+                <th>Email</th>
+                <th>Nombre</th>
+                <th>Superusuario</th>
+                <th>Staff</th>
+                <th>Activo</th>
+                <th>Último Login</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="usr in filteredUsers" :key="usr.id">
+                <td>{{ usr.id }}</td>
+                <td><strong>{{ usr.username }}</strong></td>
+                <td>{{ usr.email || '-' }}</td>
+                <td>{{ (usr.first_name + ' ' + usr.last_name).trim() || '-' }}</td>
+                <td>
+                  <span class="status-badge" :class="usr.is_superuser ? 'status-active' : 'status-inactive'">
+                    {{ usr.is_superuser_display }}
+                  </span>
+                </td>
+                <td>
+                  <span class="status-badge" :class="usr.is_staff ? 'status-active' : 'status-inactive'">
+                    {{ usr.is_staff_display }}
+                  </span>
+                </td>
+                <td>
+                  <span class="status-badge" :class="usr.is_active ? 'status-active' : 'status-inactive'">
+                    {{ usr.is_active ? 'Activo' : 'Inactivo' }}
+                  </span>
+                </td>
+                <td>{{ usr.last_login_formatted || 'Nunca' }}</td>
+                <td>
+                  <div class="action-buttons">
+                    <button class="btn-small btn-secondary" @click="editUser(usr)" title="Editar">
+                      ✏️
+                    </button>
+                    <button class="btn-small btn-warning" @click="resetUserPassword(usr)" title="Resetear Contraseña">
+                      🔑
+                    </button>
+                    <button 
+                      class="btn-small btn-danger" 
+                      @click="deleteUser(usr)" 
+                      title="Eliminar"
+                      :disabled="usr.id === user?.id"
+                    >
+                      🗑️
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       <!-- API Keys -->
       <section v-if="activeSection === 'api-keys'" class="section">
         <div class="section-header">
@@ -844,6 +935,208 @@
       </section>
 
       <!-- Terminal SSH -->
+      <!-- Logs -->
+      <section v-if="activeSection === 'logs'" class="section">
+        <div class="section-header">
+          <h2>Logs del Sistema</h2>
+          <div class="actions-bar">
+            <input
+              v-model="logsSearch"
+              type="text"
+              placeholder="Buscar en logs..."
+              class="search-input"
+            />
+            <input
+              v-model.number="logsLines"
+              type="number"
+              min="50"
+              max="1000"
+              step="50"
+              class="form-input"
+              style="width: 100px;"
+              placeholder="Líneas"
+            />
+            <label class="logs-auto-refresh-toggle">
+              <input type="checkbox" v-model="logAutoRefresh" @change="toggleLogAutoRefresh" />
+              <span>Auto-refresh</span>
+            </label>
+            <button class="btn-secondary" @click="loadLogs">
+              <span v-if="loadingLogs">⟳</span>
+              <span v-else>↻</span>
+              Actualizar
+            </button>
+          </div>
+        </div>
+
+        <div class="logs-tabs">
+          <button
+            v-for="tab in [
+              { id: 'celery', label: 'Celery Worker', icon: '⚙️' },
+              { id: 'celery_task', label: 'Tarea Celery', icon: '📋' },
+              { id: 'celery_realtime', label: 'Tareas en Tiempo Real', icon: '⚡' },
+              { id: 'pm2', label: 'PM2', icon: '🔄' },
+              { id: 'service', label: 'Servicio', icon: '🖥️' }
+            ]"
+            :key="tab.id"
+            class="logs-tab"
+            :class="{ active: logsTab === tab.id }"
+            @click="logsTab = tab.id as any; onLogsTabChange()"
+          >
+            <span>{{ tab.icon }}</span>
+            <span>{{ tab.label }}</span>
+          </button>
+        </div>
+
+        <div class="logs-filters" v-if="logsTab === 'celery_task' || logsTab === 'pm2' || logsTab === 'service'">
+          <div v-if="logsTab === 'celery_task'" class="filter-group">
+            <label>Tarea Celery:</label>
+            <select v-model="selectedLogTask" class="form-input" style="width: 300px;" @change="loadLogs()">
+              <option value="">Seleccionar tarea...</option>
+              <option v-for="task in celeryTasksList" :key="task.name" :value="task.name">
+                {{ task.name }}
+              </option>
+            </select>
+            <button class="btn-small btn-secondary" @click="loadCeleryTasksList" :disabled="loadingCeleryTasks">
+              <span v-if="loadingCeleryTasks">⟳</span>
+              <span v-else>↻</span>
+              Actualizar Lista
+            </button>
+          </div>
+          <div v-if="logsTab === 'pm2'" class="filter-group">
+            <label>Proceso PM2:</label>
+            <select v-model="selectedLogProcess" class="form-input" style="width: 250px;">
+              <option value="">Todos los procesos</option>
+              <option v-for="proc in pm2Processes" :key="proc.name" :value="proc.name">
+                {{ proc.name }}
+              </option>
+            </select>
+          </div>
+          <div v-if="logsTab === 'service'" class="filter-group">
+            <label>Servicio:</label>
+            <select v-model="selectedLogService" class="form-input" style="width: 250px;">
+              <option value="">Seleccionar servicio...</option>
+              <option v-for="svc in systemdServices" :key="svc.name" :value="svc.name">
+                {{ svc.name }}
+              </option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Vista de Tareas en Tiempo Real -->
+        <div v-if="logsTab === 'celery_realtime'" class="realtime-tasks-container">
+          <div class="realtime-header">
+            <button class="btn-secondary" @click="loadActiveTasks" :disabled="loadingActiveTasks">
+              <span v-if="loadingActiveTasks">⟳</span>
+              <span v-else>↻</span>
+              Actualizar
+            </button>
+            <label class="logs-auto-refresh-toggle">
+              <input type="checkbox" v-model="logAutoRefresh" @change="toggleLogAutoRefresh" />
+              <span>Auto-refresh (5s)</span>
+            </label>
+          </div>
+
+          <div v-if="loadingActiveTasks" class="loading-state">
+            <p>Cargando tareas activas...</p>
+          </div>
+
+          <div v-else class="realtime-tasks-content">
+            <!-- Workers -->
+            <div class="realtime-section">
+              <h3>Workers Activos ({{ celeryActiveTasks.workers.length }})</h3>
+              <div v-if="celeryActiveTasks.workers.length === 0" class="empty-state-small">
+                <p>No hay workers activos</p>
+              </div>
+              <div v-else class="workers-list">
+                <div v-for="worker in celeryActiveTasks.workers" :key="worker" class="worker-item">
+                  <span class="worker-name">{{ worker }}</span>
+                  <span class="worker-status active">● Activo</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Tareas Activas -->
+            <div class="realtime-section">
+              <h3>Tareas Activas ({{ celeryActiveTasks.active.length }})</h3>
+              <div v-if="celeryActiveTasks.active.length === 0" class="empty-state-small">
+                <p>No hay tareas ejecutándose actualmente</p>
+              </div>
+              <div v-else class="tasks-list">
+                <div v-for="task in celeryActiveTasks.active" :key="task.task_id" class="task-item active">
+                  <div class="task-header">
+                    <span class="task-name">{{ task.task_name }}</span>
+                    <span class="task-status active">● Ejecutando</span>
+                  </div>
+                  <div class="task-details">
+                    <div><strong>ID:</strong> <code>{{ task.task_id }}</code></div>
+                    <div><strong>Worker:</strong> {{ task.worker }}</div>
+                    <div v-if="task.time_start"><strong>Iniciada:</strong> {{ formatTaskTime(task.time_start) }}</div>
+                    <div v-if="task.args && task.args.length"><strong>Args:</strong> {{ JSON.stringify(task.args) }}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Tareas Programadas -->
+            <div class="realtime-section">
+              <h3>Tareas Programadas ({{ celeryActiveTasks.scheduled.length }})</h3>
+              <div v-if="celeryActiveTasks.scheduled.length === 0" class="empty-state-small">
+                <p>No hay tareas programadas</p>
+              </div>
+              <div v-else class="tasks-list">
+                <div v-for="task in celeryActiveTasks.scheduled" :key="task.task_id" class="task-item scheduled">
+                  <div class="task-header">
+                    <span class="task-name">{{ task.task_name }}</span>
+                    <span class="task-status scheduled">⏰ Programada</span>
+                  </div>
+                  <div class="task-details">
+                    <div><strong>ID:</strong> <code>{{ task.task_id }}</code></div>
+                    <div><strong>Worker:</strong> {{ task.worker }}</div>
+                    <div v-if="task.eta"><strong>ETA:</strong> {{ formatTaskTime(task.eta) }}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Tareas Reservadas -->
+            <div class="realtime-section">
+              <h3>Tareas Reservadas ({{ celeryActiveTasks.reserved.length }})</h3>
+              <div v-if="celeryActiveTasks.reserved.length === 0" class="empty-state-small">
+                <p>No hay tareas reservadas</p>
+              </div>
+              <div v-else class="tasks-list">
+                <div v-for="task in celeryActiveTasks.reserved" :key="task.task_id" class="task-item reserved">
+                  <div class="task-header">
+                    <span class="task-name">{{ task.task_name }}</span>
+                    <span class="task-status reserved">⏳ En Cola</span>
+                  </div>
+                  <div class="task-details">
+                    <div><strong>ID:</strong> <code>{{ task.task_id }}</code></div>
+                    <div><strong>Worker:</strong> {{ task.worker }}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Vista de Logs Normal -->
+        <template v-else>
+          <div v-if="loadingLogs" class="loading-state">
+            <p>Cargando logs...</p>
+          </div>
+
+          <div v-else class="logs-container">
+            <div class="logs-content">
+              <pre class="logs-text" :class="{ 'filtered': logsSearch }">{{ filteredLogs }}</pre>
+            </div>
+            <div v-if="!logsContent" class="empty-state">
+              <p>No hay logs disponibles. Selecciona un tipo de log y haz clic en "Actualizar".</p>
+            </div>
+          </div>
+        </template>
+      </section>
+
       <section v-if="activeSection === 'terminal'" class="section">
         <div class="section-header">
           <h2>Terminal SSH</h2>
@@ -1198,7 +1491,7 @@
 </template>
 
 <script setup lang="ts">
-import { watch } from 'vue'
+import { watch, computed } from 'vue'
 
 definePageMeta({
   layout: false,
@@ -1270,6 +1563,14 @@ const sections = [
     </svg>`
   },
   { 
+    id: 'usuarios', 
+    name: '3.5. Usuarios', 
+    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+      <circle cx="12" cy="7" r="4"/>
+    </svg>`
+  },
+  { 
     id: 'api-keys', 
     name: '4. API Keys', 
     icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1300,6 +1601,17 @@ const sections = [
       <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
       <line x1="8" y1="21" x2="16" y2="21"/>
       <line x1="12" y1="17" x2="12" y2="21"/>
+    </svg>`
+  },
+  { 
+    id: 'logs', 
+    name: 'Logs', 
+    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+      <polyline points="14 2 14 8 20 8"/>
+      <line x1="16" y1="13" x2="8" y2="13"/>
+      <line x1="16" y1="17" x2="8" y2="17"/>
+      <polyline points="10 9 9 9 8 9"/>
     </svg>`
   },
   { 
@@ -1368,6 +1680,28 @@ const terminalHost = ref('servidor')
 const terminalPath = ref('~')
 const terminalOutput = ref<HTMLElement | null>(null)
 const terminalInput = ref<HTMLInputElement | null>(null)
+
+// Logs section
+const logsTab = ref<'celery' | 'celery_task' | 'celery_realtime' | 'pm2' | 'service'>('celery')
+const logsContent = ref('')
+const loadingLogs = ref(false)
+const logsLines = ref(200)
+const logsSearch = ref('')
+const selectedLogService = ref('')
+const selectedLogTask = ref('descubrir_empresas')
+const selectedLogProcess = ref('')
+const logAutoRefresh = ref(false)
+const logRefreshInterval = ref<NodeJS.Timeout | null>(null)
+const celeryTasksList = ref<Array<{name: string, routing_key?: string, queue?: string}>>([])
+const loadingCeleryTasks = ref(false)
+const celeryActiveTasks = ref<any>({
+  active: [],
+  scheduled: [],
+  reserved: [],
+  workers: [],
+  stats: {}
+})
+const loadingActiveTasks = ref(false)
 
 const newServer = ref({
   nombre: '',
@@ -2181,6 +2515,176 @@ const loadSystemInfo = async () => {
   }
 }
 
+// Logs functions
+const loadLogs = async () => {
+  loadingLogs.value = true
+  try {
+    let response: any
+    
+    switch (logsTab.value) {
+      case 'celery':
+        response = await api.get(`/api/server/celery_logs/?lines=${logsLines.value}`)
+        break
+      case 'celery_task':
+        if (!selectedLogTask.value) {
+          alert('Por favor selecciona una tarea')
+          return
+        }
+        response = await api.get(`/api/server/celery_task_logs/?task_name=${selectedLogTask.value}&lines=${logsLines.value}`)
+        break
+      case 'pm2':
+        const pm2Params = selectedLogProcess.value 
+          ? `process_name=${selectedLogProcess.value}&` 
+          : ''
+        response = await api.get(`/api/server/pm2_logs/?${pm2Params}lines=${logsLines.value}`)
+        break
+      case 'service':
+        if (!selectedLogService.value) {
+          alert('Por favor selecciona un servicio')
+          return
+        }
+        response = await api.get(`/api/server/service_logs/?service_name=${selectedLogService.value}&service_type=systemd&lines=${logsLines.value}`)
+        break
+    }
+    
+    logsContent.value = response.logs || 'No hay logs disponibles'
+    
+    // Auto-scroll al final
+    setTimeout(() => {
+      const logsElement = document.querySelector('.logs-text')
+      if (logsElement) {
+        logsElement.scrollTop = logsElement.scrollHeight
+      }
+    }, 100)
+  } catch (error: any) {
+    console.error('Error cargando logs:', error)
+    logsContent.value = `Error al cargar logs: ${error?.data?.error || error.message || 'Error desconocido'}`
+  } finally {
+    loadingLogs.value = false
+  }
+}
+
+const onLogsTabChange = () => {
+  if (logsTab.value === 'celery_realtime') {
+    loadActiveTasks()
+    loadCeleryTasksList()
+  } else if (logsTab.value === 'celery_task') {
+    loadCeleryTasksList()
+  } else {
+    loadLogs()
+  }
+}
+
+const loadCeleryTasksList = async () => {
+  loadingCeleryTasks.value = true
+  try {
+    const response = await api.get('/api/server/celery_tasks_list/')
+    celeryTasksList.value = response.tasks || []
+    
+    // Si no hay tarea seleccionada y hay tareas disponibles, seleccionar la primera
+    if (!selectedLogTask.value && celeryTasksList.value.length > 0) {
+      selectedLogTask.value = celeryTasksList.value[0].name
+    }
+  } catch (error: any) {
+    console.error('Error cargando lista de tareas Celery:', error)
+    alert(error?.data?.error || 'Error al cargar lista de tareas')
+  } finally {
+    loadingCeleryTasks.value = false
+  }
+}
+
+const loadActiveTasks = async () => {
+  loadingActiveTasks.value = true
+  try {
+    const response = await api.get('/api/server/celery_active_tasks/')
+    celeryActiveTasks.value = {
+      active: response.active || [],
+      scheduled: response.scheduled || [],
+      reserved: response.reserved || [],
+      workers: response.workers || [],
+      stats: response.stats || {}
+    }
+  } catch (error: any) {
+    console.error('Error cargando tareas activas:', error)
+    celeryActiveTasks.value = {
+      active: [],
+      scheduled: [],
+      reserved: [],
+      workers: [],
+      stats: {}
+    }
+  } finally {
+    loadingActiveTasks.value = false
+  }
+}
+
+const formatTaskTime = (timestamp: number | string | null) => {
+  if (!timestamp) return '-'
+  
+  try {
+    let date: Date
+    
+    // Celery puede devolver timestamps en segundos o como string ISO
+    if (typeof timestamp === 'string') {
+      date = new Date(timestamp)
+    } else {
+      // Si es un número, puede ser en segundos o milisegundos
+      // Si es menor que un timestamp razonable en milisegundos, asumimos segundos
+      if (timestamp < 10000000000) {
+        date = new Date(timestamp * 1000)
+      } else {
+        date = new Date(timestamp)
+      }
+    }
+    
+    if (isNaN(date.getTime())) return '-'
+    
+    return date.toLocaleString('es-ES', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    })
+  } catch (e) {
+    return String(timestamp)
+  }
+}
+
+const toggleLogAutoRefresh = () => {
+  if (logAutoRefresh.value) {
+    // Iniciar auto-refresh cada 5 segundos
+    logRefreshInterval.value = setInterval(() => {
+      if (logsTab.value === 'celery_realtime') {
+        loadActiveTasks()
+      } else {
+        loadLogs()
+      }
+    }, 5000)
+  } else {
+    // Detener auto-refresh
+    if (logRefreshInterval.value) {
+      clearInterval(logRefreshInterval.value)
+      logRefreshInterval.value = null
+    }
+  }
+}
+
+const filteredLogs = computed(() => {
+  if (!logsSearch.value || !logsContent.value) {
+    return logsContent.value
+  }
+  
+  const searchLower = logsSearch.value.toLowerCase()
+  const lines = logsContent.value.split('\n')
+  const filtered = lines.filter(line => line.toLowerCase().includes(searchLower))
+  
+  return filtered.length > 0 
+    ? filtered.join('\n')
+    : `No se encontraron líneas que coincidan con "${logsSearch.value}"`
+})
+
 const systemdAction = async (serviceName: string, action: string) => {
   if (!confirm(`¿Estás seguro de ${action} el servicio ${serviceName}?`)) return
   
@@ -2255,6 +2759,11 @@ watch(activeSection, (newSection) => {
     loadSystemInfo()
     loadSystemdServices()
     loadPm2Processes()
+  } else if (newSection === 'logs') {
+    // Cargar datos necesarios para logs
+    loadSystemdServices()
+    loadPm2Processes()
+    loadCeleryTasksList()
   } else if (newSection === 'terminal') {
     // Enfocar el input del terminal cuando se cambia a esa pestaña
     setTimeout(() => {
@@ -4067,5 +4576,303 @@ onMounted(async () => {
   color: #4b5563;
   font-size: 0.875rem;
   font-weight: 500;
+}
+
+/* Estilos para sección de Logs */
+.logs-tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  border-bottom: 2px solid #e5e7eb;
+  padding-bottom: 0.5rem;
+}
+
+.logs-tab {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.5rem;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #6b7280;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-bottom: -0.5rem;
+}
+
+.logs-tab:hover {
+  color: #3b82f6;
+  background: #f3f4f6;
+  border-radius: 0.5rem 0.5rem 0 0;
+}
+
+.logs-tab.active {
+  color: #3b82f6;
+  border-bottom-color: #3b82f6;
+  background: #eff6ff;
+  border-radius: 0.5rem 0.5rem 0 0;
+}
+
+.logs-filters {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  padding: 1rem;
+  background: #f9fafb;
+  border-radius: 0.5rem;
+  border: 1px solid #e5e7eb;
+}
+
+.filter-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.filter-group label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #4b5563;
+  white-space: nowrap;
+}
+
+.logs-container {
+  display: flex;
+  flex-direction: column;
+  height: 600px;
+  background: #1f2937;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  border: 1px solid #374151;
+}
+
+.logs-content {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.logs-text {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+  font-family: 'Courier New', monospace;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: #f9fafb;
+  background: #111827;
+  margin: 0;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.logs-text.filtered {
+  background: #1a1f2e;
+}
+
+.logs-auto-refresh-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  user-select: none;
+  padding: 0.5rem 1rem;
+  border-radius: 0.375rem;
+  transition: background 0.2s;
+}
+
+.logs-auto-refresh-toggle:hover {
+  background: #f3f4f6;
+}
+
+.logs-auto-refresh-toggle input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+}
+
+.logs-auto-refresh-toggle span {
+  color: #4b5563;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+/* Estilos para Tareas en Tiempo Real */
+.realtime-tasks-container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.realtime-header {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  padding: 1rem;
+  background: #f9fafb;
+  border-radius: 0.5rem;
+  border: 1px solid #e5e7eb;
+}
+
+.realtime-tasks-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+.realtime-section {
+  background: white;
+  border-radius: 0.5rem;
+  padding: 1.5rem;
+  border: 1px solid #e5e7eb;
+}
+
+.realtime-section h3 {
+  margin: 0 0 1rem 0;
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: #1f2937;
+  padding-bottom: 0.75rem;
+  border-bottom: 2px solid #e5e7eb;
+}
+
+.workers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.worker-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  background: #f9fafb;
+  border-radius: 0.375rem;
+  border: 1px solid #e5e7eb;
+}
+
+.worker-name {
+  font-family: 'Courier New', monospace;
+  font-size: 0.875rem;
+  color: #1f2937;
+  font-weight: 600;
+}
+
+.worker-status {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+}
+
+.worker-status.active {
+  color: #10b981;
+  background: #d1fae5;
+}
+
+.tasks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.task-item {
+  padding: 1rem;
+  border-radius: 0.5rem;
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+  transition: all 0.2s;
+}
+
+.task-item:hover {
+  background: #f3f4f6;
+  border-color: #d1d5db;
+}
+
+.task-item.active {
+  border-left: 4px solid #10b981;
+  background: #f0fdf4;
+}
+
+.task-item.scheduled {
+  border-left: 4px solid #f59e0b;
+  background: #fffbeb;
+}
+
+.task-item.reserved {
+  border-left: 4px solid #3b82f6;
+  background: #eff6ff;
+}
+
+.task-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.task-name {
+  font-family: 'Courier New', monospace;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.task-status {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+}
+
+.task-status.active {
+  color: #10b981;
+  background: #d1fae5;
+}
+
+.task-status.scheduled {
+  color: #f59e0b;
+  background: #fef3c7;
+}
+
+.task-status.reserved {
+  color: #3b82f6;
+  background: #dbeafe;
+}
+
+.task-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+  color: #6b7280;
+}
+
+.task-details strong {
+  color: #4b5563;
+  font-weight: 600;
+}
+
+.task-details code {
+  background: #f3f4f6;
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  color: #1f2937;
+  font-family: 'Courier New', monospace;
+}
+
+.empty-state-small {
+  padding: 2rem;
+  text-align: center;
+  color: #9ca3af;
+  font-size: 0.875rem;
 }
 </style>
