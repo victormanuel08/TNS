@@ -764,6 +764,152 @@
         </div>
       </section>
 
+      <!-- RUTs -->
+      <section v-if="activeSection === 'ruts'" class="section">
+        <div class="section-header">
+          <h2>Gestión de RUTs (Registro Único Tributario)</h2>
+          <div class="actions-bar">
+            <button class="btn-primary" @click="showUploadRUT = true">
+              <span>📄</span> Subir RUT PDF
+            </button>
+            <button class="btn-secondary" @click="loadRuts" :disabled="loadingRuts">
+              <span v-if="loadingRuts">⟳</span>
+              <span v-else>↻</span>
+              Actualizar
+            </button>
+          </div>
+        </div>
+        
+        <div v-if="loadingRuts" class="loading-state">
+          <p>Cargando RUTs...</p>
+        </div>
+        
+        <div v-else-if="ruts.length === 0" class="empty-state">
+          <p>No hay RUTs registrados</p>
+          <p style="margin-top: 10px; color: #666; font-size: 0.9em;">
+            Sube un PDF de RUT para comenzar. El sistema detectará automáticamente el NIT.
+          </p>
+        </div>
+        
+        <div v-else class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>NIT</th>
+                <th>Razón Social</th>
+                <th>Nombre Comercial</th>
+                <th>Ciudad</th>
+                <th>Empresas Asociadas</th>
+                <th>PDF</th>
+                <th>Última Actualización</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="rut in ruts" :key="rut.id">
+                <td>
+                  <code>{{ rut.nit }}-{{ rut.dv }}</code><br>
+                  <small style="color: #666;">Normalizado: {{ rut.nit_normalizado }}</small>
+                </td>
+                <td><strong>{{ rut.razon_social }}</strong></td>
+                <td>{{ rut.nombre_comercial || '-' }}</td>
+                <td>
+                  {{ rut.ciudad_nombre || '-' }}<br>
+                  <small style="color: #666;">{{ rut.departamento_nombre || '' }}</small>
+                </td>
+                <td>
+                  <span class="status-badge status-active">
+                    {{ rut.empresas_asociadas?.length || 0 }} empresa(s)
+                  </span>
+                </td>
+                <td>
+                  <a 
+                    v-if="rut.archivo_pdf_url" 
+                    :href="rut.archivo_pdf_url" 
+                    target="_blank"
+                    class="btn-small btn-info"
+                    title="Ver PDF"
+                  >
+                    📄 Ver PDF
+                  </a>
+                  <span v-else style="color: #999;">Sin PDF</span>
+                </td>
+                <td>{{ formatDate(rut.fecha_actualizacion) }}</td>
+                <td>
+                  <div class="action-buttons">
+                    <button class="btn-small btn-info" @click="viewRUTDetails(rut)" title="Ver detalles">
+                      👁️
+                    </button>
+                    <button class="btn-small btn-secondary" @click="editRUT(rut)" title="Editar">
+                      ✏️
+                    </button>
+                    <button class="btn-small btn-danger" @click="deleteRUT(rut)" title="Eliminar">
+                      🗑️
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Calendario Tributario -->
+      <section v-if="activeSection === 'calendario-tributario'" class="section">
+        <div class="section-header">
+          <h2>Gestión de Calendario Tributario</h2>
+          <div class="actions-bar">
+            <button class="btn-primary" @click="showUploadCalendario = true">
+              <span>📅</span> Cargar Excel del Calendario
+            </button>
+            <button class="btn-secondary" @click="loadCalendarioTributario" :disabled="loadingCalendario">
+              <span v-if="loadingCalendario">⟳</span>
+              <span v-else>↻</span>
+              Actualizar
+            </button>
+          </div>
+        </div>
+        
+        <div v-if="loadingCalendario" class="loading-state">
+          <p>Cargando calendario tributario...</p>
+        </div>
+        
+        <div v-else-if="vigenciasTributarias.length === 0" class="empty-state">
+          <p>No hay vigencias tributarias registradas</p>
+          <p style="margin-top: 10px; color: #666; font-size: 0.9em;">
+            Carga un Excel con el calendario tributario para comenzar. 
+            El sistema detectará automáticamente las empresas asociadas por NIT.
+          </p>
+        </div>
+        
+        <div v-else class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Impuesto</th>
+                <th>Dígitos NIT</th>
+                <th>Tipo Tercero</th>
+                <th>Régimen</th>
+                <th>Fecha Límite</th>
+                <th>Descripción</th>
+                <th>Última Actualización</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="vigencia in vigenciasTributarias" :key="vigencia.id">
+                <td><strong>{{ vigencia.impuesto?.codigo }}</strong><br><small>{{ vigencia.impuesto?.nombre }}</small></td>
+                <td><code>{{ vigencia.digitos_nit || 'TODOS' }}</code></td>
+                <td>{{ vigencia.tipo_tercero?.codigo || 'TODOS' }}</td>
+                <td>{{ vigencia.tipo_regimen?.codigo || 'TODOS' }}</td>
+                <td><strong>{{ formatDate(vigencia.fecha_limite) }}</strong></td>
+                <td>{{ vigencia.descripcion || '-' }}</td>
+                <td>{{ formatDate(vigencia.fecha_actualizacion) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       <!-- Scrapers -->
       <section v-if="activeSection === 'scrapers'" class="section">
         <div class="section-header">
@@ -2419,6 +2565,283 @@
         </form>
       </div>
     </div>
+
+    <!-- Modal: Subir RUT PDF o ZIP -->
+    <div v-if="showUploadRUT" class="modal-overlay" @click="showUploadRUT = false">
+      <div class="modal-content" @click.stop>
+        <div class="modal-header">
+          <h2>Subir RUT PDF o ZIP</h2>
+          <button class="modal-close" @click="showUploadRUT = false">×</button>
+        </div>
+        <form @submit.prevent="uploadRUTPDF" class="modal-form">
+          <div class="form-group">
+            <label>Archivo PDF del RUT (Individual) *</label>
+            <input 
+              type="file" 
+              accept=".pdf"
+              @change="onRUTFileSelected"
+              :required="!selectedRUTZipFile"
+              class="form-input"
+            />
+            <small>
+              <strong>Nota:</strong> El sistema detectará automáticamente el NIT del PDF.
+              Si el PDF no contiene el NIT o quieres especificarlo manualmente, puedes ingresarlo abajo.
+            </small>
+          </div>
+          <div style="text-align: center; margin: 20px 0; color: #666;">
+            <strong>O</strong>
+          </div>
+          <div class="form-group">
+            <label>Archivo ZIP con múltiples PDFs (Carga Masiva) *</label>
+            <input 
+              type="file" 
+              accept=".zip"
+              @change="onRUTZipSelected"
+              :required="!selectedRUTFile"
+              class="form-input"
+            />
+            <small>
+              <strong>Nota:</strong> El ZIP debe contener archivos PDF de RUT.
+              Los RUTs que no tengan empresas asociadas serán omitidos y se generará un reporte TXT.
+            </small>
+          </div>
+          <div class="form-group">
+            <label>NIT (Opcional - Solo si el PDF no lo contiene)</label>
+            <input 
+              v-model="rutNitManual" 
+              type="text" 
+              class="form-input" 
+              placeholder="900.869.750-0 o 9008697500"
+            />
+            <small>
+              Puedes ingresar el NIT con o sin formato (puntos y guiones).
+              El sistema lo normalizará automáticamente.
+            </small>
+          </div>
+          <div class="form-group" style="padding: 15px; background: #e3f2fd; border-radius: 5px; border-left: 4px solid #2196F3;">
+            <strong>💡 Información:</strong>
+            <ul style="margin: 10px 0 0 20px; text-align: left;">
+              <li>El sistema detectará automáticamente el NIT del PDF</li>
+              <li>Si ya existe un RUT para ese NIT, se actualizará</li>
+              <li>El RUT se asociará a todas las empresas con el mismo NIT</li>
+              <li>El PDF anterior se reemplazará si existe</li>
+            </ul>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn-secondary" @click="showUploadRUT = false">Cancelar</button>
+            <button type="submit" class="btn-primary" :disabled="uploadingRUT || (!selectedRUTFile && !selectedRUTZipFile)">
+              <span v-if="uploadingRUT">⟳</span>
+              <span v-else>{{ selectedRUTZipFile ? '📦 Subir y Procesar ZIP' : '📄 Subir y Procesar PDF' }}</span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Modal: Detalles RUT -->
+    <div v-if="showRUTDetails && selectedRUT" class="modal-overlay" @click="showRUTDetails = false">
+      <div class="modal-content" style="max-width: 1000px; max-height: 90vh; overflow-y: auto;" @click.stop>
+        <div class="modal-header">
+          <h2>Detalles del RUT: {{ selectedRUT.razon_social }}</h2>
+          <button class="modal-close" @click="showRUTDetails = false">×</button>
+        </div>
+        <div class="modal-form" style="padding: 20px;">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+            <div>
+              <h3 style="margin-bottom: 15px; color: #333;">Identificación</h3>
+              <div class="detail-item">
+                <strong>NIT:</strong> {{ selectedRUT.nit }}-{{ selectedRUT.dv }}<br>
+                <small style="color: #666;">Normalizado: {{ selectedRUT.nit_normalizado }}</small>
+              </div>
+              <div class="detail-item">
+                <strong>Razón Social:</strong> {{ selectedRUT.razon_social }}
+              </div>
+              <div class="detail-item" v-if="selectedRUT.nombre_comercial">
+                <strong>Nombre Comercial:</strong> {{ selectedRUT.nombre_comercial }}
+              </div>
+              <div class="detail-item" v-if="selectedRUT.sigla">
+                <strong>Sigla:</strong> {{ selectedRUT.sigla }}
+              </div>
+              <div class="detail-item">
+                <strong>Tipo Contribuyente:</strong> {{ selectedRUT.tipo_contribuyente === 'persona_juridica' ? 'Persona Jurídica' : 'Persona Natural' }}
+              </div>
+            </div>
+            
+            <div>
+              <h3 style="margin-bottom: 15px; color: #333;">Ubicación</h3>
+              <div class="detail-item">
+                <strong>Dirección:</strong> {{ selectedRUT.direccion_principal }}
+              </div>
+              <div class="detail-item">
+                <strong>Ciudad:</strong> {{ selectedRUT.ciudad_nombre }} ({{ selectedRUT.ciudad_codigo }})
+              </div>
+              <div class="detail-item">
+                <strong>Departamento:</strong> {{ selectedRUT.departamento_nombre }} ({{ selectedRUT.departamento_codigo }})
+              </div>
+              <div class="detail-item" v-if="selectedRUT.telefono_1">
+                <strong>Teléfono:</strong> {{ selectedRUT.telefono_1 }}
+              </div>
+              <div class="detail-item" v-if="selectedRUT.email">
+                <strong>Email:</strong> {{ selectedRUT.email }}
+              </div>
+            </div>
+          </div>
+          
+          <div style="margin-top: 30px;">
+            <h3 style="margin-bottom: 15px; color: #333;">Empresas Asociadas</h3>
+            <div v-if="selectedRUT.empresas_asociadas && selectedRUT.empresas_asociadas.length > 0" class="table-container">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Nombre</th>
+                    <th>NIT</th>
+                    <th>Año Fiscal</th>
+                    <th>Servidor</th>
+                    <th>Estado</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="empresa in selectedRUT.empresas_asociadas" :key="empresa.id">
+                    <td><strong>{{ empresa.nombre }}</strong></td>
+                    <td>{{ empresa.nit }}</td>
+                    <td>{{ empresa.anio_fiscal }}</td>
+                    <td>{{ empresa.servidor || '-' }}</td>
+                    <td>
+                      <span class="status-badge" :class="empresa.estado === 'ACTIVO' ? 'status-active' : 'status-inactive'">
+                        {{ empresa.estado || 'ACTIVO' }}
+                      </span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-else style="padding: 20px; text-align: center; color: #999;">
+              No hay empresas asociadas con este NIT
+            </div>
+          </div>
+          
+          <!-- Actividades Económicas CIIU -->
+          <div style="margin-top: 30px;">
+            <h3 style="margin-bottom: 15px; color: #333;">Actividades Económicas (CIIU)</h3>
+            
+            <!-- Actividad Principal -->
+            <div v-if="selectedRUT.actividad_principal_info" style="margin-bottom: 20px; padding: 15px; background: #f5f5f5; border-radius: 5px; border-left: 4px solid #4CAF50;">
+              <strong style="color: #4CAF50;">📌 Actividad Principal:</strong>
+              <div style="margin-top: 10px;">
+                <div><strong>Código:</strong> <code>{{ selectedRUT.actividad_principal_info.codigo }}</code></div>
+                <div v-if="selectedRUT.actividad_principal_info.descripcion">
+                  <strong>Descripción:</strong> {{ selectedRUT.actividad_principal_info.descripcion }}
+                </div>
+                <div v-if="selectedRUT.actividad_principal_info.titulo">
+                  <strong>Título:</strong> {{ selectedRUT.actividad_principal_info.titulo }}
+                </div>
+                <div v-if="selectedRUT.actividad_principal_info.division">
+                  <strong>División:</strong> {{ selectedRUT.actividad_principal_info.division }}
+                </div>
+                <div v-if="selectedRUT.actividad_principal_info.grupo">
+                  <strong>Grupo:</strong> {{ selectedRUT.actividad_principal_info.grupo }}
+                </div>
+              </div>
+            </div>
+            
+            <!-- Actividad Secundaria -->
+            <div v-if="selectedRUT.actividad_secundaria_info" style="margin-bottom: 20px; padding: 15px; background: #f5f5f5; border-radius: 5px; border-left: 4px solid #2196F3;">
+              <strong style="color: #2196F3;">📋 Actividad Secundaria:</strong>
+              <div style="margin-top: 10px;">
+                <div><strong>Código:</strong> <code>{{ selectedRUT.actividad_secundaria_info.codigo }}</code></div>
+                <div v-if="selectedRUT.actividad_secundaria_info.descripcion">
+                  <strong>Descripción:</strong> {{ selectedRUT.actividad_secundaria_info.descripcion }}
+                </div>
+                <div v-if="selectedRUT.actividad_secundaria_info.titulo">
+                  <strong>Título:</strong> {{ selectedRUT.actividad_secundaria_info.titulo }}
+                </div>
+              </div>
+            </div>
+            
+            <!-- Otras Actividades -->
+            <div v-if="selectedRUT.otras_actividades_info && selectedRUT.otras_actividades_info.length > 0" style="margin-bottom: 20px;">
+              <strong style="color: #FF9800;">📚 Otras Actividades ({{ selectedRUT.otras_actividades_info.length }}):</strong>
+              <div style="margin-top: 10px; display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px;">
+                <div 
+                  v-for="(actividad, idx) in selectedRUT.otras_actividades_info" 
+                  :key="idx"
+                  style="padding: 10px; background: #fff; border-radius: 5px; border: 1px solid #ddd;"
+                >
+                  <div><strong>Código:</strong> <code>{{ actividad.codigo }}</code></div>
+                  <div v-if="actividad.descripcion" style="margin-top: 5px; font-size: 0.9em; color: #666;">
+                    {{ actividad.descripcion }}
+                  </div>
+                  <div v-if="actividad.titulo" style="margin-top: 5px; font-size: 0.9em; color: #666;">
+                    {{ actividad.titulo }}
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            <div v-if="!selectedRUT.actividad_principal_info && !selectedRUT.actividad_secundaria_info && (!selectedRUT.otras_actividades_info || selectedRUT.otras_actividades_info.length === 0)" style="padding: 20px; text-align: center; color: #999;">
+              No hay actividades económicas registradas
+            </div>
+          </div>
+          
+          <div style="margin-top: 30px; text-align: center;">
+            <a 
+              v-if="selectedRUT.archivo_pdf_url" 
+              :href="selectedRUT.archivo_pdf_url" 
+              target="_blank"
+              class="btn-primary"
+            >
+              📄 Ver PDF Original
+            </a>
+          </div>
+          
+          <div class="modal-actions" style="margin-top: 30px;">
+            <button type="button" class="btn-secondary" @click="showRUTDetails = false">Cerrar</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Subir Calendario Tributario Excel -->
+    <div v-if="showUploadCalendario" class="modal-overlay" @click="showUploadCalendario = false">
+      <div class="modal-content" @click.stop>
+        <div class="modal-header">
+          <h2>Cargar Calendario Tributario</h2>
+          <button class="modal-close" @click="showUploadCalendario = false">×</button>
+        </div>
+        <form @submit.prevent="uploadCalendarioExcel" class="modal-form">
+          <div class="form-group">
+            <label>Archivo Excel del Calendario *</label>
+            <input 
+              type="file" 
+              accept=".xlsx,.xls"
+              @change="onCalendarioFileSelected"
+              required
+              class="form-input"
+            />
+            <small>
+              <strong>Formato esperado:</strong> Excel con hoja "CALENDARIO_TRIBUTARIO" con columnas:
+              tax_code, expirations_digits, third_type_code, regiment_type_code, date, description
+            </small>
+          </div>
+          <div class="form-group" style="padding: 15px; background: #e3f2fd; border-radius: 5px; border-left: 4px solid #2196F3;">
+            <strong>💡 Información:</strong>
+            <ul style="margin: 10px 0 0 20px; text-align: left;">
+              <li>El sistema detectará automáticamente las empresas asociadas por NIT</li>
+              <li>Si ya existe una vigencia con los mismos parámetros, se actualizará</li>
+              <li>Se crearán automáticamente los impuestos, tipos de tercero y regímenes si no existen</li>
+              <li>El formato de fecha debe ser DD/MM/YYYY o YYYY-MM-DD</li>
+            </ul>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn-secondary" @click="showUploadCalendario = false">Cancelar</button>
+            <button type="submit" class="btn-primary" :disabled="uploadingCalendario || !selectedCalendarioFile">
+              <span v-if="uploadingCalendario">⟳</span>
+              <span v-else>📅 Cargar y Procesar Excel</span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -2542,6 +2965,27 @@ const sections = [
       <rect x="3" y="3" width="18" height="18" rx="2"/>
       <path d="M3 9h18M9 3v18"/>
     </svg>`
+  },
+  { 
+    id: 'ruts', 
+    name: '9. RUTs',
+    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <rect x="2" y="3" width="20" height="18" rx="2"/>
+      <line x1="8" y1="21" x2="16" y2="21"/>
+      <line x1="12" y1="17" x2="12" y2="21"/>
+      <path d="M7 8h10M7 12h10M7 16h6"/>
+    </svg>`
+  },
+  { 
+    id: 'calendario-tributario', 
+    name: '10. Calendario Tributario',
+    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+      <line x1="16" y1="2" x2="16" y2="6"/>
+      <line x1="8" y1="2" x2="8" y2="6"/>
+      <line x1="3" y1="10" x2="21" y2="10"/>
+      <path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01M16 18h.01"/>
+    </svg>`
   }, 
     icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>
@@ -2664,6 +3108,23 @@ const newTenantProfile = ref({
   subdomain: '',
   preferred_template: 'pro'
 })
+const ruts = ref<any[]>([])
+const loadingRuts = ref(false)
+const showUploadRUT = ref(false)
+const uploadingRUT = ref(false)
+const selectedRUTFile = ref<File | null>(null)
+const selectedRUTZipFile = ref<File | null>(null)
+const rutReporteTxt = ref<string | null>(null)
+
+// Calendario Tributario
+const vigenciasTributarias = ref<any[]>([])
+const loadingCalendario = ref(false)
+const showUploadCalendario = ref(false)
+const uploadingCalendario = ref(false)
+const selectedCalendarioFile = ref<File | null>(null)
+const rutNitManual = ref('')
+const selectedRUT = ref<any>(null)
+const showRUTDetails = ref(false)
 const scanningServer = ref<number | null>(null)
 const activeScanTasks = ref<Record<number, string>>({}) // servidor_id -> task_id
 const showCreateServer = ref(false)
@@ -3961,6 +4422,12 @@ watch(activeSection, (newSection) => {
     // Cargar tenant profiles y usuarios automáticamente
     if (users.value.length === 0) loadUsers()
     loadTenantProfiles()
+  } else if (newSection === 'ruts') {
+    // Cargar RUTs automáticamente
+    loadRuts()
+  } else if (newSection === 'calendario-tributario') {
+    // Cargar calendario tributario automáticamente
+    loadCalendarioTributario()
   } else if (newSection === 'terminal') {
     // Enfocar el input del terminal cuando se cambia a esa pestaña
     setTimeout(() => {
@@ -5224,6 +5691,332 @@ const deleteTenantProfile = async (profile: any) => {
         customClass: { container: 'swal-z-index-fix' }
       })
     }
+  }
+}
+
+// ========== RUTS FUNCTIONS ==========
+const loadRuts = async () => {
+  loadingRuts.value = true
+  try {
+    const response = await api.get<any[]>('/api/ruts/')
+    ruts.value = Array.isArray(response) ? response : (response as any).results || []
+  } catch (error: any) {
+    console.error('Error cargando RUTs:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al cargar RUTs',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    loadingRuts.value = false
+  }
+}
+
+const uploadRUTPDF = async () => {
+  if (!selectedRUTFile.value && !selectedRUTZipFile.value) {
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: 'Debes seleccionar un archivo PDF o un archivo ZIP',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    return
+  }
+  
+  uploadingRUT.value = true
+  try {
+    const formData = new FormData()
+    
+    // Si es ZIP
+    if (selectedRUTZipFile.value) {
+      formData.append('archivo_zip', selectedRUTZipFile.value)
+    } else {
+      // Si es PDF individual
+      formData.append('archivo_pdf', selectedRUTFile.value!)
+      if (rutNitManual.value.trim()) {
+        formData.append('nit', rutNitManual.value.trim())
+      }
+    }
+    
+    const response = await api.post('/api/ruts/subir-pdf/', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    })
+    
+    const Swal = (await import('sweetalert2')).default
+    
+    // Si es ZIP, mostrar resultados masivos
+    if (selectedRUTZipFile.value && response.data.reporte_txt) {
+      rutReporteTxt.value = response.data.reporte_txt
+      
+      const fallidosHtml = response.data.detalles_fallidos && response.data.detalles_fallidos.length > 0
+        ? `<div style="margin-top: 15px; max-height: 300px; overflow-y: auto; text-align: left;">
+            <strong style="color: #d32f2f;">RUTs Fallidos (${response.data.detalles_fallidos.length}):</strong>
+            <ul style="margin-top: 10px;">
+              ${response.data.detalles_fallidos.map((f: any) => 
+                `<li><strong>${f.archivo}</strong>: ${f.razon}</li>`
+              ).join('')}
+            </ul>
+          </div>`
+        : ''
+      
+      await Swal.fire({
+        title: '¡ZIP Procesado!',
+        html: `
+          <div style="text-align: left;">
+            <p><strong>Total procesados:</strong> ${response.data.total}</p>
+            <p style="color: #4CAF50;"><strong>Exitosos:</strong> ${response.data.exitosos}</p>
+            ${response.data.fallidos > 0 ? `<p style="color: #d32f2f;"><strong>Fallidos:</strong> ${response.data.fallidos}</p>` : ''}
+            ${fallidosHtml}
+            <div style="margin-top: 20px; padding: 10px; background: #f5f5f5; border-radius: 5px;">
+              <strong>📄 Reporte TXT generado</strong><br>
+              <button id="download-reporte" style="margin-top: 10px; padding: 8px 16px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                Descargar Reporte TXT
+              </button>
+            </div>
+          </div>
+        `,
+        icon: response.data.fallidos > 0 ? 'warning' : 'success',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' },
+        width: '700px',
+        didOpen: () => {
+          const btn = document.getElementById('download-reporte')
+          if (btn) {
+            btn.onclick = () => {
+              const blob = new Blob([rutReporteTxt.value!], { type: 'text/plain' })
+              const url = URL.createObjectURL(blob)
+              const a = document.createElement('a')
+              a.href = url
+              a.download = `reporte_ruts_${new Date().toISOString().split('T')[0]}.txt`
+              a.click()
+              URL.revokeObjectURL(url)
+            }
+          }
+        }
+      })
+    } else {
+      // PDF individual
+      await Swal.fire({
+        title: '¡RUT Procesado!',
+        html: `
+          <div style="text-align: left;">
+            <p><strong>NIT:</strong> ${response.data.rut.nit}-${response.data.rut.dv}</p>
+            <p><strong>Razón Social:</strong> ${response.data.rut.razon_social}</p>
+            <p><strong>Empresas asociadas encontradas:</strong> ${response.data.empresas_encontradas}</p>
+            <p style="margin-top: 10px; color: #4CAF50;">${response.data.mensaje}</p>
+          </div>
+        `,
+        icon: 'success',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' }
+      })
+    }
+    
+    showUploadRUT.value = false
+    selectedRUTFile.value = null
+    selectedRUTZipFile.value = null
+    rutNitManual.value = ''
+    rutReporteTxt.value = null
+    await loadRuts()
+  } catch (error: any) {
+    console.error('Error subiendo RUT:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al procesar el archivo',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    uploadingRUT.value = false
+  }
+}
+
+const onRUTZipSelected = (event: Event) => {
+  const target = event.target as HTMLInputElement
+  if (target.files && target.files.length > 0) {
+    selectedRUTZipFile.value = target.files[0]
+    selectedRUTFile.value = null // Limpiar PDF si hay ZIP
+  }
+}
+
+const viewRUTDetails = async (rut: any) => {
+  try {
+    // Cargar empresas asociadas
+    const response = await api.get(`/api/ruts/${rut.nit_normalizado}/empresas/`)
+    selectedRUT.value = response.rut
+    showRUTDetails.value = true
+  } catch (error: any) {
+    console.error('Error cargando detalles del RUT:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al cargar detalles del RUT',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  }
+}
+
+const editRUT = (rut: any) => {
+  // Por ahora solo mostrar detalles, la edición completa se puede agregar después
+  viewRUTDetails(rut)
+}
+
+const deleteRUT = async (rut: any) => {
+  const Swal = (await import('sweetalert2')).default
+  const result = await Swal.fire({
+    title: '¿Eliminar RUT?',
+    html: `
+      <div style="text-align: left;">
+        <p>¿Estás seguro de eliminar el RUT de:</p>
+        <p><strong>${rut.razon_social}</strong></p>
+        <p>NIT: ${rut.nit}-${rut.dv}</p>
+        <p style="color: #d32f2f; margin-top: 10px;">Esta acción no se puede deshacer.</p>
+      </div>
+    `,
+    icon: 'warning',
+    showCancelButton: true,
+    confirmButtonText: 'Sí, eliminar',
+    cancelButtonText: 'Cancelar',
+    customClass: { container: 'swal-z-index-fix' }
+  })
+  
+  if (result.isConfirmed) {
+    try {
+      await api.delete(`/api/ruts/${rut.nit_normalizado}/`)
+      await Swal.fire({
+        title: '¡RUT Eliminado!',
+        text: 'RUT eliminado exitosamente',
+        icon: 'success',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' }
+      })
+      await loadRuts()
+    } catch (error: any) {
+      console.error('Error eliminando RUT:', error)
+      await Swal.fire({
+        title: 'Error',
+        text: error?.data?.error || error?.message || 'Error al eliminar RUT',
+        icon: 'error',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' }
+      })
+    }
+  }
+}
+
+const onRUTFileSelected = (event: Event) => {
+  const target = event.target as HTMLInputElement
+  if (target.files && target.files.length > 0) {
+    selectedRUTFile.value = target.files[0]
+  }
+}
+
+// Calendario Tributario
+const loadCalendarioTributario = async () => {
+  loadingCalendario.value = true
+  try {
+    const response = await api.get<any[]>('/api/calendario-tributario/')
+    vigenciasTributarias.value = Array.isArray(response) ? response : (response as any).results || []
+  } catch (error: any) {
+    console.error('Error cargando calendario tributario:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al cargar calendario tributario',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    loadingCalendario.value = false
+  }
+}
+
+const onCalendarioFileSelected = (event: Event) => {
+  const target = event.target as HTMLInputElement
+  if (target.files && target.files.length > 0) {
+    selectedCalendarioFile.value = target.files[0]
+  }
+}
+
+const uploadCalendarioExcel = async () => {
+  if (!selectedCalendarioFile.value) {
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: 'Debes seleccionar un archivo Excel',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    return
+  }
+  
+  uploadingCalendario.value = true
+  try {
+    const formData = new FormData()
+    formData.append('archivo_excel', selectedCalendarioFile.value)
+    
+    const response = await api.post('/api/calendario-tributario/subir-excel/', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    })
+    
+    const Swal = (await import('sweetalert2')).default
+    const empresasInfo = response.data.empresas_asociadas || []
+    const empresasHtml = empresasInfo.length > 0 
+      ? `<div style="text-align: left; margin-top: 15px;">
+          <strong>Empresas asociadas (${empresasInfo.length}):</strong>
+          <ul style="margin-top: 10px; max-height: 200px; overflow-y: auto;">
+            ${empresasInfo.map((e: any) => `<li>${e.nombre} (NIT: ${e.nit})</li>`).join('')}
+          </ul>
+        </div>`
+      : ''
+    
+    await Swal.fire({
+      title: '¡Calendario Procesado!',
+      html: `
+        <div style="text-align: left;">
+          <p><strong>Total procesadas:</strong> ${response.data.total_procesadas || 0}</p>
+          <p><strong>Creadas:</strong> ${response.data.creados || 0}</p>
+          <p><strong>Actualizadas:</strong> ${response.data.actualizados || 0}</p>
+          ${response.data.total_errores > 0 ? `<p style="color: #d32f2f;"><strong>Errores:</strong> ${response.data.total_errores}</p>` : ''}
+          ${empresasHtml}
+        </div>
+      `,
+      icon: 'success',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' },
+      width: '600px'
+    })
+    
+    showUploadCalendario.value = false
+    selectedCalendarioFile.value = null
+    await loadCalendarioTributario()
+  } catch (error: any) {
+    console.error('Error subiendo calendario:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al procesar el Excel del calendario',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    uploadingCalendario.value = false
   }
 }
 

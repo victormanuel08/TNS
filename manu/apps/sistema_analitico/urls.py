@@ -25,6 +25,8 @@ router.register('notas-rapidas', views.NotaRapidaViewSet, basename='notas-rapida
 router.register('usuarios', views.UserManagementViewSet, basename='usuarios')
 router.register('empresa-dominios', views.EmpresaDominioViewSet, basename='empresa-dominios')
 router.register('pasarelas-pago', views.PasarelaPagoViewSet, basename='pasarelas-pago')
+router.register('ruts', views.RUTViewSet, basename='ruts')
+router.register('calendario-tributario', views.CalendarioTributarioViewSet, basename='calendario-tributario')
 
 urlpatterns = [
     path('api/', include(router.urls)),

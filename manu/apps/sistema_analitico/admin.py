@@ -10,6 +10,10 @@ from .models import (
     APIKeyCliente,
     UserTenantProfile,
     NotaRapida,
+    RUT,
+    EstablecimientoRUT,
+    ActividadEconomica,
+    ResponsabilidadTributaria,
 )
 
 # ========== ADMIN CONFIGURACIÓN GLOBAL ==========
@@ -266,7 +270,6 @@ class APIKeyClienteAdmin(admin.ModelAdmin):
         return None
 
 
-@admin.register(UserTenantProfile)
 # ========== USER TENANT PROFILE ADMIN OPTIMIZADO ==========
 @admin.register(UserTenantProfile)
 class UserTenantProfileAdmin(admin.ModelAdmin):
@@ -300,6 +303,118 @@ class UserTenantProfileAdmin(admin.ModelAdmin):
     
     def get_queryset(self, request):
         return super().get_queryset(request).select_related('user')
+
+# ========== RUT ADMIN ==========
+@admin.register(RUT)
+class RUTAdmin(admin.ModelAdmin):
+    list_display = ['nit', 'dv', 'razon_social', 'nombre_comercial', 'ciudad_nombre', 'departamento_nombre', 'fecha_actualizacion']
+    list_filter = ['tipo_contribuyente', 'departamento_nombre', 'responsable_iva', 'facturador_electronico', 'fecha_actualizacion']
+    search_fields = ['nit', 'nit_normalizado', 'razon_social', 'nombre_comercial', 'ciudad_nombre']
+    list_per_page = 50
+    ordering = ['-fecha_actualizacion']
+    readonly_fields = ['nit_normalizado', 'fecha_creacion', 'fecha_actualizacion', 'fecha_ultima_consulta_dian']
+    
+    fieldsets = (
+        ('Identificación', {
+            'fields': ('nit', 'dv', 'nit_normalizado', 'numero_formulario', 'tipo_contribuyente', 'razon_social', 'nombre_comercial', 'sigla')
+        }),
+        ('Ubicación', {
+            'fields': ('pais', 'departamento_codigo', 'departamento_nombre', 'ciudad_codigo', 'ciudad_nombre', 
+                      'direccion_principal', 'codigo_postal', 'telefono_1', 'telefono_2', 'email', 
+                      'direccion_seccional', 'buzon_electronico')
+        }),
+        ('Actividades Económicas', {
+            'fields': ('actividad_principal_ciiu', 'actividad_principal_fecha_inicio',
+                      'actividad_secundaria_ciiu', 'actividad_secundaria_fecha_inicio',
+                      'otras_actividades_ciiu', 'numero_establecimientos')
+        }),
+        ('Responsabilidades', {
+            'fields': ('responsabilidades_codigos', 'responsabilidades_descripcion',
+                      'responsable_iva', 'autorretenedor', 'obligado_contabilidad',
+                      'regimen_simple', 'facturador_electronico', 'informante_exogena',
+                      'informante_beneficiarios_finales')
+        }),
+        ('Constitución y Registro', {
+            'fields': ('constitucion_clase', 'constitucion_numero', 'constitucion_fecha',
+                      'constitucion_notaria', 'registro_entidad', 'registro_fecha',
+                      'matricula_mercantil', 'registro_departamento', 'registro_ciudad',
+                      'vigencia_desde', 'vigencia_hasta')
+        }),
+        ('Capital', {
+            'fields': ('capital_nacional_porcentaje', 'capital_nacional_publico_porcentaje',
+                      'capital_nacional_privado_porcentaje', 'capital_extranjero_porcentaje',
+                      'capital_extranjero_publico_porcentaje', 'capital_extranjero_privado_porcentaje')
+        }),
+        ('Representante Legal', {
+            'fields': ('representante_legal_representacion', 'representante_legal_fecha_inicio',
+                      'representante_legal_tipo_doc', 'representante_legal_numero_doc',
+                      'representante_legal_dv', 'representante_legal_tarjeta_profesional',
+                      'representante_legal_primer_apellido', 'representante_legal_segundo_apellido',
+                      'representante_legal_primer_nombre', 'representante_legal_otros_nombres',
+                      'representante_legal_nit', 'representante_legal_razon_social')
+        }),
+        ('Vinculación Económica', {
+            'fields': ('vinculacion_economica', 'grupo_economico_nombre',
+                      'matriz_nit', 'matriz_dv', 'matriz_razon_social')
+        }),
+        ('Archivo y Metadatos', {
+            'fields': ('archivo_pdf', 'informacion_adicional')
+        }),
+        ('Auditoría', {
+            'fields': ('fecha_creacion', 'fecha_actualizacion', 'fecha_ultima_consulta_dian'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    def get_queryset(self, request):
+        return super().get_queryset(request).prefetch_related('establecimientos')
+
+@admin.register(EstablecimientoRUT)
+class EstablecimientoRUTAdmin(admin.ModelAdmin):
+    list_display = ['nombre', 'ciudad_nombre', 'departamento_nombre', 'actividad_economica_ciiu', 'rut']
+    list_filter = ['departamento_nombre', 'ciudad_nombre']
+    search_fields = ['nombre', 'direccion', 'ciudad_nombre', 'departamento_nombre']
+    list_per_page = 50
+    ordering = ['nombre']
+
+
+# ========== ACTIVIDADES ECONÓMICAS ADMIN ==========
+@admin.register(ActividadEconomica)
+class ActividadEconomicaAdmin(admin.ModelAdmin):
+    list_display = ['codigo', 'descripcion', 'titulo', 'division', 'grupo', 'fecha_ultima_consulta_api', 'fecha_actualizacion']
+    list_filter = ['division', 'grupo', 'fecha_ultima_consulta_api']
+    search_fields = ['codigo', 'descripcion', 'titulo']
+    list_per_page = 50
+    ordering = ['codigo']
+    readonly_fields = ['fecha_creacion', 'fecha_actualizacion', 'fecha_ultima_consulta_api']
+    
+    fieldsets = (
+        ('Información Básica', {
+            'fields': ('codigo', 'descripcion', 'titulo')
+        }),
+        ('Clasificación', {
+            'fields': ('division', 'grupo')
+        }),
+        ('Detalles', {
+            'fields': ('incluye', 'excluye'),
+            'classes': ('collapse',)
+        }),
+        ('Auditoría', {
+            'fields': ('fecha_creacion', 'fecha_actualizacion', 'fecha_ultima_consulta_api'),
+            'classes': ('collapse',)
+        }),
+    )
+
+
+# ========== RESPONSABILIDADES TRIBUTARIAS ADMIN ==========
+@admin.register(ResponsabilidadTributaria)
+class ResponsabilidadTributariaAdmin(admin.ModelAdmin):
+    list_display = ['codigo', 'descripcion', 'fecha_creacion', 'fecha_actualizacion']
+    list_filter = ['fecha_creacion']
+    search_fields = ['codigo', 'descripcion']
+    list_per_page = 50
+    ordering = ['codigo']
+    readonly_fields = ['fecha_creacion', 'fecha_actualizacion']
 
 # ========== NOTAS RÁPIDAS ADMIN ==========
 @admin.register(NotaRapida)

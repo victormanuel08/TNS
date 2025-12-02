@@ -47,6 +47,8 @@ from .models import (
     EmpresaEcommerceConfig,
     PasarelaPago,
     TransaccionPago,
+    RUT,
+    EstablecimientoRUT,
 )
 from .serializers import *
 from .services.data_manager import DataManager
@@ -476,6 +478,381 @@ class UsuarioEmpresaViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN
             )
         return super().destroy(request, *args, **kwargs)
+
+class RUTViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
+    """
+    ViewSet para gestionar RUTs de empresas.
+    Identifica por NIT normalizado (sin puntos ni guiones).
+    Un RUT aplica para todas las empresas con el mismo NIT.
+    """
+    from .serializers import RUTSerializer, SubirRUTSerializer
+    
+    # Usar la función de normalización existente
+    def normalize_nit(self, nit: str) -> str:
+        """Normaliza NIT usando la función global"""
+        return _normalize_nit(nit)
+    
+    def extract_rut_data_from_pdf(self, pdf_file):
+        """Extrae datos del PDF usando el servicio"""
+        from .services.rut_extractor import extract_rut_data_from_pdf
+        return extract_rut_data_from_pdf(pdf_file)
+    
+    queryset = RUT.objects.all().prefetch_related('establecimientos')
+    serializer_class = RUTSerializer
+    permission_classes = [IsAuthenticated]
+    lookup_field = 'nit_normalizado'
+    
+    def get_queryset(self):
+        # Solo superusuarios pueden ver todos los RUTs
+        if not self.request.user.is_superuser:
+            return RUT.objects.none()
+        return RUT.objects.all().prefetch_related('establecimientos').order_by('-fecha_actualizacion')
+    
+    @action(detail=False, methods=['post'], url_path='subir-pdf')
+    def subir_pdf(self, request):
+        """
+        Sube un PDF de RUT o un ZIP con múltiples PDFs y extrae la información automáticamente.
+        Detecta el NIT del PDF y lo asocia a todas las empresas con ese NIT.
+        Si ya existe un RUT para ese NIT, lo actualiza.
+        
+        Si se sube un ZIP:
+        - Procesa todos los PDFs del ZIP
+        - Omite RUTs que no tienen empresas asociadas
+        - Retorna un reporte TXT con los RUTs fallidos y la razón
+        """
+        if not request.user.is_superuser:
+            return Response(
+                {'error': 'Solo los superusuarios pueden subir RUTs'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        serializer = SubirRUTSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Verificar si es ZIP o PDF individual
+        archivo_zip = serializer.validated_data.get('archivo_zip')
+        if archivo_zip:
+            # Procesar ZIP
+            return self._procesar_zip_ruts(archivo_zip)
+        
+        # Procesar PDF individual
+        archivo_pdf = serializer.validated_data['archivo_pdf']
+        nit_proporcionado = serializer.validated_data.get('nit', '').strip()
+        
+        try:
+            # Extraer datos del PDF
+            pdf_data = self.extract_rut_data_from_pdf(archivo_pdf)
+            
+            # Usar NIT proporcionado o el detectado del PDF
+            nit_normalizado = self.normalize_nit(nit_proporcionado) if nit_proporcionado else pdf_data.get('nit_normalizado')
+            
+            if not nit_normalizado:
+                return Response(
+                    {'error': 'No se pudo detectar el NIT del PDF. Por favor, proporciona el NIT manualmente.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Buscar o crear RUT
+            rut, created = RUT.objects.get_or_create(
+                nit_normalizado=nit_normalizado,
+                defaults={
+                    'nit': pdf_data.get('nit', nit_normalizado),
+                    'dv': pdf_data.get('dv', ''),
+                    'razon_social': pdf_data.get('razon_social', ''),
+                }
+            )
+            
+            # Actualizar campos desde PDF
+            for key, value in pdf_data.items():
+                if key != '_texto_completo' and hasattr(rut, key) and value:
+                    setattr(rut, key, value)
+            
+            # Reemplazar archivo PDF si existe uno anterior
+            if rut.archivo_pdf:
+                # Eliminar archivo anterior
+                rut.archivo_pdf.delete(save=False)
+            
+            # Guardar nuevo archivo
+            rut.archivo_pdf = archivo_pdf
+            rut.save()
+            
+            # Procesar códigos CIIU encontrados en el PDF
+            codigos_ciiu = pdf_data.get('_codigos_ciiu_encontrados', [])
+            
+            # Si no están en _codigos_ciiu_encontrados, buscarlos en los campos individuales
+            if not codigos_ciiu:
+                if pdf_data.get('actividad_principal_ciiu'):
+                    codigos_ciiu.append(pdf_data['actividad_principal_ciiu'])
+                if pdf_data.get('actividad_secundaria_ciiu'):
+                    codigos_ciiu.append(pdf_data['actividad_secundaria_ciiu'])
+                if pdf_data.get('otras_actividades_ciiu'):
+                    codigos_ciiu.append(pdf_data['otras_actividades_ciiu'])
+            
+            # Filtrar códigos válidos y únicos
+            codigos_ciiu = list(set([c for c in codigos_ciiu if c and c.strip()]))
+            
+            if codigos_ciiu:
+                # Procesar códigos CIIU de forma asíncrona
+                from .tasks import procesar_codigos_ciiu_masivo_task
+                task = procesar_codigos_ciiu_masivo_task.delay(codigos_ciiu)
+                logger.info(f"Tarea Celery iniciada para procesar {len(codigos_ciiu)} códigos CIIU: {task.id}")
+            
+            # Procesar códigos de responsabilidades
+            codigos_responsabilidades = pdf_data.get('responsabilidades_codigos', [])
+            if codigos_responsabilidades:
+                from .models import ResponsabilidadTributaria
+                from django.db import IntegrityError
+                
+                # Mapeo de códigos a descripciones (basado en el PDF real)
+                descripciones_responsabilidades = {
+                    '7': 'Retención en la fuente a título de renta',
+                    '9': 'Retención en la fuente en el impuesto',
+                    '14': 'Informante de exogena',
+                    '42': 'Obligado a llevar contabilidad',
+                    '47': 'Régimen Simple de Tributación - SIM',
+                    '48': 'Impuesto sobre las ventas - IVA',
+                    '52': 'Facturador electrónico',
+                    '55': 'Informante de Beneficiarios Finales',
+                }
+                
+                for codigo in codigos_responsabilidades:
+                    codigo_str = str(codigo).strip()
+                    if codigo_str:
+                        descripcion = descripciones_responsabilidades.get(
+                            codigo_str,
+                            f'Responsabilidad tributaria código {codigo_str}'
+                        )
+                        try:
+                            ResponsabilidadTributaria.objects.get_or_create(
+                                codigo=codigo_str,
+                                defaults={'descripcion': descripcion}
+                            )
+                        except IntegrityError:
+                            # Ya existe, actualizar descripción si es necesario
+                            try:
+                                resp = ResponsabilidadTributaria.objects.get(codigo=codigo_str)
+                                if resp.descripcion != descripcion:
+                                    resp.descripcion = descripcion
+                                    resp.save()
+                            except ResponsabilidadTributaria.DoesNotExist:
+                                pass
+            
+            # Buscar empresas asociadas
+            empresas = EmpresaServidor.objects.filter(nit=nit_normalizado)
+            empresas_info = [
+                {
+                    'id': emp.id,
+                    'nombre': emp.nombre,
+                    'anio_fiscal': emp.anio_fiscal,
+                    'servidor': emp.servidor.nombre if emp.servidor else None
+                }
+                for emp in empresas
+            ]
+            
+            response_serializer = RUTSerializer(rut, context={'request': request})
+            
+            return Response({
+                'rut': response_serializer.data,
+                'empresas_asociadas': empresas_info,
+                'mensaje': 'RUT actualizado exitosamente' if not created else 'RUT creado exitosamente',
+                'empresas_encontradas': len(empresas_info)
+            }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+            
+        except ValueError as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            logger.error(f"Error procesando PDF de RUT: {e}", exc_info=True)
+            return Response(
+                {'error': f'Error al procesar el PDF: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    def _procesar_zip_ruts(self, zip_file):
+        """Procesa un ZIP con múltiples PDFs de RUT"""
+        from .services.rut_batch_processor import procesar_zip_ruts
+        
+        try:
+            resultados = procesar_zip_ruts(zip_file)
+            
+            return Response({
+                'mensaje': 'Procesamiento de ZIP completado',
+                'total': resultados['total'],
+                'exitosos': len(resultados['exitosos']),
+                'fallidos': len(resultados['fallidos']),
+                'reporte_txt': resultados['reporte_txt'],
+                'detalles_exitosos': resultados['exitosos'],
+                'detalles_fallidos': resultados['fallidos']
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.error(f"Error procesando ZIP de RUTs: {e}", exc_info=True)
+            return Response(
+                {'error': f'Error al procesar el ZIP: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=True, methods=['get'], url_path='empresas')
+    def empresas_asociadas(self, request, nit_normalizado=None):
+        """Obtiene todas las empresas asociadas a este RUT"""
+        try:
+            rut = RUT.objects.get(nit_normalizado=nit_normalizado)
+            empresas = EmpresaServidor.objects.filter(nit=nit_normalizado).select_related('servidor')
+            
+            empresas_data = [
+                {
+                    'id': emp.id,
+                    'nombre': emp.nombre,
+                    'nit': emp.nit,
+                    'anio_fiscal': emp.anio_fiscal,
+                    'codigo': emp.codigo,
+                    'servidor': emp.servidor.nombre if emp.servidor else None,
+                    'estado': emp.estado
+                }
+                for emp in empresas
+            ]
+            
+            return Response({
+                'rut': RUTSerializer(rut, context={'request': request}).data,
+                'empresas': empresas_data,
+                'total': len(empresas_data)
+            })
+        except RUT.DoesNotExist:
+            return Response(
+                {'error': 'RUT no encontrado'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+    
+    def create(self, request, *args, **kwargs):
+        """Crear RUT manualmente"""
+        if not request.user.is_superuser:
+            return Response(
+                {'error': 'Solo los superusuarios pueden crear RUTs'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Normalizar NIT antes de crear
+        if 'nit' in request.data:
+            nit = request.data['nit']
+            nit_normalizado = self.normalize_nit(nit)
+            request.data['nit_normalizado'] = nit_normalizado
+        
+        return super().create(request, *args, **kwargs)
+    
+    def update(self, request, *args, **kwargs):
+        """Actualizar RUT"""
+        if not request.user.is_superuser:
+            return Response(
+                {'error': 'Solo los superusuarios pueden editar RUTs'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        return super().update(request, *args, **kwargs)
+    
+    def destroy(self, request, *args, **kwargs):
+        """Eliminar RUT"""
+        if not request.user.is_superuser:
+            return Response(
+                {'error': 'Solo los superusuarios pueden eliminar RUTs'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        return super().destroy(request, *args, **kwargs)
+
+
+class CalendarioTributarioViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
+    """
+    ViewSet para gestionar el calendario tributario.
+    Permite subir un Excel con todas las vigencias tributarias.
+    """
+    from .serializers import (
+        TipoTerceroSerializer, TipoRegimenSerializer, 
+        ImpuestoSerializer, VigenciaTributariaSerializer,
+        SubirCalendarioTributarioSerializer
+    )
+    from .models import TipoTercero, TipoRegimen, Impuesto, VigenciaTributaria
+    
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        """Solo superusuarios pueden ver el calendario"""
+        if not self.request.user.is_superuser:
+            return VigenciaTributaria.objects.none()
+        return VigenciaTributaria.objects.select_related(
+            'impuesto', 'tipo_tercero', 'tipo_regimen'
+        ).order_by('impuesto__codigo', 'fecha_limite')
+    
+    def get_serializer_class(self):
+        """Retornar serializer según la acción"""
+        if self.action == 'subir_excel':
+            return SubirCalendarioTributarioSerializer
+        return VigenciaTributariaSerializer
+    
+    @action(detail=False, methods=['post'], url_path='subir-excel')
+    def subir_excel(self, request):
+        """
+        Sube un Excel con el calendario tributario completo.
+        Formato esperado:
+        - tax_code: Código del impuesto (RGC, RPJ, IVB, etc.)
+        - expirations_digits: Últimos dígitos del NIT ("1", "2", "01", "99", "" para todos)
+        - third_type_code: Tipo de tercero ("PN", "PJ", o "" para todos)
+        - regiment_type_code: Régimen ("GC", "SIM", "ORD", o "" para todos)
+        - date: Fecha límite (DD/MM/YYYY o YYYY-MM-DD)
+        - description: Descripción de la obligación
+        
+        Retorna información de empresas asociadas por NIT.
+        """
+        if not request.user.is_superuser:
+            return Response(
+                {'error': 'Solo los superusuarios pueden subir el calendario tributario'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        serializer = SubirCalendarioTributarioSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        archivo_excel = serializer.validated_data['archivo_excel']
+        
+        try:
+            from .services.calendario_importer import importar_calendario_desde_excel
+            
+            # Importar usando el servicio
+            resultados = importar_calendario_desde_excel(archivo_excel)
+            
+            if not resultados['success']:
+                return Response(
+                    {
+                        'error': 'Error al procesar el Excel',
+                        'errores': resultados['errores']
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            return Response({
+                'mensaje': 'Calendario tributario procesado exitosamente',
+                'total': resultados['total'],
+                'creados': resultados['creados'],
+                'actualizados': resultados['actualizados'],
+                'total_procesadas': resultados['creados'] + resultados['actualizados'],
+                'errores': resultados['errores'][:50],  # Limitar a 50 errores
+                'total_errores': len(resultados['errores']),
+                'empresas_asociadas': resultados['empresas_asociadas'],
+                'total_empresas_asociadas': len(resultados['empresas_asociadas'])
+            }, status=status.HTTP_200_OK)
+            
+        except ImportError:
+            return Response(
+                {'error': 'pandas no está instalado. Instala con: pip install pandas openpyxl'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        except Exception as e:
+            logger.error(f"Error procesando Excel del calendario tributario: {e}", exc_info=True)
+            return Response(
+                {'error': f'Error al procesar el Excel: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 class UserTenantProfileViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
     """

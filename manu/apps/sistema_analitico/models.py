@@ -1,6 +1,7 @@
 # sistema_analitico/models.py
 from django.db import models
 from django.contrib.auth.models import User
+import re
 from encrypted_model_fields.fields import EncryptedCharField, EncryptedTextField, EncryptedEmailField
 from django.utils import timezone
 from datetime import timedelta
@@ -98,6 +99,835 @@ class UserTenantProfile(models.Model):
 
     def __str__(self):
         return f"{self.user.username} -> {self.subdomain}"
+
+
+class RUT(models.Model):
+    """
+    Modelo para almacenar información del Registro Único Tributario (RUT)
+    de empresas colombianas. Se identifica por NIT normalizado (sin puntos ni guiones).
+    Un RUT aplica para todas las empresas con el mismo NIT, independientemente del año fiscal.
+    """
+    
+    # ========== IDENTIFICACIÓN PRINCIPAL ==========
+    nit_normalizado = models.CharField(
+        max_length=20,
+        unique=True,
+        db_index=True,
+        help_text='NIT normalizado (sin puntos ni guiones) - Identificador único'
+    )
+    nit = models.CharField(
+        max_length=20,
+        help_text='NIT con formato original'
+    )
+    dv = models.CharField(
+        max_length=1,
+        help_text='Dígito de Verificación'
+    )
+    numero_formulario = models.CharField(
+        max_length=50,
+        null=True,
+        blank=True,
+        help_text='Número de formulario del RUT'
+    )
+    
+    TIPO_CONTRIBUYENTE_CHOICES = [
+        ('persona_juridica', 'Persona jurídica'),
+        ('persona_natural', 'Persona natural'),
+    ]
+    tipo_contribuyente = models.CharField(
+        max_length=20,
+        choices=TIPO_CONTRIBUYENTE_CHOICES,
+        null=True,
+        blank=True,
+        help_text='Tipo de contribuyente'
+    )
+    
+    razon_social = models.CharField(
+        max_length=255,
+        help_text='Razón social de la empresa'
+    )
+    nombre_comercial = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text='Nombre comercial'
+    )
+    sigla = models.CharField(
+        max_length=50,
+        null=True,
+        blank=True,
+        help_text='Sigla de la empresa'
+    )
+    
+    # ========== UBICACIÓN ==========
+    pais = models.CharField(
+        max_length=100,
+        default='COLOMBIA',
+        help_text='País'
+    )
+    departamento_codigo = models.CharField(
+        max_length=10,
+        null=True,
+        blank=True,
+        help_text='Código del departamento'
+    )
+    departamento_nombre = models.CharField(
+        max_length=100,
+        help_text='Nombre del departamento'
+    )
+    ciudad_codigo = models.CharField(
+        max_length=10,
+        null=True,
+        blank=True,
+        help_text='Código de la ciudad/municipio'
+    )
+    ciudad_nombre = models.CharField(
+        max_length=100,
+        help_text='Nombre de la ciudad/municipio'
+    )
+    direccion_principal = models.TextField(
+        help_text='Dirección de la sede principal'
+    )
+    codigo_postal = models.CharField(
+        max_length=10,
+        null=True,
+        blank=True,
+        help_text='Código postal'
+    )
+    telefono_1 = models.CharField(
+        max_length=20,
+        null=True,
+        blank=True,
+        help_text='Teléfono principal'
+    )
+    telefono_2 = models.CharField(
+        max_length=20,
+        null=True,
+        blank=True,
+        help_text='Teléfono secundario'
+    )
+    email = models.EmailField(
+        null=True,
+        blank=True,
+        help_text='Correo electrónico'
+    )
+    direccion_seccional = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text='Dirección seccional de la DIAN'
+    )
+    buzon_electronico = models.CharField(
+        max_length=50,
+        null=True,
+        blank=True,
+        help_text='Buzón electrónico'
+    )
+    
+    # ========== ACTIVIDADES ECONÓMICAS ==========
+    actividad_principal_ciiu = models.CharField(
+        max_length=10,
+        null=True,
+        blank=True,
+        help_text='Código CIIU de actividad principal'
+    )
+    actividad_principal_fecha_inicio = models.DateField(
+        null=True,
+        blank=True,
+        help_text='Fecha de inicio de actividad principal'
+    )
+    actividad_secundaria_ciiu = models.CharField(
+        max_length=10,
+        null=True,
+        blank=True,
+        help_text='Código CIIU de actividad secundaria'
+    )
+    actividad_secundaria_fecha_inicio = models.DateField(
+        null=True,
+        blank=True,
+        help_text='Fecha de inicio de actividad secundaria'
+    )
+    otras_actividades_ciiu = models.CharField(
+        max_length=10,
+        null=True,
+        blank=True,
+        help_text='Código CIIU de otras actividades'
+    )
+    numero_establecimientos = models.IntegerField(
+        default=0,
+        help_text='Número de establecimientos'
+    )
+    
+    # ========== RESPONSABILIDADES Y ATRIBUTOS ==========
+    responsabilidades_codigos = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='Lista de códigos de responsabilidades'
+    )
+    responsabilidades_descripcion = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='Descripciones de las responsabilidades'
+    )
+    
+    responsable_iva = models.BooleanField(
+        default=False,
+        help_text='Es responsable de IVA'
+    )
+    autorretenedor = models.BooleanField(
+        default=False,
+        help_text='Es autorretenedor'
+    )
+    obligado_contabilidad = models.BooleanField(
+        default=False,
+        help_text='Obligado a llevar contabilidad'
+    )
+    regimen_simple = models.BooleanField(
+        default=False,
+        help_text='Régimen Simple de Tributación - SIM'
+    )
+    facturador_electronico = models.BooleanField(
+        default=False,
+        help_text='Facturador electrónico'
+    )
+    informante_exogena = models.BooleanField(
+        default=False,
+        help_text='Informante de exogena'
+    )
+    informante_beneficiarios_finales = models.BooleanField(
+        default=False,
+        help_text='Informante de Beneficiarios Finales'
+    )
+    
+    # ========== CONSTITUCIÓN Y REGISTRO ==========
+    constitucion_clase = models.CharField(
+        max_length=10,
+        null=True,
+        blank=True,
+        help_text='Clase de constitución'
+    )
+    constitucion_numero = models.CharField(
+        max_length=20,
+        null=True,
+        blank=True,
+        help_text='Número de constitución'
+    )
+    constitucion_fecha = models.DateField(
+        null=True,
+        blank=True,
+        help_text='Fecha de constitución'
+    )
+    constitucion_notaria = models.CharField(
+        max_length=20,
+        null=True,
+        blank=True,
+        help_text='Número de notaría'
+    )
+    registro_entidad = models.CharField(
+        max_length=20,
+        null=True,
+        blank=True,
+        help_text='Entidad de registro'
+    )
+    registro_fecha = models.DateField(
+        null=True,
+        blank=True,
+        help_text='Fecha de registro'
+    )
+    matricula_mercantil = models.CharField(
+        max_length=50,
+        null=True,
+        blank=True,
+        help_text='Número de matrícula mercantil'
+    )
+    registro_departamento = models.CharField(
+        max_length=10,
+        null=True,
+        blank=True,
+        help_text='Código departamento de registro'
+    )
+    registro_ciudad = models.CharField(
+        max_length=10,
+        null=True,
+        blank=True,
+        help_text='Código ciudad de registro'
+    )
+    vigencia_desde = models.DateField(
+        null=True,
+        blank=True,
+        help_text='Vigencia desde'
+    )
+    vigencia_hasta = models.DateField(
+        null=True,
+        blank=True,
+        help_text='Vigencia hasta'
+    )
+    
+    # ========== COMPOSICIÓN DEL CAPITAL ==========
+    capital_nacional_porcentaje = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=0,
+        help_text='Porcentaje de capital nacional'
+    )
+    capital_nacional_publico_porcentaje = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=0,
+        help_text='Porcentaje de capital nacional público'
+    )
+    capital_nacional_privado_porcentaje = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=0,
+        help_text='Porcentaje de capital nacional privado'
+    )
+    capital_extranjero_porcentaje = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=0,
+        help_text='Porcentaje de capital extranjero'
+    )
+    capital_extranjero_publico_porcentaje = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=0,
+        help_text='Porcentaje de capital extranjero público'
+    )
+    capital_extranjero_privado_porcentaje = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=0,
+        help_text='Porcentaje de capital extranjero privado'
+    )
+    
+    # ========== ENTIDAD DE VIGILANCIA ==========
+    entidad_vigilancia = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text='Entidad de vigilancia y control'
+    )
+    entidad_vigilancia_codigo = models.CharField(
+        max_length=10,
+        null=True,
+        blank=True,
+        help_text='Código de entidad de vigilancia'
+    )
+    
+    # ========== REPRESENTANTE LEGAL ==========
+    representante_legal_representacion = models.CharField(
+        max_length=100,
+        null=True,
+        blank=True,
+        help_text='Tipo de representación'
+    )
+    representante_legal_fecha_inicio = models.DateField(
+        null=True,
+        blank=True,
+        help_text='Fecha inicio ejercicio representación'
+    )
+    representante_legal_tipo_doc = models.CharField(
+        max_length=20,
+        null=True,
+        blank=True,
+        help_text='Tipo de documento'
+    )
+    representante_legal_numero_doc = models.CharField(
+        max_length=20,
+        null=True,
+        blank=True,
+        help_text='Número de identificación'
+    )
+    representante_legal_dv = models.CharField(
+        max_length=1,
+        null=True,
+        blank=True,
+        help_text='Dígito verificador'
+    )
+    representante_legal_tarjeta_profesional = models.CharField(
+        max_length=50,
+        null=True,
+        blank=True,
+        help_text='Número de tarjeta profesional'
+    )
+    representante_legal_primer_apellido = models.CharField(
+        max_length=100,
+        null=True,
+        blank=True,
+        help_text='Primer apellido'
+    )
+    representante_legal_segundo_apellido = models.CharField(
+        max_length=100,
+        null=True,
+        blank=True,
+        help_text='Segundo apellido'
+    )
+    representante_legal_primer_nombre = models.CharField(
+        max_length=100,
+        null=True,
+        blank=True,
+        help_text='Primer nombre'
+    )
+    representante_legal_otros_nombres = models.CharField(
+        max_length=100,
+        null=True,
+        blank=True,
+        help_text='Otros nombres'
+    )
+    representante_legal_nit = models.CharField(
+        max_length=20,
+        null=True,
+        blank=True,
+        help_text='NIT del representante legal'
+    )
+    representante_legal_razon_social = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text='Razón social del representante legal'
+    )
+    
+    # ========== VINCULACIÓN ECONÓMICA ==========
+    vinculacion_economica = models.BooleanField(
+        default=False,
+        help_text='Tiene vinculación económica'
+    )
+    grupo_economico_nombre = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text='Nombre del grupo económico y/o empresarial'
+    )
+    matriz_nit = models.CharField(
+        max_length=20,
+        null=True,
+        blank=True,
+        help_text='NIT de la matriz o controlante'
+    )
+    matriz_dv = models.CharField(
+        max_length=1,
+        null=True,
+        blank=True,
+        help_text='DV de la matriz'
+    )
+    matriz_razon_social = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text='Razón social de la matriz o controlante'
+    )
+    
+    # ========== ARCHIVO Y METADATOS ==========
+    archivo_pdf = models.FileField(
+        upload_to='ruts/',
+        null=True,
+        blank=True,
+        help_text='Archivo PDF del RUT original'
+    )
+    informacion_adicional = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='Información adicional no estructurada'
+    )
+    
+    # ========== AUDITORÍA ==========
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+    fecha_ultima_consulta_dian = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text='Última vez que se consultó en DIAN'
+    )
+    
+    class Meta:
+        db_table = 'ruts'
+        verbose_name = 'RUT'
+        verbose_name_plural = 'RUTs'
+        indexes = [
+            models.Index(fields=['nit_normalizado']),
+            models.Index(fields=['nit']),
+            models.Index(fields=['razon_social']),
+        ]
+    
+    def __str__(self):
+        return f"{self.razon_social} - NIT: {self.nit}-{self.dv}"
+    
+    def save(self, *args, **kwargs):
+        """Normalizar NIT antes de guardar"""
+        if self.nit:
+            # Normalizar NIT: eliminar puntos, guiones y espacios
+            self.nit_normalizado = ''.join(c for c in str(self.nit) if c.isdigit())
+        super().save(*args, **kwargs)
+
+
+class EstablecimientoRUT(models.Model):
+    """
+    Establecimientos adicionales de una empresa (sucursales, agencias, etc.)
+    """
+    rut = models.ForeignKey(
+        RUT,
+        on_delete=models.CASCADE,
+        related_name='establecimientos',
+        help_text='RUT al que pertenece este establecimiento'
+    )
+    
+    tipo_establecimiento = models.CharField(
+        max_length=50,
+        null=True,
+        blank=True,
+        help_text='Tipo de establecimiento'
+    )
+    tipo_establecimiento_codigo = models.CharField(
+        max_length=10,
+        null=True,
+        blank=True,
+        help_text='Código del tipo de establecimiento'
+    )
+    actividad_economica_ciiu = models.CharField(
+        max_length=10,
+        null=True,
+        blank=True,
+        help_text='Código CIIU de actividad económica'
+    )
+    actividad_economica_descripcion = models.TextField(
+        null=True,
+        blank=True,
+        help_text='Descripción de la actividad económica'
+    )
+    nombre = models.CharField(
+        max_length=255,
+        help_text='Nombre del establecimiento'
+    )
+    departamento_codigo = models.CharField(
+        max_length=10,
+        null=True,
+        blank=True,
+        help_text='Código del departamento'
+    )
+    departamento_nombre = models.CharField(
+        max_length=100,
+        help_text='Nombre del departamento'
+    )
+    ciudad_codigo = models.CharField(
+        max_length=10,
+        null=True,
+        blank=True,
+        help_text='Código de la ciudad/municipio'
+    )
+    ciudad_nombre = models.CharField(
+        max_length=100,
+        help_text='Nombre de la ciudad/municipio'
+    )
+    direccion = models.TextField(
+        help_text='Dirección del establecimiento'
+    )
+    matricula_mercantil = models.CharField(
+        max_length=50,
+        null=True,
+        blank=True,
+        help_text='Número de matrícula mercantil'
+    )
+    fecha_matricula_mercantil = models.DateField(
+        null=True,
+        blank=True,
+        help_text='Fecha de la matrícula mercantil'
+    )
+    telefono = models.CharField(
+        max_length=20,
+        null=True,
+        blank=True,
+        help_text='Teléfono del establecimiento'
+    )
+    fecha_cierre = models.DateField(
+        null=True,
+        blank=True,
+        help_text='Fecha de cierre (si aplica)'
+    )
+    
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'rut_establecimientos'
+        verbose_name = 'Establecimiento RUT'
+        verbose_name_plural = 'Establecimientos RUT'
+        ordering = ['nombre']
+    
+    def __str__(self):
+        return f"{self.nombre} - {self.ciudad_nombre}"
+
+
+class ActividadEconomica(models.Model):
+    """
+    Modelo para almacenar información completa de códigos CIIU (Clasificación Industrial Internacional Uniforme).
+    Similar a EconomicActivities de BCE. El código CIIU es el índice único, no el ID.
+    """
+    codigo = models.CharField(
+        max_length=10,
+        unique=True,
+        db_index=True,
+        help_text='Código CIIU completo (4-5 dígitos) - Índice único'
+    )
+    descripcion = models.CharField(
+        max_length=500,
+        null=True,
+        blank=True,
+        help_text='Descripción de la actividad económica'
+    )
+    titulo = models.CharField(
+        max_length=500,
+        null=True,
+        blank=True,
+        help_text='Título de la actividad económica'
+    )
+    division = models.CharField(
+        max_length=10,
+        null=True,
+        blank=True,
+        help_text='División CIIU (primeros 2 dígitos)'
+    )
+    grupo = models.CharField(
+        max_length=10,
+        null=True,
+        blank=True,
+        help_text='Grupo CIIU (primeros 3 dígitos)'
+    )
+    incluye = models.JSONField(
+        null=True,
+        blank=True,
+        default=list,
+        help_text='Lista de actividades que incluye'
+    )
+    excluye = models.JSONField(
+        null=True,
+        blank=True,
+        default=list,
+        help_text='Lista de actividades que excluye'
+    )
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+    fecha_ultima_consulta_api = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text='Última vez que se consultó la API para actualizar información'
+    )
+    
+    class Meta:
+        db_table = 'actividades_economicas'
+        verbose_name = 'Actividad Económica'
+        verbose_name_plural = 'Actividades Económicas'
+        indexes = [
+            models.Index(fields=['codigo']),
+            models.Index(fields=['division']),
+            models.Index(fields=['grupo']),
+        ]
+        ordering = ['codigo']
+    
+    def __str__(self):
+        return f"{self.codigo} - {self.descripcion or self.titulo or 'Sin descripción'}"
+
+
+class ResponsabilidadTributaria(models.Model):
+    """
+    Modelo para almacenar códigos de responsabilidades tributarias del RUT.
+    El código es el índice único, no el ID.
+    """
+    codigo = models.CharField(
+        max_length=10,
+        unique=True,
+        db_index=True,
+        help_text='Código de responsabilidad tributaria (ej: "7", "9", "14", "48", "52") - Índice único'
+    )
+    descripcion = models.CharField(
+        max_length=255,
+        help_text='Descripción de la responsabilidad tributaria'
+    )
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'responsabilidades_tributarias'
+        verbose_name = 'Responsabilidad Tributaria'
+        verbose_name_plural = 'Responsabilidades Tributarias'
+        indexes = [
+            models.Index(fields=['codigo']),
+        ]
+        ordering = ['codigo']
+    
+    def __str__(self):
+        return f"{self.codigo} - {self.descripcion}"
+
+
+# ========== MODELOS PARA CALENDARIO TRIBUTARIO ==========
+
+class TipoTercero(models.Model):
+    """
+    Tipos de tercero para el calendario tributario (Persona Natural, Persona Jurídica).
+    """
+    codigo = models.CharField(
+        max_length=10,
+        unique=True,
+        db_index=True,
+        help_text='Código del tipo de tercero (ej: "PN", "PJ")'
+    )
+    nombre = models.CharField(
+        max_length=100,
+        help_text='Nombre del tipo de tercero'
+    )
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'tipos_tercero'
+        verbose_name = 'Tipo de Tercero'
+        verbose_name_plural = 'Tipos de Tercero'
+        indexes = [
+            models.Index(fields=['codigo']),
+        ]
+        ordering = ['codigo']
+    
+    def __str__(self):
+        return f"{self.codigo} - {self.nombre}"
+
+
+class TipoRegimen(models.Model):
+    """
+    Tipos de régimen tributario (Gran Contribuyente, Régimen Simple, Ordinario, etc.).
+    """
+    codigo = models.CharField(
+        max_length=10,
+        unique=True,
+        db_index=True,
+        help_text='Código del régimen (ej: "GC", "SIM", "ORD")'
+    )
+    nombre = models.CharField(
+        max_length=100,
+        help_text='Nombre del régimen tributario'
+    )
+    descripcion = models.TextField(
+        null=True,
+        blank=True,
+        help_text='Descripción del régimen tributario'
+    )
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'tipos_regimen'
+        verbose_name = 'Tipo de Régimen'
+        verbose_name_plural = 'Tipos de Régimen'
+        indexes = [
+            models.Index(fields=['codigo']),
+        ]
+        ordering = ['codigo']
+    
+    def __str__(self):
+        return f"{self.codigo} - {self.nombre}"
+
+
+class Impuesto(models.Model):
+    """
+    Impuestos tributarios (RGC, RPJ, RPN, IVB, IVC, AEE, RSA, RET, etc.).
+    """
+    codigo = models.CharField(
+        max_length=10,
+        unique=True,
+        db_index=True,
+        help_text='Código del impuesto (ej: "RGC", "RPJ", "IVB", "IVC")'
+    )
+    nombre = models.CharField(
+        max_length=100,
+        help_text='Nombre del impuesto'
+    )
+    descripcion = models.TextField(
+        null=True,
+        blank=True,
+        help_text='Descripción del impuesto'
+    )
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'impuestos'
+        verbose_name = 'Impuesto'
+        verbose_name_plural = 'Impuestos'
+        indexes = [
+            models.Index(fields=['codigo']),
+        ]
+        ordering = ['codigo']
+    
+    def __str__(self):
+        return f"{self.codigo} - {self.nombre}"
+
+
+class VigenciaTributaria(models.Model):
+    """
+    Vigencias tributarias: fechas límite de obligaciones según:
+    - Impuesto
+    - Últimos dígitos del NIT (1 o 2 dígitos)
+    - Tipo de tercero (PN, PJ, o null para todos)
+    - Régimen tributario (GC, SIM, ORD, o null para todos)
+    """
+    impuesto = models.ForeignKey(
+        Impuesto,
+        on_delete=models.CASCADE,
+        related_name='vigencias',
+        help_text='Impuesto al que aplica esta vigencia'
+    )
+    digitos_nit = models.CharField(
+        max_length=2,
+        blank=True,
+        default='',
+        db_index=True,
+        help_text='Últimos 1 o 2 dígitos del NIT. Vacío ("") = aplica a todos los NITs. Ejemplos: "1", "2", "01", "99", "00"'
+    )
+    tipo_tercero = models.ForeignKey(
+        TipoTercero,
+        on_delete=models.PROTECT,
+        related_name='vigencias',
+        null=True,
+        blank=True,
+        help_text='Tipo de tercero (PN, PJ). Null = aplica a todos los tipos'
+    )
+    tipo_regimen = models.ForeignKey(
+        TipoRegimen,
+        on_delete=models.PROTECT,
+        related_name='vigencias',
+        null=True,
+        blank=True,
+        help_text='Régimen tributario (GC, SIM, ORD). Null = aplica a todos los regímenes'
+    )
+    fecha_limite = models.DateField(
+        help_text='Fecha límite de la obligación tributaria'
+    )
+    descripcion = models.TextField(
+        default='Sin definir',
+        help_text='Descripción de la obligación tributaria'
+    )
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'vigencias_tributarias'
+        verbose_name = 'Vigencia Tributaria'
+        verbose_name_plural = 'Vigencias Tributarias'
+        indexes = [
+            models.Index(fields=['impuesto', 'digitos_nit']),
+            models.Index(fields=['impuesto', 'tipo_tercero', 'tipo_regimen']),
+            models.Index(fields=['fecha_limite']),
+        ]
+        ordering = ['impuesto', 'fecha_limite', 'digitos_nit']
+        # Evitar duplicados exactos
+        unique_together = [
+            ['impuesto', 'digitos_nit', 'tipo_tercero', 'tipo_regimen', 'fecha_limite']
+        ]
+    
+    def __str__(self):
+        tercero = self.tipo_tercero.codigo if self.tipo_tercero else 'TODOS'
+        regimen = self.tipo_regimen.codigo if self.tipo_regimen else 'TODOS'
+        digitos = self.digitos_nit if self.digitos_nit else 'TODOS'
+        return f"{self.impuesto.codigo} | Dígitos: {digitos} | {tercero} | {regimen} | {self.fecha_limite}"
+
 
 class MovimientoInventario(models.Model):
     TIPO_DOCUMENTO_CHOICES = [

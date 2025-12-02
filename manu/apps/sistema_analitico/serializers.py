@@ -5,7 +5,9 @@ from .models import (
     PasarelaPago, TransaccionPago,
     Servidor, EmpresaServidor, MovimientoInventario, UsuarioEmpresa,
     EmpresaPersonalizacion, GrupoMaterialImagen, MaterialImagen, CajaAutopago,
-    VpnConfig, EmpresaEcommerceConfig, APIKeyCliente, EmpresaDominio, UserTenantProfile
+    VpnConfig, EmpresaEcommerceConfig, APIKeyCliente, EmpresaDominio, UserTenantProfile,
+    RUT, EstablecimientoRUT, ActividadEconomica, ResponsabilidadTributaria,
+    TipoTercero, TipoRegimen, Impuesto, VigenciaTributaria
 )
 
 
@@ -604,6 +606,154 @@ class EmpresaDominioSerializer(serializers.ModelSerializer):
                     attrs['anio_fiscal'] = empresa_mas_reciente.anio_fiscal
         return attrs
 
+class EstablecimientoRUTSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EstablecimientoRUT
+        fields = '__all__'
+        read_only_fields = ['id', 'fecha_creacion']
+
+
+class ActividadEconomicaSerializer(serializers.ModelSerializer):
+    """Serializer para mostrar información completa de actividades económicas CIIU"""
+    class Meta:
+        model = ActividadEconomica
+        fields = ['codigo', 'descripcion', 'titulo', 'division', 'grupo']
+
+
+class RUTSerializer(serializers.ModelSerializer):
+    establecimientos = EstablecimientoRUTSerializer(many=True, read_only=True)
+    empresas_asociadas = serializers.SerializerMethodField()
+    archivo_pdf_url = serializers.SerializerMethodField()
+    actividad_principal_info = serializers.SerializerMethodField()
+    actividad_secundaria_info = serializers.SerializerMethodField()
+    otras_actividades_info = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = RUT
+        fields = [
+            'id', 'nit_normalizado', 'nit', 'dv', 'numero_formulario',
+            'tipo_contribuyente', 'razon_social', 'nombre_comercial', 'sigla',
+            'pais', 'departamento_codigo', 'departamento_nombre',
+            'ciudad_codigo', 'ciudad_nombre', 'direccion_principal',
+            'codigo_postal', 'telefono_1', 'telefono_2', 'email',
+            'direccion_seccional', 'buzon_electronico',
+            'actividad_principal_ciiu', 'actividad_principal_fecha_inicio',
+            'actividad_secundaria_ciiu', 'actividad_secundaria_fecha_inicio',
+            'otras_actividades_ciiu', 'numero_establecimientos',
+            'responsabilidades_codigos', 'responsabilidades_descripcion',
+            'responsable_iva', 'autorretenedor', 'obligado_contabilidad',
+            'regimen_simple', 'facturador_electronico', 'informante_exogena',
+            'informante_beneficiarios_finales',
+            'constitucion_clase', 'constitucion_numero', 'constitucion_fecha',
+            'constitucion_notaria', 'registro_entidad', 'registro_fecha',
+            'matricula_mercantil', 'registro_departamento', 'registro_ciudad',
+            'vigencia_desde', 'vigencia_hasta',
+            'capital_nacional_porcentaje', 'capital_nacional_publico_porcentaje',
+            'capital_nacional_privado_porcentaje', 'capital_extranjero_porcentaje',
+            'capital_extranjero_publico_porcentaje', 'capital_extranjero_privado_porcentaje',
+            'entidad_vigilancia', 'entidad_vigilancia_codigo',
+            'representante_legal_representacion', 'representante_legal_fecha_inicio',
+            'representante_legal_tipo_doc', 'representante_legal_numero_doc',
+            'representante_legal_dv', 'representante_legal_tarjeta_profesional',
+            'representante_legal_primer_apellido', 'representante_legal_segundo_apellido',
+            'representante_legal_primer_nombre', 'representante_legal_otros_nombres',
+            'representante_legal_nit', 'representante_legal_razon_social',
+            'vinculacion_economica', 'grupo_economico_nombre',
+            'matriz_nit', 'matriz_dv', 'matriz_razon_social',
+            'archivo_pdf', 'archivo_pdf_url', 'informacion_adicional',
+            'establecimientos', 'empresas_asociadas',
+            'actividad_principal_info', 'actividad_secundaria_info', 'otras_actividades_info',
+            'fecha_creacion', 'fecha_actualizacion', 'fecha_ultima_consulta_dian'
+        ]
+        read_only_fields = ['id', 'nit_normalizado', 'fecha_creacion', 'fecha_actualizacion']
+    
+    def get_empresas_asociadas(self, obj):
+        """Obtener todas las empresas con el mismo NIT normalizado"""
+        from .models import EmpresaServidor
+        empresas = EmpresaServidor.objects.filter(nit=obj.nit_normalizado)
+        return [
+            {
+                'id': emp.id,
+                'nombre': emp.nombre,
+                'nit': emp.nit,
+                'anio_fiscal': emp.anio_fiscal,
+                'servidor': emp.servidor.nombre if emp.servidor else None
+            }
+            for emp in empresas
+        ]
+    
+    def get_archivo_pdf_url(self, obj):
+        """URL del archivo PDF"""
+        if obj.archivo_pdf:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.archivo_pdf.url)
+            return obj.archivo_pdf.url
+        return None
+    
+    def get_actividad_principal_info(self, obj):
+        """Información detallada de la actividad principal CIIU"""
+        if obj.actividad_principal_ciiu:
+            try:
+                actividad = ActividadEconomica.objects.get(codigo=obj.actividad_principal_ciiu)
+                return ActividadEconomicaSerializer(actividad).data
+            except ActividadEconomica.DoesNotExist:
+                return {'codigo': obj.actividad_principal_ciiu, 'descripcion': 'No encontrada en BD'}
+        return None
+    
+    def get_actividad_secundaria_info(self, obj):
+        """Información detallada de la actividad secundaria CIIU"""
+        if obj.actividad_secundaria_ciiu:
+            try:
+                actividad = ActividadEconomica.objects.get(codigo=obj.actividad_secundaria_ciiu)
+                return ActividadEconomicaSerializer(actividad).data
+            except ActividadEconomica.DoesNotExist:
+                return {'codigo': obj.actividad_secundaria_ciiu, 'descripcion': 'No encontrada en BD'}
+        return None
+    
+    def get_otras_actividades_info(self, obj):
+        """Información detallada de otras actividades CIIU"""
+        if obj.otras_actividades_ciiu:
+            codigos = obj.otras_actividades_ciiu if isinstance(obj.otras_actividades_ciiu, list) else []
+            actividades_info = []
+            for codigo in codigos:
+                try:
+                    actividad = ActividadEconomica.objects.get(codigo=codigo)
+                    actividades_info.append(ActividadEconomicaSerializer(actividad).data)
+                except ActividadEconomica.DoesNotExist:
+                    actividades_info.append({'codigo': codigo, 'descripcion': 'No encontrada en BD'})
+            return actividades_info
+        return []
+
+
+class SubirRUTSerializer(serializers.Serializer):
+    """Serializer para subir PDF de RUT o ZIP con múltiples PDFs"""
+    archivo_pdf = serializers.FileField(
+        required=False,
+        help_text='Archivo PDF del RUT (para carga individual)'
+    )
+    archivo_zip = serializers.FileField(
+        required=False,
+        help_text='Archivo ZIP con múltiples PDFs de RUT (para carga masiva)'
+    )
+    nit = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        help_text='NIT (opcional, se detectará del PDF si no se proporciona)'
+    )
+    
+    def validate(self, data):
+        """Validar que se proporcione al menos un archivo"""
+        if not data.get('archivo_pdf') and not data.get('archivo_zip'):
+            raise serializers.ValidationError(
+                'Debes proporcionar un archivo PDF o un archivo ZIP con PDFs'
+            )
+        if data.get('archivo_pdf') and data.get('archivo_zip'):
+            raise serializers.ValidationError(
+                'Solo puedes proporcionar un archivo PDF o un ZIP, no ambos'
+            )
+        return data
+
 class ExtraerDatosSerializer(serializers.Serializer):
     """Serializer para extraer datos de una empresa"""
     empresa_servidor_id = serializers.IntegerField(required=True, help_text="ID de la empresa de la cual extraer datos")
@@ -629,3 +779,48 @@ class ExtraerDatosSerializer(serializers.Serializer):
         except EmpresaServidor.DoesNotExist:
             raise serializers.ValidationError(f"Empresa con ID {value} no existe")
         return value
+
+
+# ========== SERIALIZERS PARA CALENDARIO TRIBUTARIO ==========
+
+class TipoTerceroSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TipoTercero
+        fields = '__all__'
+        read_only_fields = ['fecha_creacion', 'fecha_actualizacion']
+
+
+class TipoRegimenSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TipoRegimen
+        fields = '__all__'
+        read_only_fields = ['fecha_creacion', 'fecha_actualizacion']
+
+
+class ImpuestoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Impuesto
+        fields = '__all__'
+        read_only_fields = ['fecha_creacion', 'fecha_actualizacion']
+
+
+class VigenciaTributariaSerializer(serializers.ModelSerializer):
+    impuesto_nombre = serializers.CharField(source='impuesto.nombre', read_only=True)
+    impuesto_codigo = serializers.CharField(source='impuesto.codigo', read_only=True)
+    tipo_tercero_nombre = serializers.CharField(source='tipo_tercero.nombre', read_only=True)
+    tipo_tercero_codigo = serializers.CharField(source='tipo_tercero.codigo', read_only=True)
+    tipo_regimen_nombre = serializers.CharField(source='tipo_regimen.nombre', read_only=True)
+    tipo_regimen_codigo = serializers.CharField(source='tipo_regimen.codigo', read_only=True)
+    
+    class Meta:
+        model = VigenciaTributaria
+        fields = '__all__'
+        read_only_fields = ['fecha_creacion', 'fecha_actualizacion']
+
+
+class SubirCalendarioTributarioSerializer(serializers.Serializer):
+    """Serializer para subir Excel del calendario tributario"""
+    archivo_excel = serializers.FileField(
+        required=True,
+        help_text='Archivo Excel con el calendario tributario (formato: tax_code, expirations_digits, third_type_code, regiment_type_code, date, description)'
+    )

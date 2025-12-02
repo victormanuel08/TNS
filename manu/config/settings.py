@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'encrypted_model_fields',
+    'django_redis',  # Para cache con Redis
     'apps.sistema_analitico',
     'apps.dian_scraper',
     'apps.fudo_scraper'
@@ -199,6 +200,21 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'America/Bogota'  # Zona horaria de Bogotá, Colombia
+
+# ==================== Configuración de Cache ====================
+CACHES = {
+    'default': {
+        'BACKEND': 'django_redis.cache.RedisCache',
+        'LOCATION': REDIS_URL,
+        'OPTIONS': {
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+            'SOCKET_CONNECT_TIMEOUT': 5,
+            'SOCKET_TIMEOUT': 5,
+            'COMPRESSOR': 'django_redis.compressors.zlib.ZlibCompressor',
+        },
+        'TIMEOUT': 604800,  # 7 días por defecto (igual que BCE)
+    }
+}
 
 # Configuración API DIAN
 API_DIAN_ROUTE = env('API_DIAN_ROUTE', default='http://45.149.204.184:81')

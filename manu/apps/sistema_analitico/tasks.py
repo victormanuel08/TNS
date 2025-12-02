@@ -121,3 +121,138 @@ def descubrir_empresas_task(self, servidor_id):
             'error': str(e),
             'servidor_id': servidor_id
         }
+
+
+@shared_task(bind=True, name='sistema_analitico.obtener_info_ciiu')
+def obtener_info_ciiu_task(self, codigo_ciiu: str, forzar_actualizacion: bool = False):
+    """
+    Tarea Celery para obtener información completa de un código CIIU desde la API externa
+    y guardarla en la base de datos y cache.
+    
+    Args:
+        codigo_ciiu: Código CIIU a consultar (ej: "42902")
+        forzar_actualizacion: Si True, actualiza la info aunque ya exista
+    
+    Returns:
+        dict con resultado del procesamiento
+    """
+    from .services.ciiu_service import obtener_o_crear_actividad_economica
+    
+    try:
+        logger.info(f"Iniciando obtención de info CIIU: código={codigo_ciiu}")
+        
+        # Actualizar estado de la tarea
+        self.update_state(
+            state='PROCESSING',
+            meta={
+                'codigo_ciiu': codigo_ciiu,
+                'status': 'Obteniendo información de la API...'
+            }
+        )
+        
+        # Obtener o crear actividad económica
+        actividad = obtener_o_crear_actividad_economica(
+            codigo_ciiu=codigo_ciiu,
+            forzar_actualizacion=forzar_actualizacion
+        )
+        
+        if actividad:
+            logger.info(f"Info CIIU {codigo_ciiu} obtenida exitosamente")
+            return {
+                'status': 'SUCCESS',
+                'codigo_ciiu': codigo_ciiu,
+                'actividad_id': actividad.id,
+                'descripcion': actividad.descripcion,
+                'titulo': actividad.titulo,
+                'mensaje': f'Información de CIIU {codigo_ciiu} obtenida y guardada exitosamente'
+            }
+        else:
+            logger.error(f"No se pudo obtener info CIIU {codigo_ciiu}")
+            return {
+                'status': 'FAILED',
+                'codigo_ciiu': codigo_ciiu,
+                'error': 'No se pudo obtener información de la API'
+            }
+    
+    except Exception as e:
+        logger.error(f"Excepción en tarea obtener_info_ciiu: {e}", exc_info=True)
+        return {
+            'status': 'ERROR',
+            'codigo_ciiu': codigo_ciiu,
+            'error': str(e)
+        }
+
+
+@shared_task(bind=True, name='sistema_analitico.procesar_codigos_ciiu_masivo')
+def procesar_codigos_ciiu_masivo_task(self, codigos_ciiu: list):
+    """
+    Tarea Celery para procesar múltiples códigos CIIU en paralelo.
+    
+    Args:
+        codigos_ciiu: Lista de códigos CIIU a procesar
+    
+    Returns:
+        dict con resultados de todos los códigos procesados
+    """
+    from .tasks import obtener_info_ciiu_task
+    
+    try:
+        logger.info(f"Iniciando procesamiento masivo de {len(codigos_ciiu)} códigos CIIU")
+        
+        # Actualizar estado
+        self.update_state(
+            state='PROCESSING',
+            meta={
+                'total': len(codigos_ciiu),
+                'procesados': 0,
+                'status': 'Iniciando procesamiento...'
+            }
+        )
+        
+        # Procesar códigos (pueden ejecutarse en paralelo)
+        resultados = []
+        tareas = []
+        
+        for codigo in codigos_ciiu:
+            if codigo and codigo.strip():
+                # Crear tarea para cada código
+                task = obtener_info_ciiu_task.delay(codigo.strip())
+                tareas.append((codigo.strip(), task))
+        
+        # Esperar resultados (con timeout)
+        for codigo, task in tareas:
+            try:
+                resultado = task.get(timeout=30)  # Timeout de 30 segundos por código
+                resultados.append({
+                    'codigo': codigo,
+                    'resultado': resultado
+                })
+            except Exception as e:
+                logger.error(f"Error procesando código CIIU {codigo}: {e}")
+                resultados.append({
+                    'codigo': codigo,
+                    'resultado': {
+                        'status': 'ERROR',
+                        'error': str(e)
+                    }
+                })
+        
+        exitosos = sum(1 for r in resultados if r['resultado'].get('status') == 'SUCCESS')
+        
+        logger.info(f"Procesamiento masivo completado: {exitosos}/{len(resultados)} exitosos")
+        
+        return {
+            'status': 'SUCCESS',
+            'total': len(resultados),
+            'exitosos': exitosos,
+            'fallidos': len(resultados) - exitosos,
+            'resultados': resultados
+        }
+    
+    except Exception as e:
+        logger.error(f"Excepción en tarea procesar_codigos_ciiu_masivo: {e}", exc_info=True)
+        return {
+            'status': 'ERROR',
+            'error': str(e),
+            'total': len(codigos_ciiu) if codigos_ciiu else 0
+        }
