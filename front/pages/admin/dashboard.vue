@@ -2130,6 +2130,7 @@ const formatUptime = (seconds: number) => {
 // Watch para cargar servicios cuando se cambia a esa pestaña
 watch(activeSection, (newSection) => {
   if (newSection === 'servicios') {
+    // Cargar servicios automáticamente al cambiar a esta pestaña
     loadSystemInfo()
     loadSystemdServices()
     loadPm2Processes()

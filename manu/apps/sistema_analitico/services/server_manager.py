@@ -26,7 +26,7 @@ SSH_KEY_PATH = getattr(settings, 'SERVER_SSH_KEY_PATH', os.getenv('SERVER_SSH_KE
 
 
 class ServerManager:
-    """Gestiona servicios del sistema y PM2 vía SSH"""
+    """Gestiona servicios del sistema y PM2 vía SSH o localmente"""
     
     def __init__(self):
         self.ssh_host = SSH_HOST
@@ -35,8 +35,11 @@ class ServerManager:
         self.ssh_port = SSH_PORT
         self.ssh_key_path = SSH_KEY_PATH
         
-        if not self.ssh_host:
-            raise ValueError("SSH_HOST no está configurado. Configura SERVER_SSH_HOST en .env")
+        # Si no hay SSH_HOST configurado o es localhost/127.0.0.1, ejecutar localmente
+        self.use_local = not self.ssh_host or self.ssh_host in ('localhost', '127.0.0.1', '::1')
+        
+        if not self.use_local and not self.ssh_host:
+            raise ValueError("SSH_HOST no está configurado. Configura SERVER_SSH_HOST en .env o déjalo vacío para ejecución local")
     
     def _get_ssh_client(self) -> paramiko.SSHClient:
         """Crea y conecta un cliente SSH"""
@@ -73,7 +76,7 @@ class ServerManager:
     
     def _execute_command(self, command: str, use_sudo: bool = False) -> Tuple[int, str, str]:
         """
-        Ejecuta un comando en el servidor remoto vía SSH.
+        Ejecuta un comando en el servidor remoto vía SSH o localmente.
         
         Args:
             command: Comando a ejecutar
@@ -85,6 +88,25 @@ class ServerManager:
         if use_sudo:
             command = f"sudo {command}"
         
+        # Si está configurado para ejecución local, usar subprocess directamente
+        if self.use_local:
+            import subprocess
+            try:
+                result = subprocess.run(
+                    command,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                return result.returncode, result.stdout, result.stderr
+            except subprocess.TimeoutExpired:
+                return 1, '', 'Comando expiró (timeout)'
+            except Exception as e:
+                logger.error(f"Error ejecutando comando local: {e}")
+                return 1, '', str(e)
+        
+        # Ejecutar vía SSH si no es local
         client = self._get_ssh_client()
         try:
             stdin, stdout, stderr = client.exec_command(command)
