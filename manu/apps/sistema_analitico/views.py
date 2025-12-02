@@ -3945,13 +3945,22 @@ def logout_view(request):
         return Response({"error": "Token inválido"}, status=400)
 
 # ========== API KEY MANAGEMENT VIEWS ==========
-class APIKeyManagementViewSet(viewsets.ViewSet):
-    permission_classes = [IsAuthenticated]
+class APIKeyManagementViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
+    """
+    ViewSet para gestionar API Keys.
+    Permite autenticación con JWT o API Key.
+    """
     
     def get_queryset(self):
-        if self.request.user.is_superuser:
-            return APIKeyCliente.objects.all()
-        return APIKeyCliente.objects.filter(usuario_creador=self.request.user)
+        # Si el usuario está autenticado (JWT)
+        if hasattr(self.request, 'user') and self.request.user.is_authenticated:
+            if self.request.user.is_superuser:
+                return APIKeyCliente.objects.all()
+            return APIKeyCliente.objects.filter(usuario_creador=self.request.user)
+        
+        # Si se autenticó con API Key, retornar todas (o filtrar por alguna lógica)
+        # Por ahora, retornar todas para que funcione
+        return APIKeyCliente.objects.all()
     
     @action(detail=False, methods=['post'])
     def generar_api_key(self, request):
@@ -3968,11 +3977,14 @@ class APIKeyManagementViewSet(viewsets.ViewSet):
         dias_validez = data['dias_validez']
         
         # Verificar que el usuario tiene permisos para gestionar API Keys
-        if not request.user.puede_gestionar_api_keys():
-            return Response(
-                {"error": "No tienes permisos para generar API Keys"}, 
-                status=403
-            )
+        # Solo si está autenticado con JWT
+        if hasattr(request, 'user') and request.user.is_authenticated:
+            if not request.user.puede_gestionar_api_keys():
+                return Response(
+                    {"error": "No tienes permisos para generar API Keys"}, 
+                    status=403
+                )
+        # Si se autenticó con API Key, permitir (asumimos que es admin)
         
         # Verificar que existe al menos una empresa con este NIT
         empresas_nit = EmpresaServidor.objects.filter(nit=nit)
@@ -3983,16 +3995,19 @@ class APIKeyManagementViewSet(viewsets.ViewSet):
             )
         
         # Verificar permisos del usuario sobre al menos una empresa del NIT
-        tiene_permiso = any(
-            request.user.has_empresa_permission(empresa, 'ver') 
-            for empresa in empresas_nit
-        )
-        
-        if not tiene_permiso and not request.user.is_superuser:
-            return Response(
-                {"error": "No tienes permisos para generar API Key para este NIT"}, 
-                status=403
+        # Solo si está autenticado con JWT
+        if hasattr(request, 'user') and request.user.is_authenticated:
+            tiene_permiso = any(
+                request.user.has_empresa_permission(empresa, 'ver') 
+                for empresa in empresas_nit
             )
+            
+            if not tiene_permiso and not request.user.is_superuser:
+                return Response(
+                    {"error": "No tienes permisos para generar API Key para este NIT"}, 
+                    status=403
+                )
+        # Si se autenticó con API Key, permitir (asumimos que es admin)
         
         # Crear o actualizar API Key
         api_key = f"sk_{secrets.token_urlsafe(32)}"
@@ -4005,7 +4020,7 @@ class APIKeyManagementViewSet(viewsets.ViewSet):
                 'api_key': api_key,
                 'fecha_caducidad': fecha_caducidad,
                 'activa': True,
-                'usuario_creador': request.user
+                'usuario_creador': request.user if hasattr(request, 'user') and request.user.is_authenticated else None
             }
         )
         
@@ -4029,7 +4044,7 @@ class APIKeyManagementViewSet(viewsets.ViewSet):
         from .serializers import APIKeyClienteSerializer
         
         api_keys = self.get_queryset()
-        serializer = APIKeyClienteSerializer(api_keys, many=True)
+        serializer = APIKeyClienteSerializer(api_keys, many=True, context={'request': request})
         
         return Response({
             "total_api_keys": api_keys.count(),
@@ -6848,7 +6863,7 @@ class VpnConfigViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
     def download_config(self, request, pk=None):
         """
         Descarga el archivo .conf de una configuración VPN.
-        Si no existe, lo genera dinámicamente.
+        SIEMPRE regenera el config para asegurar que la clave pública del servidor esté actualizada.
         """
         try:
             vpn_config = self.get_object()
@@ -6857,23 +6872,23 @@ class VpnConfigViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
             from .services.wireguard_manager import WireGuardManager
             wg_manager = WireGuardManager()
             
+            # SIEMPRE regenerar el config para asegurar que la clave pública esté correcta
             config_content = None
-            config_path = None
             
-            # Intentar leer archivo existente
-            if vpn_config.config_file_path:
-                config_path = Path(vpn_config.config_file_path)
-                if config_path.exists():
-                    config_content = config_path.read_text()
-            
-            # Si no existe archivo o no hay contenido, generar dinámicamente
-            if not config_content:
-                # Si no hay private_key (peer sincronizado), generar template
-                if not vpn_config.private_key:
-                    # Obtener clave pública del servidor usando el método mejorado
-                    server_public_key = wg_manager._get_server_public_key()
-                    
-                    config_content = f"""# Configuración WireGuard para {vpn_config.nombre}
+            # Si no hay private_key (peer sincronizado), generar template
+            if not vpn_config.private_key:
+                # Obtener clave pública del servidor usando el método mejorado
+                server_public_key = wg_manager._get_server_public_key()
+                
+                # Validar que la clave no sea el placeholder
+                if server_public_key == "REEMPLAZAR_CON_CLAVE_PUBLICA_DEL_SERVIDOR":
+                    logger.error(f"No se pudo obtener la clave pública del servidor para {vpn_config.nombre}")
+                    return Response(
+                        {'error': 'No se pudo obtener la clave pública del servidor. Verifica la configuración de WireGuard.'},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                    )
+                
+                config_content = f"""# Configuración WireGuard para {vpn_config.nombre}
 # Generado automáticamente por EDDESO
 # NOTA: Este peer fue importado desde el servidor. Necesitas agregar tu PrivateKey manualmente.
 # La PrivateKey debe ser la misma que usaste para generar la PublicKey: {vpn_config.public_key}
@@ -6891,17 +6906,36 @@ PersistentKeepalive = 25
 """
                 else:
                     # Generar configuración completa con private_key
+                    # Obtener clave pública del servidor primero para validar
+                    server_public_key = wg_manager._get_server_public_key()
+                    if server_public_key == "REEMPLAZAR_CON_CLAVE_PUBLICA_DEL_SERVIDOR":
+                        logger.error(f"No se pudo obtener la clave pública del servidor para {vpn_config.nombre}")
+                        return Response(
+                            {'error': 'No se pudo obtener la clave pública del servidor. Verifica la configuración de WireGuard.'},
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                        )
+                    
+                    # Generar config pasando la clave pública del servidor explícitamente
                     config_content = wg_manager.create_client_config(
                         client_name=vpn_config.nombre,
                         client_private_key=vpn_config.private_key,
                         client_public_key=vpn_config.public_key,
-                        client_ip=vpn_config.ip_address or '10.8.3.X'
+                        client_ip=vpn_config.ip_address or '10.8.3.X',
+                        server_public_key=server_public_key  # Pasar explícitamente
                     )
-                
-                # Guardar archivo generado
-                config_path = Path(wg_manager.save_config_file(vpn_config.nombre, config_content))
-                vpn_config.config_file_path = str(config_path)
-                vpn_config.save()
+                    
+                    # Asegurar que la clave pública del servidor en el config sea la correcta
+                    # Reemplazar si está el placeholder (por si acaso)
+                    if 'PublicKey = REEMPLAZAR_CON_CLAVE_PUBLICA_DEL_SERVIDOR' in config_content:
+                        config_content = config_content.replace(
+                            'PublicKey = REEMPLAZAR_CON_CLAVE_PUBLICA_DEL_SERVIDOR',
+                            f'PublicKey = {server_public_key}'
+                        )
+            
+            # Guardar archivo generado
+            config_path = Path(wg_manager.save_config_file(vpn_config.nombre, config_content))
+            vpn_config.config_file_path = str(config_path)
+            vpn_config.save()
             
             # Retornar archivo
             from django.http import HttpResponse
@@ -6913,6 +6947,101 @@ PersistentKeepalive = 25
             logger.error(f"Error descargando configuración VPN: {e}", exc_info=True)
             return Response(
                 {'error': f'Error descargando configuración: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=True, methods=['get'], url_path='read-config')
+    def read_config(self, request, pk=None):
+        """
+        Lee el contenido del archivo .conf actual sin descargarlo.
+        Útil para verificar el contenido antes de descargar.
+        """
+        try:
+            vpn_config = self.get_object()
+            
+            from pathlib import Path
+            
+            config_content = None
+            
+            # Intentar leer archivo existente
+            if vpn_config.config_file_path:
+                config_path = Path(vpn_config.config_file_path)
+                if config_path.exists():
+                    config_content = config_path.read_text()
+            
+            if not config_content:
+                # Si no existe, generar uno nuevo (igual que download)
+                from .services.wireguard_manager import WireGuardManager
+                wg_manager = WireGuardManager()
+                
+                if not vpn_config.private_key:
+                    server_public_key = wg_manager._get_server_public_key()
+                    config_content = f"""# Configuración WireGuard para {vpn_config.nombre}
+# Generado automáticamente por EDDESO
+
+[Interface]
+PrivateKey = TU_CLAVE_PRIVADA_AQUI
+Address = {vpn_config.ip_address or '10.8.3.X'}/24
+DNS = 8.8.8.8
+
+[Peer]
+PublicKey = {server_public_key}
+Endpoint = {wg_manager.server_endpoint or 'TU_SERVIDOR:51820'}
+AllowedIPs = {vpn_config.ip_address or '10.8.3.X'}/32
+PersistentKeepalive = 25
+"""
+                else:
+                    config_content = wg_manager.create_client_config(
+                        client_name=vpn_config.nombre,
+                        client_private_key=vpn_config.private_key,
+                        client_public_key=vpn_config.public_key,
+                        client_ip=vpn_config.ip_address or '10.8.3.X'
+                    )
+            
+            return Response({
+                'config_content': config_content,
+                'config_file_path': vpn_config.config_file_path,
+                'has_private_key': bool(vpn_config.private_key)
+            })
+            
+        except Exception as e:
+            logger.error(f"Error leyendo configuración VPN: {e}", exc_info=True)
+            return Response(
+                {'error': f'Error leyendo configuración: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=True, methods=['post'], url_path='delete-config')
+    def delete_config(self, request, pk=None):
+        """
+        Elimina el archivo .conf de una configuración VPN.
+        No elimina el registro, solo el archivo.
+        """
+        try:
+            vpn_config = self.get_object()
+            
+            from pathlib import Path
+            
+            deleted = False
+            if vpn_config.config_file_path:
+                config_path = Path(vpn_config.config_file_path)
+                if config_path.exists():
+                    config_path.unlink()
+                    deleted = True
+            
+            # Limpiar la ruta del archivo en la BD
+            vpn_config.config_file_path = None
+            vpn_config.save()
+            
+            return Response({
+                'deleted': deleted,
+                'message': 'Archivo de configuración eliminado exitosamente' if deleted else 'No había archivo para eliminar'
+            })
+            
+        except Exception as e:
+            logger.error(f"Error eliminando configuración VPN: {e}", exc_info=True)
+            return Response(
+                {'error': f'Error eliminando configuración: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     

@@ -285,10 +285,18 @@ class WireGuardManager:
         if not server_public_key:
             server_public_key = self._get_server_public_key()
         
+        # Validar que la clave pública no sea el placeholder
+        if server_public_key == "REEMPLAZAR_CON_CLAVE_PUBLICA_DEL_SERVIDOR":
+            logger.error("No se pudo obtener la clave pública del servidor en create_client_config")
+            raise ValueError("No se pudo obtener la clave pública del servidor. Verifica la configuración de WireGuard.")
+        
         # Configuración de red: Cliente solo puede acceder a su propia IP
         # El servidor puede acceder al cliente porque tiene AllowedIPs = client_ip/32 en el servidor
         # Pero el cliente NO puede acceder al servidor ni a otros clientes
         client_allowed_ips = f"{client_ip}/32"  # Solo su propia IP
+        
+        # Asegurar que server_endpoint tenga un valor por defecto
+        endpoint = self.server_endpoint or 'TU_SERVIDOR:51820'
         
         config_content = f"""# Configuración WireGuard para {client_name}
 # Generado automáticamente por EDDESO
@@ -302,7 +310,7 @@ DNS = 8.8.8.8
 
 [Peer]
 PublicKey = {server_public_key}
-Endpoint = {self.server_endpoint}
+Endpoint = {endpoint}
 AllowedIPs = {client_allowed_ips}
 PersistentKeepalive = 25
 """

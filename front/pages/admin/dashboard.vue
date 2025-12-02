@@ -604,17 +604,23 @@
                         <polyline points="12 6 12 12 16 14"/>
                       </svg>
                     </button>
-                    <button class="btn-small btn-primary" @click="downloadVpnConfig(config.id)" title="Descargar archivo .conf">
+                    <button class="btn-small btn-info" @click="readVpnConfig(config.id)" title="Leer config actual">
+                      👁️
+                    </button>
+                    <button class="btn-small btn-primary" @click="downloadVpnConfig(config.id)" title="Descargar archivo .conf (regenera automáticamente)">
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
                         <polyline points="7 10 12 15 17 10"/>
                         <line x1="12" y1="15" x2="12" y2="3"/>
                       </svg>
                     </button>
+                    <button class="btn-small btn-warning" @click="deleteVpnConfigFile(config.id)" title="Eliminar archivo .conf">
+                      🗑️ Archivo
+                    </button>
                     <button class="btn-small btn-secondary" @click="toggleVpnConfig(config.id, !config.activo)" :title="config.activo ? 'Desactivar' : 'Activar'">
                       {{ config.activo ? 'Desactivar' : 'Activar' }}
                     </button>
-                    <button class="btn-small btn-danger" @click="deleteVpnConfig(config.id)" title="Eliminar">
+                    <button class="btn-small btn-danger" @click="deleteVpnConfig(config.id)" title="Eliminar configuración completa">
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <polyline points="3 6 5 6 21 6"/>
                         <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
@@ -1839,8 +1845,42 @@ const createVpnConfig = async () => {
   }
 }
 
+const readVpnConfig = async (configId: number) => {
+  try {
+    const response = await api.get(`/api/vpn/configs/${configId}/read-config/`)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Configuración Actual',
+      html: `
+        <div style="text-align: left;">
+          <p><strong>Ruta del archivo:</strong> ${response.config_file_path || 'No guardado'}</p>
+          <p><strong>Tiene clave privada:</strong> ${response.has_private_key ? 'Sí' : 'No'}</p>
+          <div style="margin-top: 15px; padding: 10px; background: #f5f5f5; border-radius: 5px; max-height: 400px; overflow-y: auto;">
+            <pre style="white-space: pre-wrap; word-wrap: break-word; font-size: 0.85em; margin: 0;">${response.config_content || 'No hay contenido'}</pre>
+          </div>
+        </div>
+      `,
+      width: '80%',
+      icon: 'info',
+      confirmButtonText: 'Cerrar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } catch (error: any) {
+    console.error('Error leyendo configuración VPN:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al leer configuración VPN',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  }
+}
+
 const downloadVpnConfig = async (configId: number) => {
   try {
+    // El backend ahora SIEMPRE regenera el config con la clave pública correcta
     const response = await api.get(`/api/vpn/configs/${configId}/download/`, {
       responseType: 'blob'
     })
@@ -1848,14 +1888,69 @@ const downloadVpnConfig = async (configId: number) => {
     const url = window.URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `wg-${configId}.conf`
+    const config = vpnConfigs.value.find(c => c.id === configId)
+    const filename = config ? `wg-${config.nombre.replace(/\s+/g, '_')}.conf` : `wg-${configId}.conf`
+    a.download = filename
     document.body.appendChild(a)
     a.click()
     window.URL.revokeObjectURL(url)
     document.body.removeChild(a)
+    
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Descargado',
+      text: 'Archivo .conf descargado exitosamente (regenerado con clave pública actualizada)',
+      icon: 'success',
+      timer: 2000,
+      showConfirmButton: false,
+      customClass: { container: 'swal-z-index-fix' }
+    })
   } catch (error: any) {
     console.error('Error descargando configuración VPN:', error)
-    alert('Error al descargar configuración VPN')
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al descargar configuración VPN',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  }
+}
+
+const deleteVpnConfigFile = async (configId: number) => {
+  const Swal = (await import('sweetalert2')).default
+  const result = await Swal.fire({
+    title: '¿Eliminar archivo .conf?',
+    text: 'Esto eliminará el archivo pero mantendrá el registro. Puedes regenerarlo descargándolo nuevamente.',
+    icon: 'warning',
+    showCancelButton: true,
+    confirmButtonText: 'Sí, eliminar',
+    cancelButtonText: 'Cancelar',
+    customClass: { container: 'swal-z-index-fix' }
+  })
+  
+  if (result.isConfirmed) {
+    try {
+      const response = await api.post(`/api/vpn/configs/${configId}/delete-config/`)
+      await Swal.fire({
+        title: 'Eliminado',
+        text: response.message || 'Archivo eliminado exitosamente',
+        icon: 'success',
+        timer: 1500,
+        showConfirmButton: false,
+        customClass: { container: 'swal-z-index-fix' }
+      })
+      await loadVpnConfigs()
+    } catch (error: any) {
+      await Swal.fire({
+        title: 'Error',
+        text: error?.data?.error || error?.message || 'Error al eliminar archivo',
+        icon: 'error',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' }
+      })
+    }
   }
 }
 
@@ -1870,13 +1965,39 @@ const toggleVpnConfig = async (configId: number, activo: boolean) => {
 }
 
 const deleteVpnConfig = async (configId: number) => {
-  if (!confirm('¿Estás seguro de eliminar esta configuración VPN?')) return
-  try {
-    await api.delete(`/api/vpn/configs/${configId}/`)
-    await loadVpnConfigs()
-  } catch (error: any) {
-    console.error('Error eliminando configuración VPN:', error)
-    alert('Error al eliminar configuración VPN')
+  const Swal = (await import('sweetalert2')).default
+  const result = await Swal.fire({
+    title: '¿Eliminar configuración VPN?',
+    text: 'Esto eliminará el registro completo, incluyendo el archivo .conf. Esta acción no se puede deshacer.',
+    icon: 'warning',
+    showCancelButton: true,
+    confirmButtonText: 'Sí, eliminar',
+    cancelButtonText: 'Cancelar',
+    confirmButtonColor: '#d32f2f',
+    customClass: { container: 'swal-z-index-fix' }
+  })
+  
+  if (result.isConfirmed) {
+    try {
+      await api.delete(`/api/vpn/configs/${configId}/`)
+      await Swal.fire({
+        title: 'Eliminado',
+        text: 'Configuración VPN eliminada exitosamente',
+        icon: 'success',
+        timer: 1500,
+        showConfirmButton: false,
+        customClass: { container: 'swal-z-index-fix' }
+      })
+      await loadVpnConfigs()
+    } catch (error: any) {
+      await Swal.fire({
+        title: 'Error',
+        text: error?.data?.error || error?.message || 'Error al eliminar configuración VPN',
+        icon: 'error',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' }
+      })
+    }
   }
 }
 

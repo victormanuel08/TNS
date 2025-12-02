@@ -3,7 +3,7 @@ from .models import (
     PasarelaPago, TransaccionPago,
     Servidor, EmpresaServidor, MovimientoInventario, UsuarioEmpresa,
     EmpresaPersonalizacion, GrupoMaterialImagen, MaterialImagen, CajaAutopago,
-    VpnConfig, EmpresaEcommerceConfig
+    VpnConfig, EmpresaEcommerceConfig, APIKeyCliente
 )
 
 
@@ -398,6 +398,59 @@ class DescubrirEmpresasSerializer(serializers.Serializer):
         except Servidor.DoesNotExist:
             raise serializers.ValidationError(f"Servidor con ID {value} no existe")
         return value
+
+
+# ========== API Keys Serializers ==========
+
+class APIKeyClienteSerializer(serializers.ModelSerializer):
+    """Serializer para API Keys de clientes"""
+    empresas_asociadas = serializers.SerializerMethodField()
+    expirada = serializers.SerializerMethodField()
+    empresas_asociadas_count = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = APIKeyCliente
+        fields = [
+            'id', 'nit', 'nombre_cliente', 'api_key', 'activa',
+            'fecha_creacion', 'fecha_actualizacion', 'fecha_caducidad',
+            'contador_peticiones', 'fecha_ultima_peticion',
+            'empresas_asociadas', 'empresas_asociadas_count', 'expirada'
+        ]
+        read_only_fields = ['id', 'fecha_creacion', 'fecha_actualizacion']
+    
+    def get_empresas_asociadas(self, obj):
+        """Obtener lista de empresas asociadas"""
+        empresas = obj.empresas_asociadas.all()
+        return [
+            {
+                'id': emp.id,
+                'nombre': emp.nombre,
+                'nit': emp.nit,
+                'anio_fiscal': emp.anio_fiscal,
+                'codigo': emp.codigo
+            }
+            for emp in empresas
+        ]
+    
+    def get_empresas_asociadas_count(self, obj):
+        """Contar empresas asociadas"""
+        return obj.empresas_asociadas.count()
+    
+    def get_expirada(self, obj):
+        """Verificar si la API Key está expirada"""
+        return obj.esta_expirada()
+
+
+class GenerarAPIKeySerializer(serializers.Serializer):
+    """Serializer para generar API Key"""
+    nit = serializers.CharField(required=True, help_text="NIT de la empresa (sin puntos ni guiones)")
+    nombre_cliente = serializers.CharField(required=True, max_length=255, help_text="Nombre descriptivo del cliente")
+    dias_validez = serializers.IntegerField(required=True, min_value=1, max_value=3650, help_text="Días de validez de la API Key (1-3650)")
+    
+    def validate_nit(self, value):
+        """Normalizar NIT (eliminar puntos, guiones, espacios)"""
+        import re
+        return re.sub(r"\D", "", str(value))
 
 
 class ExtraerDatosSerializer(serializers.Serializer):
