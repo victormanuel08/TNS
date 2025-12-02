@@ -37,7 +37,7 @@ After=network.target redis-server.service
 Requires=redis-server.service
 
 [Service]
-Type=notify
+Type=simple
 User=victus
 Group=victus
 WorkingDirectory=/home/victus/projects/CORE/manu
@@ -49,9 +49,6 @@ EnvironmentFile=/home/victus/projects/CORE/manu/.env
 # -E: Habilitar eventos de tareas para monitoreo
 # -l info: Nivel de logging
 ExecStart=/home/victus/projects/CORE/manu/env/bin/celery -A config worker -l info -P prefork --concurrency=4 -E --time-limit=3600
-
-# Notificar a systemd cuando esté listo
-NotifyAccess=all
 
 # Timeouts aumentados para dar tiempo a Celery de iniciar
 TimeoutStartSec=300
@@ -82,22 +79,52 @@ echo -e "${GREEN}✅ Systemd recargado${NC}"
 
 echo ""
 echo "4️⃣ Iniciando servicio..."
-systemctl start celerycore.service
+if systemctl start celerycore.service; then
+    echo -e "${GREEN}✅ Comando start ejecutado${NC}"
+else
+    echo -e "${YELLOW}⚠️ El comando start retornó un error, pero puede ser normal si el servicio ya estaba iniciando${NC}"
+fi
 
 echo ""
-echo "5️⃣ Esperando 5 segundos para verificar estado..."
-sleep 5
+echo "5️⃣ Esperando 10 segundos para que el servicio inicie..."
+sleep 10
 
 echo ""
 echo "6️⃣ Verificando estado del servicio..."
-if systemctl is-active --quiet celerycore.service; then
-    echo -e "${GREEN}✅ Servicio está corriendo${NC}"
-else
-    echo -e "${RED}❌ Servicio NO está corriendo${NC}"
+STATUS_OUTPUT=$(systemctl status celerycore.service --no-pager 2>&1 || true)
+
+if systemctl is-active --quiet celerycore.service 2>/dev/null; then
+    echo -e "${GREEN}✅ Servicio está corriendo (active)${NC}"
+elif systemctl is-failed --quiet celerycore.service 2>/dev/null; then
+    echo -e "${RED}❌ Servicio falló al iniciar${NC}"
     echo ""
-    echo "Últimos logs:"
-    journalctl -u celerycore.service -n 20 --no-pager
+    echo "Estado del servicio:"
+    echo "$STATUS_OUTPUT"
+    echo ""
+    echo "Últimos 30 logs:"
+    journalctl -u celerycore.service -n 30 --no-pager || true
+    echo ""
+    echo "Intenta ver los logs en tiempo real:"
+    echo "  sudo journalctl -u celerycore.service -f"
     exit 1
+elif echo "$STATUS_OUTPUT" | grep -q "activating"; then
+    echo -e "${YELLOW}⏳ Servicio está iniciando (activating)${NC}"
+    echo "Esperando 20 segundos más..."
+    sleep 20
+    if systemctl is-active --quiet celerycore.service 2>/dev/null; then
+        echo -e "${GREEN}✅ Servicio inició correctamente${NC}"
+    else
+        echo -e "${YELLOW}⚠️ Servicio aún no está activo, pero puede estar iniciando${NC}"
+        echo "Verifica con: sudo systemctl status celerycore.service"
+    fi
+else
+    echo -e "${YELLOW}⚠️ Estado del servicio no es claro${NC}"
+    echo ""
+    echo "Estado:"
+    echo "$STATUS_OUTPUT"
+    echo ""
+    echo "Últimos 20 logs:"
+    journalctl -u celerycore.service -n 20 --no-pager || true
 fi
 
 echo ""

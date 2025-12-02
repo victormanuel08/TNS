@@ -4,7 +4,7 @@ After=network.target redis-server.service
 Requires=redis-server.service
 
 [Service]
-Type=notify
+Type=simple
 User=victus
 Group=victus
 WorkingDirectory=/home/victus/projects/CORE/manu
@@ -17,9 +17,6 @@ EnvironmentFile=/home/victus/projects/CORE/manu/.env
 # -l info: Nivel de logging
 # --time-limit: Tiempo máximo por tarea (opcional)
 ExecStart=/home/victus/projects/CORE/manu/env/bin/celery -A config worker -l info -P prefork --concurrency=4 -E --time-limit=3600
-
-# Notificar a systemd cuando esté listo
-NotifyAccess=all
 
 # Timeouts aumentados para dar tiempo a Celery de iniciar
 TimeoutStartSec=300
