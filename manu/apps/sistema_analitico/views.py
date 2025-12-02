@@ -7050,10 +7050,127 @@ PersistentKeepalive = 25
             vpn_config.config_file_path = str(config_path)
             vpn_config.save()
             
-            # Retornar archivo
+            # Crear ZIP con config + scripts PowerShell
+            import zipfile
+            import io
+            
+            zip_buffer = io.BytesIO()
+            safe_name = "".join(c for c in vpn_config.nombre if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_')
+            
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                # Agregar config
+                zip_file.writestr(f"{safe_name}.conf", config_content)
+                
+                # Script 1: Abrir puerto 3050
+                script_abrir = f"""# Script para abrir puerto 3050 (Firebird) para acceso desde VPS 10.8.3.1
+# Ejecutar como Administrador
+
+Write-Host "Abriendo puerto 3050 para acceso desde 10.8.3.1..." -ForegroundColor Green
+
+# Verificar si la regla ya existe
+$reglaExistente = Get-NetFirewallRule -DisplayName "Firebird 3050 - VPS 10.8.3.1" -ErrorAction SilentlyContinue
+
+if ($reglaExistente) {{
+    Write-Host "La regla ya existe. Eliminando para recrearla..." -ForegroundColor Yellow
+    Remove-NetFirewallRule -DisplayName "Firebird 3050 - VPS 10.8.3.1"
+}}
+
+# Crear regla de firewall para permitir acceso desde 10.8.3.1
+New-NetFirewallRule -DisplayName "Firebird 3050 - VPS 10.8.3.1" `
+    -Direction Inbound `
+    -Protocol TCP `
+    -LocalPort 3050 `
+    -RemoteAddress 10.8.3.1 `
+    -Action Allow `
+    -Profile Any
+
+Write-Host "`nRegla de firewall creada exitosamente!" -ForegroundColor Green
+Write-Host "Puerto 3050 ahora acepta conexiones desde 10.8.3.1" -ForegroundColor Green
+
+# Verificar que Firebird está escuchando
+Write-Host "`nVerificando que Firebird está escuchando en el puerto 3050..." -ForegroundColor Cyan
+$firebirdListening = Get-NetTCPConnection -LocalPort 3050 -State Listen -ErrorAction SilentlyContinue
+
+if ($firebirdListening) {{
+    Write-Host "Firebird está escuchando en el puerto 3050" -ForegroundColor Green
+    Write-Host "Dirección: $($firebirdListening.LocalAddress)" -ForegroundColor Cyan
+}} else {{
+    Write-Host "ADVERTENCIA: Firebird NO está escuchando en el puerto 3050" -ForegroundColor Yellow
+    Write-Host "Verifica que el servicio Firebird esté ejecutándose" -ForegroundColor Yellow
+}}
+
+Write-Host "`nListo! El VPS (10.8.3.1) ahora puede conectarse al puerto 3050" -ForegroundColor Green
+"""
+                zip_file.writestr("abrir_puerto_3050_para_vps.ps1", script_abrir)
+                
+                # Script 2: Verificar puerto 3050
+                script_verificar = f"""# Script para verificar configuración del puerto 3050
+# Ejecutar como Administrador
+
+Write-Host "=== Verificación Puerto 3050 (Firebird) ===" -ForegroundColor Cyan
+
+# Verificar reglas de firewall
+Write-Host "`n1. Reglas de Firewall para puerto 3050:" -ForegroundColor Yellow
+$reglas = Get-NetFirewallRule | Where-Object {{ $_.DisplayName -like "*3050*" -or $_.DisplayName -like "*Firebird*" }}
+if ($reglas) {{
+    $reglas | ForEach-Object {{
+        Write-Host "  - $($_.DisplayName): $($_.Enabled) - $($_.Direction) - $($_.Action)" -ForegroundColor Green
+        $addressFilter = Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $_
+        if ($addressFilter.RemoteAddress) {{
+            Write-Host "    RemoteAddress: $($addressFilter.RemoteAddress)" -ForegroundColor Cyan
+        }}
+    }}
+}} else {{
+    Write-Host "  No se encontraron reglas específicas para 3050" -ForegroundColor Yellow
+}}
+
+# Verificar conexiones activas
+Write-Host "`n2. Conexiones en puerto 3050:" -ForegroundColor Yellow
+$conexiones = Get-NetTCPConnection -LocalPort 3050 -ErrorAction SilentlyContinue
+if ($conexiones) {{
+    $conexiones | ForEach-Object {{
+        Write-Host "  - Estado: $($_.State) | Local: $($_.LocalAddress):$($_.LocalPort) | Remote: $($_.RemoteAddress):$($_.RemotePort)" -ForegroundColor Green
+    }}
+}} else {{
+    Write-Host "  No hay conexiones activas en el puerto 3050" -ForegroundColor Yellow
+}}
+
+# Verificar si Firebird está escuchando
+Write-Host "`n3. Firebird escuchando:" -ForegroundColor Yellow
+$listening = Get-NetTCPConnection -LocalPort 3050 -State Listen -ErrorAction SilentlyContinue
+if ($listening) {{
+    Write-Host "  Firebird está escuchando en:" -ForegroundColor Green
+    $listening | ForEach-Object {{
+        Write-Host "    - $($_.LocalAddress):$($_.LocalPort)" -ForegroundColor Cyan
+    }}
+}} else {{
+    Write-Host "  Firebird NO está escuchando en el puerto 3050" -ForegroundColor Red
+    Write-Host "  Verifica que el servicio Firebird esté ejecutándose" -ForegroundColor Yellow
+}}
+
+# Verificar servicios Firebird
+Write-Host "`n4. Servicios Firebird:" -ForegroundColor Yellow
+$servicios = Get-Service | Where-Object {{ $_.DisplayName -like "*Firebird*" }}
+if ($servicios) {{
+    $servicios | ForEach-Object {{
+        $status = if ($_.Status -eq "Running") {{ "Running" }} else {{ "Stopped" }}
+        $color = if ($_.Status -eq "Running") {{ "Green" }} else {{ "Red" }}
+        Write-Host "  - $($_.DisplayName): $status" -ForegroundColor $color
+    }}
+}} else {{
+    Write-Host "  No se encontraron servicios Firebird" -ForegroundColor Yellow
+}}
+
+Write-Host "`n=== Fin de verificación ===" -ForegroundColor Cyan
+"""
+                zip_file.writestr("verificar_puerto_3050.ps1", script_verificar)
+            
+            zip_buffer.seek(0)
+            
+            # Retornar ZIP
             from django.http import HttpResponse
-            response = HttpResponse(config_content, content_type='text/plain')
-            response['Content-Disposition'] = f'attachment; filename="wg-{vpn_config.nombre.replace(" ", "_")}.conf"'
+            response = HttpResponse(zip_buffer.read(), content_type='application/zip')
+            response['Content-Disposition'] = f'attachment; filename="vpn-{safe_name}.zip"'
             return response
             
         except Exception as e:
