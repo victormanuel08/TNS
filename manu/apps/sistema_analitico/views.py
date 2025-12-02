@@ -6994,6 +6994,11 @@ class VpnConfigViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
                         status=status.HTTP_500_INTERNAL_SERVER_ERROR
                     )
                 
+                # Detectar red base y puerto
+                base_network = wg_manager.server_ip.rsplit('.', 1)[0] if wg_manager.server_ip else "10.8.3"
+                listen_port = 51830 if base_network == "10.8.3" else wg_manager.server_port
+                server_ip = wg_manager.server_ip or '10.8.3.1'
+                
                 config_content = f"""# Configuración WireGuard para {vpn_config.nombre}
 # Generado automáticamente por EDDESO
 # NOTA: Este peer fue importado desde el servidor. Necesitas agregar tu PrivateKey manualmente.
@@ -7001,13 +7006,15 @@ class VpnConfigViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
 
 [Interface]
 PrivateKey = TU_CLAVE_PRIVADA_AQUI
+ListenPort = {listen_port}
 Address = {vpn_config.ip_address or '10.8.3.X'}/24
-DNS = 8.8.8.8
+DNS = 1.1.1.1
+MTU = 1420
 
 [Peer]
 PublicKey = {server_public_key}
+AllowedIPs = {server_ip}/32
 Endpoint = {wg_manager.server_endpoint or 'TU_SERVIDOR:51820'}
-AllowedIPs = {vpn_config.ip_address or '10.8.3.X'}/32
 PersistentKeepalive = 25
 """
             else:
@@ -7082,18 +7089,25 @@ PersistentKeepalive = 25
                 
                 if not vpn_config.private_key:
                     server_public_key = wg_manager._get_server_public_key()
+                    # Detectar red base y puerto
+                    base_network = wg_manager.server_ip.rsplit('.', 1)[0] if wg_manager.server_ip else "10.8.3"
+                    listen_port = 51830 if base_network == "10.8.3" else wg_manager.server_port
+                    server_ip = wg_manager.server_ip or '10.8.3.1'
+                    
                     config_content = f"""# Configuración WireGuard para {vpn_config.nombre}
 # Generado automáticamente por EDDESO
 
 [Interface]
 PrivateKey = TU_CLAVE_PRIVADA_AQUI
+ListenPort = {listen_port}
 Address = {vpn_config.ip_address or '10.8.3.X'}/24
-DNS = 8.8.8.8
+DNS = 1.1.1.1
+MTU = 1420
 
 [Peer]
 PublicKey = {server_public_key}
+AllowedIPs = {server_ip}/32
 Endpoint = {wg_manager.server_endpoint or 'TU_SERVIDOR:51820'}
-AllowedIPs = {vpn_config.ip_address or '10.8.3.X'}/32
 PersistentKeepalive = 25
 """
                 else:

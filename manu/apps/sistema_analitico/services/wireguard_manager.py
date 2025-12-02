@@ -270,6 +270,7 @@ class WireGuardManager:
     ) -> str:
         """
         Genera el contenido del archivo .conf para el cliente.
+        Basado en el modelo funcional de 10.8.3.10 (cliente simple sin PostUp/PostDown).
         
         Args:
             client_name: Nombre del cliente
@@ -290,28 +291,34 @@ class WireGuardManager:
             logger.error("No se pudo obtener la clave pública del servidor en create_client_config")
             raise ValueError("No se pudo obtener la clave pública del servidor. Verifica la configuración de WireGuard.")
         
-        # Configuración de red: Cliente solo puede acceder a su propia IP
-        # El servidor puede acceder al cliente porque tiene AllowedIPs = client_ip/32 en el servidor
-        # Pero el cliente NO puede acceder al servidor ni a otros clientes
-        client_allowed_ips = f"{client_ip}/32"  # Solo su propia IP
+        # Detectar la red base (ej: "10.8.3" desde "10.8.3.1")
+        base_network = self.server_ip.rsplit('.', 1)[0]
+        
+        # Para clientes en 10.8.3.x (y otras redes similares), el cliente debe poder acceder SOLO al servidor
+        # Modelo funcional: Cliente puede acceder al servidor (10.8.3.1), NO a otros clientes
+        # El servidor puede acceder a todos los clientes porque es el servidor principal
+        client_allowed_ips = f"{self.server_ip}/32"  # Solo el servidor, no su propia IP
         
         # Asegurar que server_endpoint tenga un valor por defecto
         endpoint = self.server_endpoint or 'TU_SERVIDOR:51820'
         
-        config_content = f"""# Configuración WireGuard para {client_name}
-# Generado automáticamente por EDDESO
-# Configuración: Cliente solo puede acceder a su propia IP
-# El servidor puede acceder a este cliente, pero este cliente NO puede acceder al servidor ni a otros clientes
-
-[Interface]
+        # Determinar ListenPort basado en la red (10.8.3.x usa 51830, otras pueden usar 51820)
+        # Si el servidor está en 10.8.3.1, usar 51830, sino usar el puerto del servidor
+        listen_port = 51830 if base_network == "10.8.3" else self.server_port
+        
+        # Configuración basada en el modelo funcional de 10.8.3.10
+        # Cliente simple: NO PostUp/PostDown, solo AllowedIPs al servidor
+        config_content = f"""[Interface]
 PrivateKey = {client_private_key}
+ListenPort = {listen_port}
 Address = {client_ip}/24
-DNS = 8.8.8.8
+DNS = 1.1.1.1
+MTU = 1420
 
 [Peer]
 PublicKey = {server_public_key}
-Endpoint = {endpoint}
 AllowedIPs = {client_allowed_ips}
+Endpoint = {endpoint}
 PersistentKeepalive = 25
 """
         return config_content
