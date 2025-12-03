@@ -329,20 +329,27 @@ class BackupS3Service:
             
             # Usar Popen para capturar salida en tiempo real y mostrar progreso
             import time
+            import threading
+            
+            # Redirigir stdout y stderr a archivos temporales para evitar bloqueos de buffer
+            stdout_file = os.path.join(temp_dir, f"gbak_stdout_{empresa.nit_normalizado}_{int(time.time())}.log")
+            stderr_file = os.path.join(temp_dir, f"gbak_stderr_{empresa.nit_normalizado}_{int(time.time())}.log")
+            
+            stdout_fd = open(stdout_file, 'w')
+            stderr_fd = open(stderr_file, 'w')
+            
             proceso = subprocess.Popen(
                 comando,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
-                universal_newlines=True
+                stdout=stdout_fd,
+                stderr=stderr_fd,
+                text=True
             )
             
             # Monitorear el proceso y mostrar progreso cada 30 segundos
             inicio = time.time()
             ultimo_log = inicio
             ultimo_tamano = 0
-            timeout_total = 600  # 10 minutos máximo (reducido de 30)
+            timeout_total = 1800  # 30 minutos máximo
             timeout_sin_progreso = 300  # 5 minutos sin crecimiento del archivo = colgado
             
             while True:
@@ -359,6 +366,7 @@ class BackupS3Service:
                     return False, None, None
                 
                 # Verificar si el archivo está creciendo (detectar procesos colgados)
+                tamano_actual = 0
                 if os.path.exists(ruta_temporal):
                     tamano_actual = os.path.getsize(ruta_temporal)
                     if tamano_actual > ultimo_tamano:
@@ -382,18 +390,40 @@ class BackupS3Service:
                         logger.error(f"⏱️ Timeout: El archivo de backup no se creó después de 1 minuto")
                         return False, None, None
                 
-                # Mostrar progreso cada 30 segundos
+                # Mostrar progreso cada 30 segundos (SIEMPRE mostrar el tamaño actual)
                 if time.time() - ultimo_log >= 30:
                     minutos = int(tiempo_transcurrido // 60)
                     segundos = int(tiempo_transcurrido % 60)
-                    tamano_mb = ultimo_tamano / (1024 * 1024) if 'ultimo_tamano' in locals() else 0
+                    tamano_mb = tamano_actual / (1024 * 1024)  # Mostrar tamaño ACTUAL, no el último registrado
                     logger.info(f"⏳ Backup en progreso... Tiempo: {minutos}m {segundos}s, Tamaño: {tamano_mb:.2f} MB")
                     ultimo_log = time.time()
                 
                 time.sleep(2)  # Verificar cada 2 segundos
             
-            # Obtener resultado
-            stdout, stderr = proceso.communicate()
+            # Esperar a que termine el proceso (ya está siendo monitoreado en el while)
+            proceso.wait()
+            stdout_fd.close()
+            stderr_fd.close()
+            
+            # Leer stdout y stderr de los archivos
+            stdout = ""
+            if os.path.exists(stdout_file):
+                with open(stdout_file, 'r') as f:
+                    stdout = f.read()
+                try:
+                    os.remove(stdout_file)
+                except:
+                    pass
+            
+            stderr = ""
+            if os.path.exists(stderr_file):
+                with open(stderr_file, 'r') as f:
+                    stderr = f.read()
+                try:
+                    os.remove(stderr_file)
+                except:
+                    pass
+            
             resultado = type('obj', (object,), {
                 'returncode': proceso.returncode,
                 'stdout': stdout,
