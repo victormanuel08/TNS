@@ -307,20 +307,60 @@ class BackupS3Service:
             logger.info(f"Ejecutando gbak desde: {gbak_path}")
             logger.info(f"Origen: {ruta_completa}")
             logger.info(f"Destino: {ruta_temporal}")
+            logger.info(f"⏳ Iniciando backup... Esto puede tardar varios minutos dependiendo del tamaño de la base de datos.")
             
             # Verificar que gbak.exe existe antes de ejecutar
             if not os.path.exists(gbak_path):
                 logger.error(f"gbak.exe no existe en: {gbak_path}")
                 return False, None, None
             
-            # Timeout más corto para evitar esperas largas (30 minutos)
-            # Si el backup tarda más, probablemente hay un problema de conexión
-            resultado = subprocess.run(
+            # Usar Popen para capturar salida en tiempo real y mostrar progreso
+            import time
+            proceso = subprocess.Popen(
                 comando,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=1800  # 30 minutos máximo (antes era 1 hora)
+                bufsize=1,
+                universal_newlines=True
             )
+            
+            # Monitorear el proceso y mostrar progreso cada 30 segundos
+            inicio = time.time()
+            ultimo_log = inicio
+            timeout_total = 1800  # 30 minutos máximo
+            
+            while True:
+                # Verificar si terminó
+                if proceso.poll() is not None:
+                    break
+                
+                # Verificar timeout
+                tiempo_transcurrido = time.time() - inicio
+                if tiempo_transcurrido > timeout_total:
+                    proceso.kill()
+                    logger.error(f"⏱️ Timeout: El backup tardó más de {timeout_total//60} minutos")
+                    return False, None, None
+                
+                # Mostrar progreso cada 30 segundos
+                if time.time() - ultimo_log >= 30:
+                    minutos = int(tiempo_transcurrido // 60)
+                    segundos = int(tiempo_transcurrido % 60)
+                    logger.info(f"⏳ Backup en progreso... Tiempo transcurrido: {minutos}m {segundos}s")
+                    ultimo_log = time.time()
+                
+                time.sleep(2)  # Verificar cada 2 segundos
+            
+            # Obtener resultado
+            stdout, stderr = proceso.communicate()
+            resultado = type('obj', (object,), {
+                'returncode': proceso.returncode,
+                'stdout': stdout,
+                'stderr': stderr
+            })()
+            
+            tiempo_total = time.time() - inicio
+            logger.info(f"✅ gbak terminó en {int(tiempo_total//60)}m {int(tiempo_total%60)}s")
             
             if resultado.returncode != 0:
                 error_msg = resultado.stderr.strip() if resultado.stderr else "Error desconocido"
