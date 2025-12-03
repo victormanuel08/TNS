@@ -8,6 +8,7 @@ from django.db.models import Q
 from apps.sistema_analitico.models import (
     Entidad, ContrasenaEntidad, EmpresaServidor,
     TipoTercero, TipoRegimen, Impuesto, VigenciaTributaria,
+    ResponsabilidadTributaria,
     normalize_nit_and_extract_dv
 )
 import psycopg2
@@ -17,11 +18,16 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Credenciales hardcodeadas de BCE
+# NOTA:
+# - En el VPS, la BD de BCE está en 127.0.0.1
+# - Para ejecutar el comando desde tu equipo local Windows,
+#   apuntamos directamente a la IP pública del servidor BCE (198.7.113.197)
+#   usando las mismas credenciales.
 BCE_DB_CONFIG = {
     'dbname': 'bcemanagement',
     'user': 'postgres',
-    'password': 'Bce2024.sas',
-    'host': '127.0.0.1',
+    'password': 'Bce2024.',
+    'host': '198.7.113.197',  # IP pública del servidor BCE
     'port': '5432'
 }
 
@@ -242,6 +248,10 @@ class Command(BaseCommand):
             cursor.execute("SELECT code, name, description FROM core_tax")
             taxes_data = cursor.fetchall()
 
+            # Obtener Responsabilitys_Types (responsabilidades tributarias)
+            cursor.execute("SELECT id, code, name FROM core_responsabilitys_types ORDER BY id")
+            respons_data = cursor.fetchall()
+
             # Obtener Expirations (calendario)
             # Nota: Expirations tiene relación ManyToMany con Tax, necesitamos usar la tabla intermedia
             cursor.execute("""
@@ -270,6 +280,7 @@ class Command(BaseCommand):
             self.stdout.write(f'   📊 {len(regiments_data)} Regiments_Types encontrados')
             self.stdout.write(f'   📊 {len(taxes_data)} Tax encontrados')
             self.stdout.write(f'   📊 {len(expirations_data)} Expirations encontradas')
+            self.stdout.write(f'   📊 {len(respons_data)} Responsabilitys_Types (responsabilidades) encontradas')
 
         if dry_run:
             self.stdout.write(self.style.WARNING('   ⚠️  DRY RUN - No se guardarán cambios'))
@@ -280,6 +291,8 @@ class Command(BaseCommand):
         impuestos_creados = 0
         vigencias_creadas = 0
         vigencias_actualizadas = 0
+        responsabilidades_creadas = 0
+        responsabilidades_actualizadas = 0
 
         with transaction.atomic():
             # Migrar Third_Types
@@ -322,6 +335,26 @@ class Command(BaseCommand):
                 )
                 if created:
                     impuestos_creados += 1
+
+            # Migrar Responsabilitys_Types -> ResponsabilidadTributaria
+            # Solo traemos código y nombre como descripción básica
+            for row in respons_data:
+                resp_code = str(row.get('code')).strip()
+                resp_name = (row.get('name') or '').strip()
+
+                if not resp_code:
+                    continue
+
+                obj, created = ResponsabilidadTributaria.objects.update_or_create(
+                    codigo=resp_code,
+                    defaults={
+                        'descripcion': resp_name or f'Responsabilidad {resp_code}'
+                    }
+                )
+                if created:
+                    responsabilidades_creadas += 1
+                else:
+                    responsabilidades_actualizadas += 1
 
             # Migrar Expirations (Vigencias Tributarias)
             for row in expirations_data:
@@ -378,5 +411,6 @@ class Command(BaseCommand):
         self.stdout.write(f'   ✅ Tipos Tercero: {tipos_tercero_creados} creados')
         self.stdout.write(f'   ✅ Tipos Régimen: {tipos_regimen_creados} creados')
         self.stdout.write(f'   ✅ Impuestos: {impuestos_creados} creados')
+        self.stdout.write(f'   ✅ Responsabilidades: {responsabilidades_creadas} creadas, {responsabilidades_actualizadas} actualizadas')
         self.stdout.write(f'   ✅ Vigencias: {vigencias_creadas} creadas, {vigencias_actualizadas} actualizadas')
 

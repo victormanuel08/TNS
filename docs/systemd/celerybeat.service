@@ -1,0 +1,36 @@
+[Unit]
+Description=Celery Beat Scheduler for TNS Core
+After=network.target redis-server.service
+Requires=redis-server.service
+
+[Service]
+Type=simple
+User=victus
+Group=victus
+WorkingDirectory=/home/victus/projects/CORE/manu
+Environment="PATH=/home/victus/projects/CORE/manu/env/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=/home/victus/projects/CORE/manu/.env
+
+# Comando para iniciar Celery Beat
+# -l info: Nivel de logging
+ExecStart=/home/victus/projects/CORE/manu/env/bin/celery -A config beat -l info
+
+# Timeouts
+TimeoutStartSec=60
+TimeoutStopSec=30
+
+# Reiniciar automáticamente si falla
+Restart=always
+RestartSec=10
+
+# Límites de recursos
+LimitNOFILE=65536
+
+# Logs
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=celerybeat
+
+[Install]
+WantedBy=multi-user.target
+

@@ -910,6 +910,267 @@
         </div>
       </section>
 
+      <!-- Backups S3 -->
+      <section v-if="activeSection === 'backups-s3'" class="section">
+        <div class="section-header">
+          <h2>Backups S3 por Empresa (NIT)</h2>
+        </div>
+
+        <div class="two-column-layout">
+          <!-- Configuración S3 -->
+          <div class="card">
+            <h3>Configuración S3</h3>
+            <p class="small-muted">
+              Un solo bucket global para todas las empresas. El límite de espacio se aplica por NIT normalizado, sumando todos los años y carpetas.
+            </p>
+
+            <div v-if="loadingS3Config" class="loading-state">
+              <p>Cargando configuración S3...</p>
+            </div>
+
+            <div v-else>
+              <div class="s3-config-form">
+                <div class="form-group">
+                  <label>
+                    <span class="label-text">Nombre de configuración</span>
+                    <input
+                      v-model="activeS3Config.nombre"
+                      type="text"
+                      placeholder="Backups Principal"
+                      class="form-input"
+                    />
+                  </label>
+                </div>
+
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>
+                      <span class="label-text">Bucket S3</span>
+                      <input
+                        v-model="activeS3Config.bucket_name"
+                        type="text"
+                        placeholder="mi-bucket-backups"
+                        class="form-input"
+                      />
+                    </label>
+                  </div>
+                  <div class="form-group">
+                    <label>
+                      <span class="label-text">Región</span>
+                      <input
+                        v-model="activeS3Config.region"
+                        type="text"
+                        placeholder="us-east-1"
+                        class="form-input"
+                      />
+                    </label>
+                  </div>
+                </div>
+
+                <div class="form-group">
+                  <label>
+                    <span class="label-text">Access Key ID</span>
+                    <input
+                      v-model="activeS3Config.access_key_id"
+                      type="text"
+                      placeholder="AKIA..."
+                      class="form-input"
+                    />
+                  </label>
+                </div>
+
+                <div class="form-group">
+                  <label>
+                    <span class="label-text">Secret Access Key</span>
+                    <input
+                      v-model="activeS3Config.secret_access_key"
+                      type="password"
+                      placeholder="••••••••"
+                      class="form-input"
+                    />
+                    <small class="form-hint">Deja vacío para mantener el valor actual</small>
+                  </label>
+                </div>
+
+                <div class="form-group">
+                  <label>
+                    <span class="label-text">Endpoint URL (opcional)</span>
+                    <input
+                      v-model="activeS3Config.endpoint_url"
+                      type="text"
+                      placeholder="https://s3.amazonaws.com o URL de MinIO"
+                      class="form-input"
+                    />
+                    <small class="form-hint">Solo necesario para S3-compatible (MinIO, etc.)</small>
+                  </label>
+                </div>
+
+                <div class="form-group checkbox-group">
+                  <label class="checkbox-label">
+                    <input
+                      v-model="activeS3Config.activo"
+                      type="checkbox"
+                      class="checkbox-input"
+                    />
+                    <span class="checkbox-text">Configuración activa</span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="actions-bar" style="margin-top: 16px;">
+                <button
+                  class="btn-primary"
+                  @click="saveS3Config"
+                  :disabled="savingS3Config"
+                >
+                  <span v-if="savingS3Config">⟳</span>
+                  <span v-else>💾</span>
+                  Guardar Configuración
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Backups por empresa -->
+          <div class="card">
+            <h3>Backups por Empresa</h3>
+
+            <div class="actions-bar">
+              <select
+                v-model.number="selectedBackupEmpresaId"
+                class="filter-select"
+              >
+                <option :value="null">Selecciona una empresa</option>
+                <option
+                  v-for="empresa in empresas"
+                  :key="empresa.id"
+                  :value="empresa.id"
+                >
+                  {{ empresa.nombre }} ({{ empresa.nit || empresa.nit_normalizado }}) - {{ empresa.anio_fiscal }}
+                </option>
+              </select>
+
+              <button
+                class="btn-secondary"
+                @click="reloadBackupsAndStats"
+                :disabled="!selectedBackupEmpresaId || loadingBackupsS3"
+              >
+                <span v-if="loadingBackupsS3">⟳</span>
+                <span v-else>↻</span>
+                Actualizar
+              </button>
+
+              <button
+                class="btn-primary"
+                @click="triggerBackupForSelectedEmpresa"
+                :disabled="!selectedBackupEmpresaId || triggeringBackup"
+              >
+                <span v-if="triggeringBackup">⏳</span>
+                <span v-else>📦</span>
+                Crear Backup Ahora
+              </button>
+            </div>
+
+            <div v-if="!selectedBackupEmpresaId" class="empty-state">
+              <p>Selecciona una empresa para ver sus backups y estadísticas.</p>
+            </div>
+
+            <div v-else>
+              <!-- Estadísticas -->
+              <div v-if="backupStats" class="stats-grid">
+                <div class="stat-card">
+                  <span class="stat-label">Uso actual</span>
+                  <span class="stat-value">
+                    {{ backupStats.tamano_actual_gb.toFixed(2) }} GB
+                  </span>
+                </div>
+                <div class="stat-card">
+                  <span class="stat-label">Límite</span>
+                  <span class="stat-value">
+                    {{ backupStats.limite_gb }} GB
+                  </span>
+                </div>
+                <div class="stat-card">
+                  <span class="stat-label">Estado</span>
+                  <span
+                    class="status-badge"
+                    :class="backupStats.excede_limite ? 'status-error' : 'status-active'"
+                  >
+                    {{ backupStats.excede_limite ? 'Límite excedido' : 'Dentro del límite' }}
+                  </span>
+                </div>
+                <div class="stat-card">
+                  <span class="stat-label">Total de Backups</span>
+                  <span class="stat-value">
+                    {{ backupStats.total_backups }}
+                  </span>
+                </div>
+              </div>
+
+              <!-- Tabla de backups -->
+              <div class="table-container" style="margin-top: 16px;">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Fecha</th>
+                      <th>Archivo</th>
+                      <th>Tamaño</th>
+                      <th>Año Fiscal</th>
+                      <th>Estado</th>
+                      <th>Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-if="backupsS3.length === 0">
+                      <td colspan="6" class="text-center">
+                        No hay backups registrados para esta empresa.
+                      </td>
+                    </tr>
+                    <tr v-for="backup in backupsS3" :key="backup.id">
+                      <td>{{ formatDate(backup.fecha_backup) }}</td>
+                      <td>
+                        <code>{{ backup.nombre_archivo }}</code>
+                      </td>
+                      <td>
+                        {{ backup.tamano_gb.toFixed(2) }} GB
+                        <br />
+                        <small style="color:#666;">
+                          {{ backup.tamano_mb.toFixed(2) }} MB
+                        </small>
+                      </td>
+                      <td>{{ backup.anio_fiscal }}</td>
+                      <td>
+                        <span
+                          class="status-badge"
+                          :class="{
+                            'status-active': backup.estado === 'completado',
+                            'status-warning': backup.estado === 'en_proceso',
+                            'status-error': backup.estado === 'fallido'
+                          }"
+                        >
+                          {{ backup.estado }}
+                        </span>
+                      </td>
+                      <td>
+                        <button
+                          class="btn-small btn-danger"
+                          @click="deleteBackup(backup)"
+                          :disabled="deletingBackupId === backup.id"
+                        >
+                          <span v-if="deletingBackupId === backup.id">⏳</span>
+                          <span v-else>🗑️</span>
+                          Eliminar
+                        </button>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- Scrapers -->
       <section v-if="activeSection === 'scrapers'" class="section">
         <div class="section-header">
@@ -2986,9 +3247,15 @@ const sections = [
       <line x1="3" y1="10" x2="21" y2="10"/>
       <path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01M16 18h.01"/>
     </svg>`
-  }, 
+  },
+  { 
+    id: 'backups-s3', 
+    name: '11. Backups S3',
     icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>
+      <path d="M4 4h16v6H4z"/>
+      <path d="M4 14h16v6H4z"/>
+      <path d="M8 8h.01M12 8h.01M16 8h.01"/>
+      <path d="M8 18h.01M12 18h.01M16 18h.01"/>
     </svg>`
   },
   { 
@@ -3125,6 +3392,20 @@ const selectedCalendarioFile = ref<File | null>(null)
 const rutNitManual = ref('')
 const selectedRUT = ref<any>(null)
 const showRUTDetails = ref(false)
+
+// Backups S3
+const s3Configs = ref<any[]>([])
+const activeS3Config = ref<any | null>(null)
+const loadingS3Config = ref(false)
+const savingS3Config = ref(false)
+
+const backupsS3 = ref<any[]>([])
+const loadingBackupsS3 = ref(false)
+const selectedBackupEmpresaId = ref<number | null>(null)
+const backupStats = ref<any | null>(null)
+const triggeringBackup = ref(false)
+const deletingBackupId = ref<number | null>(null)
+
 const scanningServer = ref<number | null>(null)
 const activeScanTasks = ref<Record<number, string>>({}) // servidor_id -> task_id
 const showCreateServer = ref(false)
@@ -4428,6 +4709,13 @@ watch(activeSection, (newSection) => {
   } else if (newSection === 'calendario-tributario') {
     // Cargar calendario tributario automáticamente
     loadCalendarioTributario()
+  } else if (newSection === 'backups-s3') {
+    // Cargar configuración S3, empresas y backups al entrar en la sección
+    if (empresas.value.length === 0) {
+      loadEmpresas()
+    }
+    loadS3Config()
+    reloadBackupsAndStats()
   } else if (newSection === 'terminal') {
     // Enfocar el input del terminal cuando se cambia a esa pestaña
     setTimeout(() => {
@@ -5409,7 +5697,7 @@ const deletePasarela = async (pasarela: any) => {
   }
 }
 
-const viewPasarelaConfig = (pasarela: any) => {
+const viewPasarelaConfig = async (pasarela: any) => {
   const Swal = (await import('sweetalert2')).default
   Swal.fire({
     title: `Configuración: ${pasarela.nombre}`,
@@ -5715,6 +6003,241 @@ const loadRuts = async () => {
   }
 }
 
+// =========================
+// Backups S3
+// =========================
+
+const ensureActiveS3Config = () => {
+  if (!activeS3Config.value) {
+    activeS3Config.value = {
+      id: null,
+      nombre: 'Backups Principal',
+      bucket_name: '',
+      region: 'us-east-1',
+      access_key_id: '',
+      secret_access_key: '',
+      endpoint_url: '',
+      activo: true
+    }
+  }
+}
+
+const loadS3Config = async () => {
+  loadingS3Config.value = true
+  try {
+    const response = await api.get<any[]>('/api/configuraciones-s3/')
+    const data = Array.isArray(response) ? response : (response as any).results || []
+    s3Configs.value = data
+    if (data.length > 0) {
+      // Por simplicidad usamos la primera configuración activa o la primera
+      const activa = data.find((c: any) => c.activo) || data[0]
+      activeS3Config.value = { ...activa, secret_access_key: '' }
+    } else {
+      ensureActiveS3Config()
+    }
+  } catch (error: any) {
+    console.error('Error cargando configuración S3:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al cargar configuración S3',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    loadingS3Config.value = false
+  }
+}
+
+const saveS3Config = async () => {
+  ensureActiveS3Config()
+  const config = activeS3Config.value
+  if (!config.bucket_name || !config.access_key_id) {
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Faltan datos',
+      text: 'Bucket y Access Key ID son obligatorios.',
+      icon: 'warning',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    return
+  }
+
+  savingS3Config.value = true
+  try {
+    const payload = { ...config }
+    // Si el usuario deja secret_access_key vacío en edición, no lo sobreescribimos
+    if (!payload.secret_access_key) {
+      delete payload.secret_access_key
+    }
+
+    let response: any
+    if (config.id) {
+      response = await api.put<any>(`/api/configuraciones-s3/${config.id}/`, payload)
+    } else {
+      response = await api.post<any>('/api/configuraciones-s3/', payload)
+    }
+
+    const saved = response as any
+    activeS3Config.value = { ...saved, secret_access_key: '' }
+    await loadS3Config()
+
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Guardado',
+      text: 'Configuración S3 guardada correctamente.',
+      icon: 'success',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } catch (error: any) {
+    console.error('Error guardando configuración S3:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al guardar configuración S3',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    savingS3Config.value = false
+  }
+}
+
+const loadBackupsForSelectedEmpresa = async () => {
+  if (!selectedBackupEmpresaId.value) {
+    backupsS3.value = []
+    backupStats.value = null
+    return
+  }
+  loadingBackupsS3.value = true
+  try {
+    const empresaId = selectedBackupEmpresaId.value
+    const response = await api.get<any[]>(`/api/backups-s3/?empresa_id=${empresaId}`)
+    backupsS3.value = Array.isArray(response) ? response : (response as any).results || []
+  } catch (error: any) {
+    console.error('Error cargando backups S3:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al cargar backups S3',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    loadingBackupsS3.value = false
+  }
+}
+
+const loadBackupStatsForSelectedEmpresa = async () => {
+  if (!selectedBackupEmpresaId.value) {
+    backupStats.value = null
+    return
+  }
+  try {
+    const empresaId = selectedBackupEmpresaId.value
+    const response = await api.get<any>(`/api/backups-s3/estadisticas_empresa/?empresa_id=${empresaId}`)
+    backupStats.value = response
+  } catch (error: any) {
+    console.error('Error cargando estadísticas de backups:', error)
+    backupStats.value = null
+  }
+}
+
+const reloadBackupsAndStats = async () => {
+  if (!selectedBackupEmpresaId.value) return
+  await Promise.all([
+    loadBackupsForSelectedEmpresa(),
+    loadBackupStatsForSelectedEmpresa()
+  ])
+}
+
+const triggerBackupForSelectedEmpresa = async () => {
+  if (!selectedBackupEmpresaId.value) return
+  triggeringBackup.value = true
+  try {
+    if (!activeS3Config.value || !activeS3Config.value.id) {
+      const Swal = (await import('sweetalert2')).default
+      await Swal.fire({
+        title: 'Configuración S3',
+        text: 'Debes guardar una configuración S3 activa antes de crear backups.',
+        icon: 'warning',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' }
+      })
+      return
+    }
+
+    const empresaId = selectedBackupEmpresaId.value
+    const response = await api.post<any>('/api/backups-s3/realizar_backup/', {
+      empresa_id: empresaId,
+      configuracion_s3_id: activeS3Config.value.id
+    })
+
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Backup iniciado',
+      text: `Se inició la tarea de backup. Task ID: ${response.task_id}`,
+      icon: 'info',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+
+    // No esperamos al resultado; solo recargamos la lista después de un pequeño delay
+    setTimeout(() => {
+      reloadBackupsAndStats()
+    }, 5000)
+  } catch (error: any) {
+    console.error('Error iniciando backup S3:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al iniciar el backup',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    triggeringBackup.value = false
+  }
+}
+
+const deleteBackup = async (backup: any) => {
+  const Swal = (await import('sweetalert2')).default
+  const result = await Swal.fire({
+    title: '¿Eliminar backup?',
+    text: `Se eliminará el backup ${backup.nombre_archivo} de S3. Esta acción no se puede deshacer.`,
+    icon: 'warning',
+    showCancelButton: true,
+    confirmButtonText: 'Sí, eliminar',
+    cancelButtonText: 'Cancelar',
+    customClass: { container: 'swal-z-index-fix' }
+  })
+
+  if (!result.isConfirmed) return
+
+  deletingBackupId.value = backup.id
+  try {
+    await api.delete(`/api/backups-s3/${backup.id}/eliminar_backup/`)
+    await reloadBackupsAndStats()
+  } catch (error: any) {
+    console.error('Error eliminando backup S3:', error)
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al eliminar backup',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    deletingBackupId.value = null
+  }
+}
+
 const uploadRUTPDF = async () => {
   if (!selectedRUTFile.value && !selectedRUTZipFile.value) {
     const Swal = (await import('sweetalert2')).default
@@ -5750,6 +6273,12 @@ const uploadRUTPDF = async () => {
     })
     
     const Swal = (await import('sweetalert2')).default
+    
+    // Si es procesamiento asíncrono (ZIP grande con Celery)
+    if (response.data && response.data.procesamiento_asincrono && response.data.task_id) {
+      await monitorearProcesamientoAsincrono(response.data.task_id, response.data.total)
+      return
+    }
     
     // Si es ZIP, mostrar resultados masivos
     if (selectedRUTZipFile.value && response.data.reporte_txt) {
@@ -5803,20 +6332,30 @@ const uploadRUTPDF = async () => {
       })
     } else {
       // PDF individual
-      await Swal.fire({
-        title: '¡RUT Procesado!',
-        html: `
-          <div style="text-align: left;">
-            <p><strong>NIT:</strong> ${response.data.rut.nit}-${response.data.rut.dv}</p>
-            <p><strong>Razón Social:</strong> ${response.data.rut.razon_social}</p>
-            <p><strong>Empresas asociadas encontradas:</strong> ${response.data.empresas_encontradas}</p>
-            <p style="margin-top: 10px; color: #4CAF50;">${response.data.mensaje}</p>
-          </div>
-        `,
-        icon: 'success',
-        confirmButtonText: 'Aceptar',
-        customClass: { container: 'swal-z-index-fix' }
-      })
+      if (response.data && response.data.rut) {
+        await Swal.fire({
+          title: '¡RUT Procesado!',
+          html: `
+            <div style="text-align: left;">
+              <p><strong>NIT:</strong> ${response.data.rut.nit || 'N/A'}-${response.data.rut.dv || ''}</p>
+              <p><strong>Razón Social:</strong> ${response.data.rut.razon_social || 'N/A'}</p>
+              <p><strong>Empresas asociadas encontradas:</strong> ${response.data.empresas_encontradas || 0}</p>
+              <p style="margin-top: 10px; color: #4CAF50;">${response.data.mensaje || 'RUT procesado exitosamente'}</p>
+            </div>
+          `,
+          icon: 'success',
+          confirmButtonText: 'Aceptar',
+          customClass: { container: 'swal-z-index-fix' }
+        })
+      } else {
+        await Swal.fire({
+          title: '¡RUT Procesado!',
+          text: response.data?.mensaje || 'RUT procesado exitosamente',
+          icon: 'success',
+          confirmButtonText: 'Aceptar',
+          customClass: { container: 'swal-z-index-fix' }
+        })
+      }
     }
     
     showUploadRUT.value = false
@@ -7685,6 +8224,159 @@ onMounted(async () => {
 .task-details strong {
   color: #4b5563;
   font-weight: 600;
+}
+
+/* Estilos mejorados para configuración S3 */
+.two-column-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  margin-top: 1.5rem;
+}
+
+@media (max-width: 1200px) {
+  .two-column-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.card {
+  background: white;
+  border-radius: 0.75rem;
+  padding: 1.5rem;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.card h3 {
+  margin: 0 0 1rem 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #1f2937;
+  padding-bottom: 0.75rem;
+  border-bottom: 2px solid #e5e7eb;
+}
+
+.small-muted {
+  font-size: 0.875rem;
+  color: #6b7280;
+  margin-bottom: 1.5rem;
+  line-height: 1.5;
+}
+
+.s3-config-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+@media (max-width: 768px) {
+  .form-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.label-text {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 0.375rem;
+}
+
+.form-input {
+  width: 100%;
+  padding: 0.75rem;
+  border: 1px solid #d1d5db;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  transition: all 0.2s;
+  background: #ffffff;
+}
+
+.form-input:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.form-input::placeholder {
+  color: #9ca3af;
+}
+
+.form-hint {
+  display: block;
+  font-size: 0.75rem;
+  color: #6b7280;
+  margin-top: 0.25rem;
+}
+
+.checkbox-group {
+  margin-top: 0.5rem;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.checkbox-input {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  accent-color: #3b82f6;
+}
+
+.checkbox-text {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #374151;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.stat-card {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.5rem;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.stat-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.stat-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #1f2937;
 }
 
 .task-details code {

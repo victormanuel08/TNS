@@ -98,6 +98,20 @@ class EmpresaServidor(models.Model):
     estado = models.CharField(max_length=20, default='ACTIVO')
     configuracion = models.JSONField(default=dict, blank=True, null=True)
     fecha_registro = models.DateTimeField(auto_now_add=True)
+    
+    # ========== CONFIGURACIÓN DE BACKUPS S3 ==========
+    limite_espacio_gb = models.IntegerField(
+        default=1,
+        help_text='Límite de espacio en GB para backups (1, 5, 10, 15, 20, 50)'
+    )
+    hora_backup = models.TimeField(
+        default='01:00',
+        help_text='Hora programada para realizar backups (formato HH:MM)'
+    )
+    backups_habilitados = models.BooleanField(
+        default=True,
+        help_text='Indica si los backups automáticos están habilitados para esta empresa'
+    )
 
     class Meta:
         db_table = 'empresas_servidor'
@@ -196,7 +210,7 @@ class RUT(models.Model):
         help_text='Dígito de Verificación'
     )
     numero_formulario = models.CharField(
-        max_length=50,
+        max_length=100,
         null=True,
         blank=True,
         help_text='Número de formulario del RUT'
@@ -225,7 +239,7 @@ class RUT(models.Model):
         help_text='Nombre comercial'
     )
     sigla = models.CharField(
-        max_length=50,
+        max_length=100,
         null=True,
         blank=True,
         help_text='Sigla de la empresa'
@@ -290,7 +304,7 @@ class RUT(models.Model):
         help_text='Dirección seccional de la DIAN'
     )
     buzon_electronico = models.CharField(
-        max_length=50,
+        max_length=255,
         null=True,
         blank=True,
         help_text='Buzón electrónico'
@@ -371,6 +385,25 @@ class RUT(models.Model):
         help_text='Informante de Beneficiarios Finales'
     )
     
+    # ========== USUARIOS ADUANEROS Y EXPORTADORES ==========
+    usuarios_aduaneros = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='Lista de códigos de usuarios aduaneros'
+    )
+    exportadores_forma = models.CharField(
+        max_length=10,
+        null=True,
+        blank=True,
+        help_text='Forma de exportador'
+    )
+    exportadores_tipo = models.CharField(
+        max_length=10,
+        null=True,
+        blank=True,
+        help_text='Tipo de exportador'
+    )
+    
     # ========== CONSTITUCIÓN Y REGISTRO ==========
     constitucion_clase = models.CharField(
         max_length=10,
@@ -407,7 +440,7 @@ class RUT(models.Model):
         help_text='Fecha de registro'
     )
     matricula_mercantil = models.CharField(
-        max_length=50,
+        max_length=100,
         null=True,
         blank=True,
         help_text='Número de matrícula mercantil'
@@ -489,7 +522,7 @@ class RUT(models.Model):
     
     # ========== REPRESENTANTE LEGAL ==========
     representante_legal_representacion = models.CharField(
-        max_length=100,
+        max_length=255,
         null=True,
         blank=True,
         help_text='Tipo de representación'
@@ -518,7 +551,7 @@ class RUT(models.Model):
         help_text='Dígito verificador'
     )
     representante_legal_tarjeta_profesional = models.CharField(
-        max_length=50,
+        max_length=100,
         null=True,
         blank=True,
         help_text='Número de tarjeta profesional'
@@ -626,10 +659,24 @@ class RUT(models.Model):
         return f"{self.razon_social} - NIT: {self.nit}-{self.dv}"
     
     def save(self, *args, **kwargs):
-        """Normalizar NIT antes de guardar"""
+        """Normalizar NIT antes de guardar y truncar campos si exceden límites"""
         if self.nit:
             # Normalizar NIT: eliminar puntos, guiones y espacios
             self.nit_normalizado = ''.join(c for c in str(self.nit) if c.isdigit())
+        
+        # Truncar campos CharField si exceden su max_length
+        # Obtener todos los campos CharField del modelo dinámicamente
+        from django.db import models as django_models
+        for field in self._meta.get_fields():
+            if isinstance(field, django_models.CharField):
+                try:
+                    value = getattr(self, field.name, None)
+                    if value and field.max_length and len(str(value)) > field.max_length:
+                        setattr(self, field.name, str(value)[:field.max_length])
+                except (AttributeError, ValueError):
+                    # Ignorar errores al acceder a campos relacionados o valores inválidos
+                    pass
+        
         super().save(*args, **kwargs)
 
 
@@ -645,7 +692,7 @@ class EstablecimientoRUT(models.Model):
     )
     
     tipo_establecimiento = models.CharField(
-        max_length=50,
+        max_length=100,
         null=True,
         blank=True,
         help_text='Tipo de establecimiento'
@@ -2148,6 +2195,130 @@ class ContrasenaEntidad(models.Model):
     
     def __str__(self):
         return f"{self.entidad.nombre} - {self.usuario} (NIT: {self.nit_normalizado})"
+
+
+class ConfiguracionS3(models.Model):
+    """
+    Configuración de credenciales y acceso a S3 para backups.
+    Se puede tener múltiples configuraciones (por ejemplo, para diferentes buckets o regiones).
+    """
+    nombre = models.CharField(
+        max_length=100,
+        unique=True,
+        help_text='Nombre descriptivo de la configuración (ej: "Backups Principal")'
+    )
+    bucket_name = models.CharField(
+        max_length=255,
+        help_text='Nombre del bucket S3'
+    )
+    region = models.CharField(
+        max_length=50,
+        default='us-east-1',
+        help_text='Región de AWS S3 (ej: us-east-1, us-west-2)'
+    )
+    access_key_id = models.CharField(
+        max_length=255,
+        help_text='Access Key ID de AWS'
+    )
+    secret_access_key = models.CharField(
+        max_length=255,
+        help_text='Secret Access Key de AWS (encriptado)'
+    )
+    endpoint_url = models.CharField(
+        max_length=500,
+        null=True,
+        blank=True,
+        help_text='URL del endpoint S3 (opcional, para S3-compatible como MinIO)'
+    )
+    activo = models.BooleanField(
+        default=True,
+        help_text='Indica si esta configuración está activa'
+    )
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'configuracion_s3'
+        verbose_name = 'Configuración S3'
+        verbose_name_plural = 'Configuraciones S3'
+        ordering = ['-activo', 'nombre']
+    
+    def __str__(self):
+        return f"{self.nombre} ({self.bucket_name})"
+
+
+class BackupS3(models.Model):
+    """
+    Registro de backups realizados a S3.
+    """
+    empresa_servidor = models.ForeignKey(
+        EmpresaServidor,
+        on_delete=models.CASCADE,
+        related_name='backups_s3',
+        help_text='Empresa a la que pertenece este backup'
+    )
+    configuracion_s3 = models.ForeignKey(
+        ConfiguracionS3,
+        on_delete=models.SET_NULL,
+        null=True,
+        help_text='Configuración S3 utilizada para este backup'
+    )
+    ruta_s3 = models.CharField(
+        max_length=500,
+        help_text='Ruta completa del archivo en S3 (ej: 9008697500/2024/backups/backup_2024-12-02_01-00.fbk)'
+    )
+    nombre_archivo = models.CharField(
+        max_length=255,
+        help_text='Nombre del archivo de backup'
+    )
+    tamano_bytes = models.BigIntegerField(
+        help_text='Tamaño del archivo en bytes'
+    )
+    fecha_backup = models.DateTimeField(
+        help_text='Fecha y hora en que se realizó el backup'
+    )
+    anio_fiscal = models.IntegerField(
+        help_text='Año fiscal del backup'
+    )
+    estado = models.CharField(
+        max_length=20,
+        choices=[
+            ('completado', 'Completado'),
+            ('fallido', 'Fallido'),
+            ('en_proceso', 'En Proceso'),
+        ],
+        default='completado'
+    )
+    mensaje_error = models.TextField(
+        null=True,
+        blank=True,
+        help_text='Mensaje de error si el backup falló'
+    )
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'backups_s3'
+        verbose_name = 'Backup S3'
+        verbose_name_plural = 'Backups S3'
+        indexes = [
+            models.Index(fields=['empresa_servidor', 'anio_fiscal']),
+            models.Index(fields=['fecha_backup']),
+            models.Index(fields=['estado']),
+        ]
+        ordering = ['-fecha_backup']
+    
+    def __str__(self):
+        return f"{self.empresa_servidor.nombre} - {self.nombre_archivo} ({self.fecha_backup})"
+    
+    @property
+    def tamano_mb(self):
+        """Retorna el tamaño en MB"""
+        return round(self.tamano_bytes / (1024 * 1024), 2)
+    
+    @property
+    def tamano_gb(self):
+        """Retorna el tamaño en GB"""
+        return round(self.tamano_bytes / (1024 * 1024 * 1024), 2)
 
 
 # Extender el modelo User

@@ -50,6 +50,8 @@ from .models import (
     RUT,
     EstablecimientoRUT,
     normalize_nit_and_extract_dv,
+    ConfiguracionS3,
+    BackupS3,
 )
 from .serializers import *
 from .services.data_manager import DataManager
@@ -503,7 +505,7 @@ class RUTViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
             return RUT.objects.none()
         return RUT.objects.all().prefetch_related('establecimientos').order_by('-fecha_actualizacion')
     
-    @action(detail=False, methods=['post'], url_path='subir-pdf')
+    @action(detail=False, methods=['post'], url_path='subir-pdf', parser_classes=[MultiPartParser, FormParser, JSONParser])
     def subir_pdf(self, request):
         """
         Sube un PDF de RUT o un ZIP con múltiples PDFs y extrae la información automáticamente.
@@ -558,10 +560,12 @@ class RUTViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
                 }
             )
             
-            # Actualizar campos desde PDF
+            # Actualizar campos desde PDF (incluyendo valores vacíos para limpiar campos)
             for key, value in pdf_data.items():
-                if key != '_texto_completo' and hasattr(rut, key) and value:
-                    setattr(rut, key, value)
+                if key != '_texto_completo' and key != '_codigos_ciiu_encontrados' and hasattr(rut, key):
+                    # Si el valor existe, actualizarlo; si es None o vacío, también actualizar para limpiar
+                    if value is not None:
+                        setattr(rut, key, value)
             
             # Reemplazar archivo PDF si existe uno anterior
             if rut.archivo_pdf:
@@ -595,12 +599,14 @@ class RUTViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
             
             # Procesar códigos de responsabilidades
             codigos_responsabilidades = pdf_data.get('responsabilidades_codigos', [])
+            descripciones_responsabilidades = pdf_data.get('responsabilidades_descripcion', [])
+            
             if codigos_responsabilidades:
                 from .models import ResponsabilidadTributaria
                 from django.db import IntegrityError
                 
                 # Mapeo de códigos a descripciones (basado en el PDF real)
-                descripciones_responsabilidades = {
+                descripciones_map = {
                     '7': 'Retención en la fuente a título de renta',
                     '9': 'Retención en la fuente en el impuesto',
                     '14': 'Informante de exogena',
@@ -611,10 +617,18 @@ class RUTViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
                     '55': 'Informante de Beneficiarios Finales',
                 }
                 
+                # Si no vienen descripciones del extractor, generarlas desde el mapa
+                if not descripciones_responsabilidades:
+                    descripciones_responsabilidades = [
+                        descripciones_map.get(str(codigo), f'Responsabilidad tributaria código {codigo}')
+                        for codigo in codigos_responsabilidades
+                    ]
+                
+                # Guardar/actualizar responsabilidades en la BD
                 for codigo in codigos_responsabilidades:
                     codigo_str = str(codigo).strip()
                     if codigo_str:
-                        descripcion = descripciones_responsabilidades.get(
+                        descripcion = descripciones_map.get(
                             codigo_str,
                             f'Responsabilidad tributaria código {codigo_str}'
                         )
@@ -667,10 +681,48 @@ class RUTViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
             )
     
     def _procesar_zip_ruts(self, zip_file):
-        """Procesa un ZIP con múltiples PDFs de RUT"""
+        """Procesa un ZIP con múltiples PDFs de RUT. Si tiene más de 50 archivos, usa Celery."""
+        import os
+        import tempfile
         from .services.rut_batch_processor import procesar_zip_ruts
+        from .tasks import procesar_zip_ruts_task
         
         try:
+            # Contar archivos PDF en el ZIP para decidir si usar Celery
+            import zipfile
+            with zipfile.ZipFile(zip_file, 'r') as zip_ref:
+                pdf_files = [f for f in zip_ref.namelist() if f.lower().endswith('.pdf') and not f.endswith('/')]
+                total_pdfs = len(pdf_files)
+            
+            # Si hay más de 50 archivos, usar Celery para procesamiento asíncrono
+            if total_pdfs > 50:
+                # Guardar archivo temporalmente
+                temp_dir = tempfile.gettempdir()
+                temp_file_path = os.path.join(temp_dir, f'rut_zip_{self.request.user.id}_{int(timezone.now().timestamp())}.zip')
+                
+                # Leer contenido del archivo
+                if hasattr(zip_file, 'read'):
+                    zip_file.seek(0)
+                    with open(temp_file_path, 'wb') as f:
+                        f.write(zip_file.read())
+                else:
+                    # Si es un archivo subido, guardarlo directamente
+                    with open(temp_file_path, 'wb') as f:
+                        for chunk in zip_file.chunks():
+                            f.write(chunk)
+                
+                # Iniciar tarea Celery
+                task = procesar_zip_ruts_task.delay(temp_file_path)
+                
+                return Response({
+                    'mensaje': 'Procesamiento de ZIP iniciado (procesamiento asíncrono)',
+                    'task_id': task.id,
+                    'total': total_pdfs,
+                    'procesamiento_asincrono': True,
+                    'status': 'PROCESSING'
+                }, status=status.HTTP_202_ACCEPTED)
+            
+            # Si son menos de 50, procesar directamente
             resultados = procesar_zip_ruts(zip_file)
             
             return Response({
@@ -680,7 +732,8 @@ class RUTViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
                 'fallidos': len(resultados['fallidos']),
                 'reporte_txt': resultados['reporte_txt'],
                 'detalles_exitosos': resultados['exitosos'],
-                'detalles_fallidos': resultados['fallidos']
+                'detalles_fallidos': resultados['fallidos'],
+                'procesamiento_asincrono': False
             }, status=status.HTTP_200_OK)
             
         except Exception as e:
@@ -10103,4 +10156,213 @@ def pasarela_response_view(request):
             {'detail': f'Pasarela "{pasarela.codigo}" aún no implementada para callback'},
             status=status.HTTP_501_NOT_IMPLEMENTED
         )
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def celery_task_status_view(request, task_id):
+    """
+    Consulta el estado de una tarea Celery por su ID.
+    GET /api/celery/task-status/{task_id}/
+    """
+    from celery.result import AsyncResult
+    from config.celery_app import app as celery_app
+    
+    try:
+        task_result = AsyncResult(task_id, app=celery_app)
+        
+        response_data = {
+            'task_id': task_id,
+            'state': task_result.state,
+            'ready': task_result.ready(),
+            'successful': task_result.successful() if task_result.ready() else None,
+            'failed': task_result.failed() if task_result.ready() else None,
+        }
+        
+        # Si la tarea está lista, incluir resultado
+        if task_result.ready():
+            if task_result.successful():
+                response_data['result'] = task_result.result
+            else:
+                response_data['error'] = str(task_result.result) if task_result.result else 'Error desconocido'
+        else:
+            # Si está en progreso, incluir meta información
+            if hasattr(task_result, 'info') and task_result.info:
+                if isinstance(task_result.info, dict):
+                    response_data['meta'] = task_result.info
+                else:
+                    response_data['meta'] = {'status': str(task_result.info)}
+        
+        return Response(response_data, status=status.HTTP_200_OK)
+    
+    except Exception as e:
+        logger.error(f"Error consultando estado de tarea Celery {task_id}: {e}", exc_info=True)
+        return Response(
+            {'error': f'Error al consultar estado de tarea: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+class ConfiguracionS3ViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
+    """
+    ViewSet para gestionar configuraciones S3.
+    """
+    queryset = ConfiguracionS3.objects.all()
+    serializer_class = ConfiguracionS3Serializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if not self.request.user.is_superuser:
+            queryset = queryset.filter(activo=True)
+        return queryset.order_by('-activo', 'nombre')
+    
+    def perform_create(self, serializer):
+        serializer.save()
+    
+    def perform_update(self, serializer):
+        serializer.save()
+
+
+class BackupS3ViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
+    """
+    ViewSet para gestionar backups S3.
+    """
+    queryset = BackupS3.objects.all()
+    serializer_class = BackupS3Serializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        empresa_id = self.request.query_params.get('empresa_id')
+        if empresa_id:
+            queryset = queryset.filter(empresa_servidor_id=empresa_id)
+        return queryset.order_by('-fecha_backup')
+    
+    @action(detail=False, methods=['post'])
+    def realizar_backup(self, request):
+        """
+        Realiza un backup manual de una empresa.
+        """
+        empresa_id = request.data.get('empresa_id')
+        configuracion_s3_id = request.data.get('configuracion_s3_id')
+        
+        if not empresa_id or not configuracion_s3_id:
+            return Response(
+                {'error': 'Se requiere empresa_id y configuracion_s3_id'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            from .tasks import realizar_backup_empresa_task
+            task = realizar_backup_empresa_task.delay(empresa_id, configuracion_s3_id)
+            
+            return Response({
+                'status': 'started',
+                'task_id': task.id,
+                'mensaje': 'Backup iniciado. Consulta el estado con el task_id.'
+            }, status=status.HTTP_202_ACCEPTED)
+            
+        except Exception as e:
+            logger.error(f"Error iniciando backup: {e}", exc_info=True)
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=True, methods=['delete'])
+    def eliminar_backup(self, request, pk=None):
+        """
+        Elimina un backup de S3 y de la BD.
+        """
+        try:
+            backup = self.get_object()
+            from .models import ConfiguracionS3
+            from .services.backup_s3_service import BackupS3Service
+            
+            config_s3 = backup.configuracion_s3
+            if not config_s3:
+                return Response(
+                    {'error': 'Backup no tiene configuración S3 asociada'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            servicio = BackupS3Service(config_s3)
+            if servicio.eliminar_backup(backup.id):
+                return Response(
+                    {'mensaje': 'Backup eliminado exitosamente'},
+                    status=status.HTTP_200_OK
+                )
+            else:
+                return Response(
+                    {'error': 'Error al eliminar backup'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+                
+        except BackupS3.DoesNotExist:
+            return Response(
+                {'error': 'Backup no encontrado'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            logger.error(f"Error eliminando backup: {e}", exc_info=True)
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=False, methods=['get'])
+    def estadisticas_empresa(self, request):
+        """
+        Obtiene estadísticas de backups para una empresa.
+        """
+        empresa_id = request.query_params.get('empresa_id')
+        if not empresa_id:
+            return Response(
+                {'error': 'Se requiere empresa_id'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            from .models import EmpresaServidor, ConfiguracionS3
+            from .services.backup_s3_service import BackupS3Service
+            
+            empresa = EmpresaServidor.objects.get(id=empresa_id)
+            config_s3 = ConfiguracionS3.objects.filter(activo=True).first()
+            
+            if not config_s3:
+                return Response(
+                    {'error': 'No hay configuración S3 activa'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            servicio = BackupS3Service(config_s3)
+            excede, tamano_actual, limite = servicio.verificar_limite_espacio(empresa)
+            
+            backups = BackupS3.objects.filter(empresa_servidor=empresa, estado='completado')
+            
+            return Response({
+                'empresa_id': empresa_id,
+                'empresa_nombre': empresa.nombre,
+                'tamano_actual_gb': tamano_actual,
+                'limite_gb': limite,
+                'excede_limite': tamano_actual >= limite,
+                'total_backups': backups.count(),
+                'backups_por_anio': {
+                    str(anio): backups.filter(anio_fiscal=anio).count()
+                    for anio in backups.values_list('anio_fiscal', flat=True).distinct()
+                }
+            }, status=status.HTTP_200_OK)
+            
+        except EmpresaServidor.DoesNotExist:
+            return Response(
+                {'error': 'Empresa no encontrada'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            logger.error(f"Error obteniendo estadísticas: {e}", exc_info=True)
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 

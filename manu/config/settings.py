@@ -201,6 +201,18 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'America/Bogota'  # Zona horaria de Bogotá, Colombia
 
+# Configuración de Celery Beat (tareas programadas)
+from celery.schedules import crontab
+
+CELERY_BEAT_SCHEDULE = {
+    # Ejecutar procesamiento de backups programados cada hora
+    # Esto permite que las empresas con hora_backup configurada se ejecuten automáticamente
+    'procesar-backups-programados': {
+        'task': 'sistema_analitico.procesar_backups_programados',
+        'schedule': crontab(minute=0),  # Cada hora en el minuto 0 (ej: 1:00, 2:00, 3:00...)
+    },
+}
+
 # ==================== Configuración de Cache ====================
 CACHES = {
     'default': {

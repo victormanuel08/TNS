@@ -15,9 +15,14 @@ def normalize_nit(nit: str) -> str:
     return ''.join(c for c in str(nit) if c.isdigit())
 
 
-def procesar_zip_ruts(zip_file) -> Dict:
+def procesar_zip_ruts(zip_file, task=None) -> Dict:
     """
     Procesa un archivo ZIP con múltiples PDFs de RUT.
+    Busca PDFs en todos los subdirectorios del ZIP.
+    
+    Args:
+        zip_file: Archivo ZIP a procesar (puede ser File, BytesIO, o ruta)
+        task: Tarea Celery opcional para actualizar progreso
     
     Returns:
         Dict con:
@@ -25,6 +30,7 @@ def procesar_zip_ruts(zip_file) -> Dict:
         - fallidos: List[Dict] - RUTs que fallaron con razón
         - total: int
         - reporte_txt: str - Reporte en formato TXT
+        - pdf_files: List[str] - Lista de archivos PDF encontrados
     """
     from ..models import RUT, EmpresaServidor
     
@@ -32,15 +38,26 @@ def procesar_zip_ruts(zip_file) -> Dict:
         'exitosos': [],
         'fallidos': [],
         'total': 0,
-        'reporte_txt': ''
+        'reporte_txt': '',
+        'pdf_files': []
     }
     
     try:
-        # Leer ZIP
-        with zipfile.ZipFile(zip_file, 'r') as zip_ref:
-            # Obtener lista de archivos PDF
-            pdf_files = [f for f in zip_ref.namelist() if f.lower().endswith('.pdf')]
+        # Leer ZIP (puede ser ruta de archivo o objeto file)
+        if isinstance(zip_file, str):
+            # Es una ruta de archivo
+            zip_ref = zipfile.ZipFile(zip_file, 'r')
+        else:
+            # Es un objeto file
+            zip_ref = zipfile.ZipFile(zip_file, 'r')
+        
+        try:
+            # Obtener lista de archivos PDF (incluyendo subdirectorios)
+            # zip_ref.namelist() incluye todos los archivos, incluso en subdirectorios
+            # Filtrar solo PDFs y excluir directorios (que terminan en /)
+            pdf_files = [f for f in zip_ref.namelist() if f.lower().endswith('.pdf') and not f.endswith('/')]
             resultados['total'] = len(pdf_files)
+            resultados['pdf_files'] = pdf_files
             
             if not pdf_files:
                 resultados['fallidos'].append({
@@ -50,7 +67,19 @@ def procesar_zip_ruts(zip_file) -> Dict:
                 return resultados
             
             # Procesar cada PDF
-            for pdf_name in pdf_files:
+            for idx, pdf_name in enumerate(pdf_files, 1):
+                # Actualizar progreso si hay tarea Celery
+                if task:
+                    task.update_state(
+                        state='PROCESSING',
+                        meta={
+                            'status': f'Procesando {idx}/{len(pdf_files)}: {pdf_name}',
+                            'total': len(pdf_files),
+                            'procesados': idx - 1,
+                            'exitosos': len(resultados['exitosos']),
+                            'fallidos': len(resultados['fallidos'])
+                        }
+                    )
                 try:
                     # Leer PDF del ZIP
                     pdf_data_bytes = zip_ref.read(pdf_name)
@@ -102,8 +131,12 @@ def procesar_zip_ruts(zip_file) -> Dict:
                     
                     # Actualizar campos desde PDF
                     for key, value in rut_data.items():
-                        if key not in ['_texto_completo', '_codigos_ciiu_encontrados'] and hasattr(rut, key) and value:
-                            setattr(rut, key, value)
+                        if key not in ['_texto_completo', '_codigos_ciiu_encontrados', '_establecimientos'] and hasattr(rut, key):
+                            # Si el valor es None, establecerlo explícitamente para limpiar campos
+                            if value is None:
+                                setattr(rut, key, None)
+                            elif value:  # Solo asignar si tiene valor
+                                setattr(rut, key, value)
                     
                     # Guardar PDF
                     pdf_file.seek(0)  # Resetear posición
@@ -121,6 +154,29 @@ def procesar_zip_ruts(zip_file) -> Dict:
                     )
                     rut.archivo_pdf = pdf_upload
                     rut.save()
+                    
+                    # Procesar establecimientos
+                    from ..models import EstablecimientoRUT
+                    establecimientos_data = rut_data.get('_establecimientos', [])
+                    # Eliminar establecimientos antiguos
+                    EstablecimientoRUT.objects.filter(rut=rut).delete()
+                    # Crear nuevos establecimientos
+                    for est_data in establecimientos_data:
+                        EstablecimientoRUT.objects.create(
+                            rut=rut,
+                            nombre=est_data.get('nombre', ''),
+                            tipo_establecimiento=est_data.get('tipo_establecimiento'),
+                            tipo_establecimiento_codigo=est_data.get('tipo_establecimiento_codigo'),
+                            actividad_economica_ciiu=est_data.get('actividad_economica_ciiu'),
+                            actividad_economica_descripcion=est_data.get('actividad_economica_descripcion'),
+                            departamento_codigo=est_data.get('departamento_codigo'),
+                            departamento_nombre=est_data.get('departamento_nombre', ''),
+                            ciudad_codigo=est_data.get('ciudad_codigo'),
+                            ciudad_nombre=est_data.get('ciudad_nombre', ''),
+                            direccion=est_data.get('direccion', ''),
+                            matricula_mercantil=est_data.get('matricula_mercantil'),
+                            telefono=est_data.get('telefono'),
+                        )
                     
                     # Procesar códigos CIIU
                     codigos_ciiu = rut_data.get('_codigos_ciiu_encontrados', [])
@@ -189,6 +245,8 @@ def procesar_zip_ruts(zip_file) -> Dict:
             
             # Generar reporte TXT
             resultados['reporte_txt'] = generar_reporte_txt(resultados)
+        finally:
+            zip_ref.close()
             
     except zipfile.BadZipFile:
         resultados['fallidos'].append({

@@ -8,7 +8,7 @@ from .models import (
     VpnConfig, EmpresaEcommerceConfig, APIKeyCliente, EmpresaDominio, UserTenantProfile,
     RUT, EstablecimientoRUT, ActividadEconomica, ResponsabilidadTributaria,
     TipoTercero, TipoRegimen, Impuesto, VigenciaTributaria,
-    Entidad, ContrasenaEntidad
+    Entidad, ContrasenaEntidad, ConfiguracionS3, BackupS3
 )
 
 
@@ -854,3 +854,27 @@ class SubirCalendarioTributarioSerializer(serializers.Serializer):
         required=True,
         help_text='Archivo Excel con el calendario tributario (formato: tax_code, expirations_digits, third_type_code, regiment_type_code, date, description)'
     )
+
+
+class ConfiguracionS3Serializer(serializers.ModelSerializer):
+    """Serializer para ConfiguracionS3"""
+    class Meta:
+        model = ConfiguracionS3
+        fields = '__all__'
+        extra_kwargs = {
+            'secret_access_key': {'write_only': True},  # No mostrar en lectura
+        }
+
+
+class BackupS3Serializer(serializers.ModelSerializer):
+    """Serializer para BackupS3"""
+    empresa_nombre = serializers.CharField(source='empresa_servidor.nombre', read_only=True)
+    empresa_nit = serializers.CharField(source='empresa_servidor.nit', read_only=True)
+    configuracion_nombre = serializers.CharField(source='configuracion_s3.nombre', read_only=True)
+    tamano_mb = serializers.ReadOnlyField()
+    tamano_gb = serializers.ReadOnlyField()
+    
+    class Meta:
+        model = BackupS3
+        fields = '__all__'
+        read_only_fields = ['fecha_creacion']
