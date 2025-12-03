@@ -49,6 +49,7 @@ from .models import (
     TransaccionPago,
     RUT,
     EstablecimientoRUT,
+    normalize_nit_and_extract_dv,
 )
 from .serializers import *
 from .services.data_manager import DataManager
@@ -371,19 +372,13 @@ def _get_empresa_for_request(request, data):
             # Buscar por NIT: normalizar y comparar
             nit_normalizado = _normalize_nit(nit)
             
-            # Intentar búsqueda directa primero (más rápido si el NIT en BD ya está normalizado)
+            # Buscar directamente por nit_normalizado (siempre normalizado ahora)
             try:
-                empresa = qs.get(nit=nit_normalizado)
+                empresa = qs.get(nit_normalizado=nit_normalizado)
                 if anio and empresa.anio_fiscal != anio:
                     raise EmpresaServidor.DoesNotExist()
                 return empresa
-            except (EmpresaServidor.DoesNotExist, EmpresaServidor.MultipleObjectsReturned):
-                # Si no funciona, iterar y normalizar (para casos donde el NIT en BD tiene formato diferente)
-                for empresa in qs:
-                    if _normalize_nit(empresa.nit) == nit_normalizado:
-                        if anio and empresa.anio_fiscal != anio:
-                            continue
-                        return empresa
+            except EmpresaServidor.DoesNotExist:
                 raise EmpresaServidor.DoesNotExist()
     except EmpresaServidor.DoesNotExist:
         raise serializers.ValidationError('Empresa no encontrada o sin permisos.')
@@ -639,7 +634,7 @@ class RUTViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
                                 pass
             
             # Buscar empresas asociadas
-            empresas = EmpresaServidor.objects.filter(nit=nit_normalizado)
+            empresas = EmpresaServidor.objects.filter(nit_normalizado=nit_normalizado)
             empresas_info = [
                 {
                     'id': emp.id,
@@ -700,7 +695,7 @@ class RUTViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
         """Obtiene todas las empresas asociadas a este RUT"""
         try:
             rut = RUT.objects.get(nit_normalizado=nit_normalizado)
-            empresas = EmpresaServidor.objects.filter(nit=nit_normalizado).select_related('servidor')
+            empresas = EmpresaServidor.objects.filter(nit_normalizado=nit_normalizado).select_related('servidor')
             
             empresas_data = [
                 {
@@ -853,6 +848,141 @@ class CalendarioTributarioViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
                 {'error': f'Error al procesar el Excel: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+    
+    @action(detail=False, methods=['get'], url_path='eventos')
+    def obtener_eventos(self, request):
+        """
+        Obtiene eventos del calendario tributario para un NIT o empresa.
+        Usa el RUT para determinar si es Persona Natural o Jurídica.
+        
+        Parámetros:
+        - nit: NIT de la empresa (requerido si no se proporciona empresa_id)
+        - empresa_id: ID de la empresa (requerido si no se proporciona nit)
+        - fecha_desde: Fecha desde (opcional, formato YYYY-MM-DD)
+        - fecha_hasta: Fecha hasta (opcional, formato YYYY-MM-DD)
+        - tipo_regimen: Código del régimen (opcional)
+        """
+        from .services.calendario_tributario_service import (
+            obtener_eventos_calendario_tributario,
+            obtener_eventos_para_empresa
+        )
+        from datetime import datetime
+        
+        nit = request.query_params.get('nit')
+        empresa_id = request.query_params.get('empresa_id')
+        fecha_desde_str = request.query_params.get('fecha_desde')
+        fecha_hasta_str = request.query_params.get('fecha_hasta')
+        tipo_regimen = request.query_params.get('tipo_regimen')
+        
+        # Parsear fechas
+        fecha_desde = None
+        fecha_hasta = None
+        if fecha_desde_str:
+            try:
+                fecha_desde = datetime.strptime(fecha_desde_str, '%Y-%m-%d').date()
+            except ValueError:
+                return Response(
+                    {'error': 'Formato de fecha_desde inválido. Use YYYY-MM-DD'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        if fecha_hasta_str:
+            try:
+                fecha_hasta = datetime.strptime(fecha_hasta_str, '%Y-%m-%d').date()
+            except ValueError:
+                return Response(
+                    {'error': 'Formato de fecha_hasta inválido. Use YYYY-MM-DD'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        # Obtener eventos
+        if empresa_id:
+            try:
+                eventos = obtener_eventos_para_empresa(
+                    int(empresa_id),
+                    fecha_desde=fecha_desde,
+                    fecha_hasta=fecha_hasta
+                )
+            except ValueError:
+                return Response(
+                    {'error': 'empresa_id debe ser un número'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        elif nit:
+            eventos = obtener_eventos_calendario_tributario(
+                nit=nit,
+                tipo_regimen=tipo_regimen,
+                fecha_desde=fecha_desde,
+                fecha_hasta=fecha_hasta
+            )
+        else:
+            return Response(
+                {'error': 'Debe proporcionar nit o empresa_id'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        return Response({
+            'eventos': eventos,
+            'total': len(eventos),
+            'filtros': {
+                'nit': nit,
+                'empresa_id': empresa_id,
+                'fecha_desde': fecha_desde_str,
+                'fecha_hasta': fecha_hasta_str,
+                'tipo_regimen': tipo_regimen
+            }
+        }, status=status.HTTP_200_OK)
+
+
+class EntidadViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
+    """
+    ViewSet para gestionar Entidades (homólogo de Entities en BCE)
+    """
+    from .serializers import EntidadSerializer
+    from .models import Entidad
+    
+    queryset = Entidad.objects.all()
+    serializer_class = EntidadSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        if not self.request.user.is_superuser:
+            return Entidad.objects.none()
+        return Entidad.objects.all().order_by('nombre')
+
+
+class ContrasenaEntidadViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
+    """
+    ViewSet para gestionar Contraseñas de Entidades (homólogo de PasswordsEntities en BCE)
+    """
+    from .serializers import ContrasenaEntidadSerializer
+    from .models import ContrasenaEntidad
+    
+    queryset = ContrasenaEntidad.objects.all()
+    serializer_class = ContrasenaEntidadSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        if not self.request.user.is_superuser:
+            return ContrasenaEntidad.objects.none()
+        
+        queryset = ContrasenaEntidad.objects.select_related('entidad', 'empresa_servidor').all()
+        
+        # Filtros opcionales
+        nit = self.request.query_params.get('nit')
+        if nit:
+            nit_normalizado = ''.join(c for c in str(nit) if c.isdigit())
+            queryset = queryset.filter(nit_normalizado=nit_normalizado)
+        
+        entidad_id = self.request.query_params.get('entidad_id')
+        if entidad_id:
+            queryset = queryset.filter(entidad_id=entidad_id)
+        
+        empresa_id = self.request.query_params.get('empresa_id')
+        if empresa_id:
+            queryset = queryset.filter(empresa_servidor_id=empresa_id)
+        
+        return queryset.order_by('entidad__nombre', 'usuario')
+
 
 class UserTenantProfileViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
     """
@@ -3870,7 +4000,9 @@ class ConsultaNaturalViewSet(viewsets.ViewSet):
         """Obtiene una empresa por NIT y año fiscal"""
         try:
             from apps.sistema_analitico.models import EmpresaServidor
-            return EmpresaServidor.objects.get(nit=nit, anio_fiscal=anio_fiscal)
+            # Normalizar NIT antes de buscar
+            nit_norm, _, _ = normalize_nit_and_extract_dv(nit)
+            return EmpresaServidor.objects.get(nit_normalizado=nit_norm, anio_fiscal=anio_fiscal)
         except EmpresaServidor.DoesNotExist:
             return None
 
@@ -4446,7 +4578,9 @@ class APIKeyManagementViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
         # Si se autenticó con API Key, permitir (asumimos que es admin)
         
         # Verificar que existe al menos una empresa con este NIT
-        empresas_nit = EmpresaServidor.objects.filter(nit=nit)
+        # Normalizar NIT antes de buscar
+        nit_norm, _, _ = normalize_nit_and_extract_dv(nit) if nit else ('', None, '')
+        empresas_nit = EmpresaServidor.objects.filter(nit_normalizado=nit_norm) if nit_norm else EmpresaServidor.objects.none()
         if not empresas_nit.exists():
             return Response(
                 {"error": "No existen empresas con este NIT"}, 
@@ -5446,7 +5580,7 @@ class TNSViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
             if nit and anio_fiscal:
                 nit_normalizado = _normalize_nit(nit)
                 try:
-                    empresa = EmpresaServidor.objects.get(nit=nit_normalizado, anio_fiscal=anio_fiscal)
+                    empresa = EmpresaServidor.objects.get(nit_normalizado=nit_normalizado, anio_fiscal=anio_fiscal)
                     empresa_servidor_id = empresa.id
                 except EmpresaServidor.DoesNotExist:
                     raise serializers.ValidationError(f'Empresa con NIT {nit} y año {anio_fiscal} no encontrada')
@@ -8317,7 +8451,7 @@ def public_catalog_view(request):
             if empresa_dominio.nit:
                 nit_normalizado = _normalize_nit(empresa_dominio.nit)
                 empresas_mismo_nit = EmpresaServidor.objects.filter(
-                    nit=nit_normalizado
+                    nit_normalizado=nit_normalizado
                 ).order_by('-anio_fiscal')
                 if empresas_mismo_nit.exists():
                     empresa = empresas_mismo_nit.first()
@@ -8694,7 +8828,7 @@ def resolve_domain_view(request):
                 if nit_normalizado:
                     # Primero intentar búsqueda directa (si los NITs en BD ya están normalizados)
                     empresas_mismo_nit = EmpresaServidor.objects.filter(
-                        nit=nit_normalizado
+                        nit_normalizado=nit_normalizado
                     ).order_by('-anio_fiscal')
                     
                     print(f"   📊 Búsqueda directa: {empresas_mismo_nit.count()} empresas encontradas")
@@ -8761,7 +8895,7 @@ def resolve_domain_view(request):
             if nit_normalizado:
                 # Buscar todas las empresas con el mismo NIT normalizado, ordenadas por año fiscal descendente
                 empresas_mismo_nit = EmpresaServidor.objects.filter(
-                    nit=nit_normalizado
+                    nit_normalizado=nit_normalizado
                 ).order_by('-anio_fiscal')
                 
                 if empresas_mismo_nit.exists():

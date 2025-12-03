@@ -86,9 +86,12 @@ class DataManager:
                 anio_fiscal = fila['ANOFIS']
                 
                 # Verificar si ya existe una empresa con este NIT y año fiscal en otro servidor
+                # Normalizar NIT antes de buscar
+                from ..models import normalize_nit_and_extract_dv
+                nit_norm, _, _ = normalize_nit_and_extract_dv(nit) if nit else ('', None, '')
                 empresa_existente = EmpresaServidor.objects.filter(
-                    nit=nit, anio_fiscal=anio_fiscal
-                ).exclude(servidor=servidor).first()
+                    nit_normalizado=nit_norm, anio_fiscal=anio_fiscal
+                ).exclude(servidor=servidor).first() if nit_norm else None
                 
                 if empresa_existente:
                     empresas_registradas.append({
@@ -100,13 +103,29 @@ class DataManager:
                     continue
                 
                 # Si existe en el mismo servidor, actualizar; si no, crear
+                # Normalizar NIT antes de crear/actualizar
+                from ..models import normalize_nit_and_extract_dv, ContrasenaEntidad
+                nit_norm, dv, _ = normalize_nit_and_extract_dv(nit) if nit else ('', None, '')
                 empresa, creada = EmpresaServidor.objects.update_or_create(
-                    servidor=servidor, nit=nit, anio_fiscal=anio_fiscal,
+                    servidor=servidor, nit_normalizado=nit_norm, anio_fiscal=anio_fiscal,
                     defaults={
                         'codigo': fila['CODIGO'], 'nombre': fila['NOMBRE'],
+                        'nit': nit,  # Mantener formato original
                         'ruta_base': fila['ARCHIVO'], 'estado': 'ACTIVO'
                     }
                 )
+                
+                # Si se creó o actualizó una empresa, buscar contraseñas pendientes y asociarlas
+                if nit_norm:
+                    contrasenas_pendientes = ContrasenaEntidad.objects.filter(
+                        nit_normalizado=nit_norm,
+                        empresa_servidor__isnull=True
+                    )
+                    if contrasenas_pendientes.exists():
+                        cantidad = contrasenas_pendientes.count()
+                        contrasenas_pendientes.update(empresa_servidor=empresa)
+                        logger.info(f"✅ Asociadas {cantidad} contraseña(s) pendientes a empresa {empresa.nombre} (NIT: {nit_norm})")
+                
                 empresas_registradas.append({
                     'empresa': empresa.nombre, 'nit': empresa.nit, 
                     'anio_fiscal': empresa.anio_fiscal, 'accion': 'creada' if creada else 'actualizada'

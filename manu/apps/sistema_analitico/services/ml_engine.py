@@ -84,13 +84,14 @@ class MLEngine:
             # Obtener empresa actual
             empresa_actual = EmpresaServidor.objects.get(id=empresa_servidor_id)
             
-            # Buscar todas las empresas con el mismo NIT
+            # Buscar todas las empresas con el mismo NIT normalizado
             empresas_relacionadas = EmpresaServidor.objects.filter(
-                nit=empresa_actual.nit
+                nit_normalizado=empresa_actual.nit_normalizado
             ).values_list('id', flat=True)
             
             return {
                 'nit': empresa_actual.nit,
+                'nit_normalizado': empresa_actual.nit_normalizado,
                 'empresa_actual': empresa_actual,
                 'empresas_relacionadas': list(empresas_relacionadas),
                 'total_empresas': len(empresas_relacionadas)

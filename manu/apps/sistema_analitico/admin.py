@@ -14,6 +14,8 @@ from .models import (
     EstablecimientoRUT,
     ActividadEconomica,
     ResponsabilidadTributaria,
+    Entidad,
+    ContrasenaEntidad,
 )
 
 # ========== ADMIN CONFIGURACIÓN GLOBAL ==========
@@ -465,3 +467,32 @@ class RangoFechasFilter(admin.SimpleListFilter):
         if self.value() == 'ultimo_mes':
             return queryset.filter(fecha__gte=timezone.now() - timedelta(days=30))
         return queryset
+
+
+@admin.register(Entidad)
+class EntidadAdmin(admin.ModelAdmin):
+    list_display = ['nombre', 'sigla', 'fecha_creacion', 'fecha_actualizacion']
+    search_fields = ['nombre', 'sigla']
+    list_filter = ['fecha_creacion']
+    ordering = ['nombre']
+
+
+@admin.register(ContrasenaEntidad)
+class ContrasenaEntidadAdmin(admin.ModelAdmin):
+    list_display = ['entidad', 'usuario', 'nit_normalizado', 'empresa_servidor', 'fecha_creacion']
+    search_fields = ['entidad__nombre', 'usuario', 'nit_normalizado', 'descripcion']
+    list_filter = ['entidad', 'fecha_creacion']
+    readonly_fields = ['fecha_creacion', 'fecha_actualizacion']
+    fieldsets = (
+        ('Información Principal', {
+            'fields': ('entidad', 'usuario', 'contrasena', 'descripcion')
+        }),
+        ('Asociación', {
+            'fields': ('nit_normalizado', 'empresa_servidor')
+        }),
+        ('Auditoría', {
+            'fields': ('fecha_creacion', 'fecha_actualizacion'),
+            'classes': ('collapse',)
+        }),
+    )
+    ordering = ['entidad__nombre', 'usuario']

@@ -39,15 +39,8 @@ class FudoScrapingSessionSerializer(serializers.ModelSerializer):
 
     def _buscar_empresa_por_nit(self, nit_normalizado: str, request):
         """Busca la empresa más reciente (año más actual) por NIT"""
-        # Buscar todas las empresas con ese NIT (sin dígito de verificación)
-        empresas = EmpresaServidor.objects.filter(nit=nit_normalizado).order_by('-anio_fiscal')
-        
-        # Si no encuentra, buscar sin dígito de verificación
-        if not empresas.exists():
-            nit_clean = self._clean_nit(nit_normalizado)
-            empresas = EmpresaServidor.objects.filter(
-                nit__startswith=nit_clean
-            ).order_by('-anio_fiscal')
+        # Buscar todas las empresas con ese NIT normalizado
+        empresas = EmpresaServidor.objects.filter(nit_normalizado=nit_normalizado).order_by('-anio_fiscal')
 
         # Filtrar por permisos
         if hasattr(request, 'cliente_api') and request.cliente_api:
@@ -131,11 +124,8 @@ class FudoScrapingSessionSerializer(serializers.ModelSerializer):
             empresas = getattr(request, 'empresas_autorizadas', None)
             
             if empresas is not None:
-                try:
-                    # Verificar si alguna empresa autorizada tiene este NIT
-                    allowed = empresas.filter(nit=normalized).exists()
-                except AttributeError:
-                    allowed = any(self._normalize_nit(getattr(emp, 'nit', '')) == normalized for emp in empresas)
+                # Verificar si alguna empresa autorizada tiene este NIT normalizado
+                allowed = empresas.filter(nit_normalizado=normalized).exists()
                 
                 if not allowed:
                     # Verificar si el NIT del API Key coincide

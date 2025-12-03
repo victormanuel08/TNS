@@ -69,11 +69,13 @@ class ScrapingSessionSerializer(serializers.ModelSerializer):
             normalized = self._normalize_nit(nit)
             empresas = getattr(request, 'empresas_autorizadas', None)
             if empresas is not None:
+                # empresas puede ser QuerySet o lista evaluada
+                # Verificar si alguna empresa autorizada tiene este NIT normalizado
                 try:
-                    # empresas puede ser QuerySet o lista evaluada
-                    allowed = empresas.filter(nit=normalized).exists()
+                    allowed = empresas.filter(nit_normalizado=normalized).exists()
                 except AttributeError:
-                    allowed = any(getattr(emp, 'nit', None) == normalized for emp in empresas)
+                    # Si es una lista, verificar manualmente
+                    allowed = any(getattr(emp, 'nit_normalizado', None) == normalized for emp in empresas)
             else:
                 allowed = False
             if not empresas or not allowed:
@@ -89,9 +91,11 @@ class ScrapingSessionSerializer(serializers.ModelSerializer):
         if user.is_superuser:
             return
 
+        # Normalizar NIT antes de buscar
+        nit_normalizado = self._normalize_nit(nit)
         has_permission = UsuarioEmpresa.objects.filter(
             usuario=user,
-            empresa_servidor__nit=nit,
+            empresa_servidor__nit_normalizado=nit_normalizado,
         ).exists()
         if not has_permission:
             raise serializers.ValidationError('No tienes permisos para este NIT.')

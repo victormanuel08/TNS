@@ -7,7 +7,8 @@ from .models import (
     EmpresaPersonalizacion, GrupoMaterialImagen, MaterialImagen, CajaAutopago,
     VpnConfig, EmpresaEcommerceConfig, APIKeyCliente, EmpresaDominio, UserTenantProfile,
     RUT, EstablecimientoRUT, ActividadEconomica, ResponsabilidadTributaria,
-    TipoTercero, TipoRegimen, Impuesto, VigenciaTributaria
+    TipoTercero, TipoRegimen, Impuesto, VigenciaTributaria,
+    Entidad, ContrasenaEntidad
 )
 
 
@@ -34,20 +35,25 @@ class EmpresaServidorSerializer(serializers.ModelSerializer):
         anio_fiscal = attrs.get('anio_fiscal')
         
         if nit and anio_fiscal:
-            # Buscar si existe otra empresa con el mismo NIT y año fiscal
-            existing = EmpresaServidor.objects.filter(
-                nit=nit,
-                anio_fiscal=anio_fiscal
-            )
+            # Normalizar NIT antes de buscar
+            from .models import normalize_nit_and_extract_dv
+            nit_norm, _, _ = normalize_nit_and_extract_dv(nit)
             
-            # Si estamos editando, excluir la instancia actual
-            if self.instance:
-                existing = existing.exclude(pk=self.instance.pk)
-            
-            if existing.exists():
-                raise serializers.ValidationError(
-                    f'Ya existe una empresa con NIT {nit} y año fiscal {anio_fiscal} en otro servidor.'
+            if nit_norm:
+                # Buscar si existe otra empresa con el mismo NIT normalizado y año fiscal
+                existing = EmpresaServidor.objects.filter(
+                    nit_normalizado=nit_norm,
+                    anio_fiscal=anio_fiscal
                 )
+                
+                # Si estamos editando, excluir la instancia actual
+                if self.instance:
+                    existing = existing.exclude(pk=self.instance.pk)
+                
+                if existing.exists():
+                    raise serializers.ValidationError(
+                        f'Ya existe una empresa con NIT {nit} (normalizado: {nit_norm}) y año fiscal {anio_fiscal} en otro servidor.'
+                    )
         
         return attrs
 
@@ -599,7 +605,7 @@ class EmpresaDominioSerializer(serializers.ModelSerializer):
             nit_normalizado = self.validate_nit(nit)
             if nit_normalizado:
                 # Buscar empresa con año fiscal más reciente
-                empresas = EmpresaServidor.objects.filter(nit=nit_normalizado).order_by('-anio_fiscal')
+                empresas = EmpresaServidor.objects.filter(nit_normalizado=nit_normalizado).order_by('-anio_fiscal')
                 if empresas.exists():
                     empresa_mas_reciente = empresas.first()
                     attrs['empresa_servidor'] = empresa_mas_reciente
@@ -670,7 +676,7 @@ class RUTSerializer(serializers.ModelSerializer):
     def get_empresas_asociadas(self, obj):
         """Obtener todas las empresas con el mismo NIT normalizado"""
         from .models import EmpresaServidor
-        empresas = EmpresaServidor.objects.filter(nit=obj.nit_normalizado)
+        empresas = EmpresaServidor.objects.filter(nit_normalizado=obj.nit_normalizado)
         return [
             {
                 'id': emp.id,
@@ -815,6 +821,30 @@ class VigenciaTributariaSerializer(serializers.ModelSerializer):
     class Meta:
         model = VigenciaTributaria
         fields = '__all__'
+        read_only_fields = ['fecha_creacion', 'fecha_actualizacion']
+
+
+class EntidadSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Entidad
+        fields = '__all__'
+        read_only_fields = ['fecha_creacion', 'fecha_actualizacion']
+
+
+class ContrasenaEntidadSerializer(serializers.ModelSerializer):
+    entidad_nombre = serializers.CharField(source='entidad.nombre', read_only=True)
+    entidad_sigla = serializers.CharField(source='entidad.sigla', read_only=True)
+    empresa_nombre = serializers.CharField(source='empresa_servidor.nombre', read_only=True)
+    empresa_nit = serializers.CharField(source='empresa_servidor.nit', read_only=True)
+    
+    class Meta:
+        model = ContrasenaEntidad
+        fields = [
+            'id', 'entidad', 'entidad_nombre', 'entidad_sigla',
+            'nit_normalizado', 'empresa_servidor', 'empresa_nombre', 'empresa_nit',
+            'descripcion', 'usuario', 'contrasena',
+            'fecha_creacion', 'fecha_actualizacion'
+        ]
         read_only_fields = ['fecha_creacion', 'fecha_actualizacion']
 
 

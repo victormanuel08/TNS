@@ -31,11 +31,66 @@ class Servidor(models.Model):
     def __str__(self):
         return f"{self.nombre} ({self.tipo_servidor})"
 
+def normalize_nit_and_extract_dv(nit_value):
+    """
+    Normaliza NIT y extrae el dígito verificador (DV).
+    
+    Args:
+        nit_value: NIT en cualquier formato (ej: "900.869.750-0", "900869750-0", "9008697500")
+    
+    Returns:
+        tuple: (nit_normalizado, dv, nit_original)
+        - nit_normalizado: Solo números sin puntos ni guiones (ej: "9008697500")
+        - dv: Dígito verificador si existe, None si no (ej: "0")
+        - nit_original: NIT con formato original preservado
+    """
+    if not nit_value:
+        return '', None, ''
+    
+    nit_str = str(nit_value).strip()
+    nit_original = nit_str
+    
+    # Separar NIT base y DV (si tiene guión)
+    if '-' in nit_str:
+        parts = nit_str.split('-')
+        nit_base = parts[0]
+        dv = parts[1] if len(parts) > 1 else None
+    else:
+        # Si no tiene guión, intentar extraer DV del final
+        # Los NITs colombianos tienen 9 dígitos base + 1 DV
+        nit_clean = re.sub(r'\D', '', nit_str)
+        if len(nit_clean) == 10:
+            nit_base = nit_clean[:-1]
+            dv = nit_clean[-1]
+        else:
+            nit_base = nit_clean
+            dv = None
+    
+    # Normalizar: solo números
+    nit_normalizado = re.sub(r'\D', '', nit_base)
+    
+    return nit_normalizado, dv, nit_original
+
+
 class EmpresaServidor(models.Model):
     servidor = models.ForeignKey(Servidor, on_delete=models.CASCADE)
     codigo = models.CharField(max_length=50)
     nombre = models.CharField(max_length=255)
-    nit = models.CharField(max_length=20)
+    nit = models.CharField(
+        max_length=20,
+        help_text='NIT con formato original (ej: 900.869.750-0)'
+    )
+    nit_normalizado = models.CharField(
+        max_length=20,
+        db_index=True,
+        help_text='NIT normalizado sin puntos ni guiones (ej: 9008697500) - usado para búsquedas'
+    )
+    dv = models.CharField(
+        max_length=1,
+        null=True,
+        blank=True,
+        help_text='Dígito verificador del NIT'
+    )
     anio_fiscal = models.IntegerField()
     ruta_base = models.CharField(max_length=500)
     consulta_sql = models.TextField(null=True, blank=True)
@@ -46,11 +101,28 @@ class EmpresaServidor(models.Model):
 
     class Meta:
         db_table = 'empresas_servidor'
-        unique_together = ['nit', 'anio_fiscal']  # Único globalmente, sin importar servidor
+        unique_together = ['nit_normalizado', 'anio_fiscal']  # Único globalmente, sin importar servidor
         indexes = [
-            models.Index(fields=['nit', 'anio_fiscal']),
-            models.Index(fields=['servidor', 'nit']),
+            models.Index(fields=['nit_normalizado', 'anio_fiscal']),
+            models.Index(fields=['servidor', 'nit_normalizado']),
+            models.Index(fields=['nit_normalizado']),  # Índice individual para búsquedas rápidas
         ]
+    
+    def save(self, *args, **kwargs):
+        """Normaliza NIT automáticamente antes de guardar"""
+        if self.nit:
+            nit_norm, dv, nit_orig = normalize_nit_and_extract_dv(self.nit)
+            self.nit_normalizado = nit_norm
+            self.dv = dv
+            # Preservar formato original si no estaba establecido
+            if not self.nit or self.nit != nit_orig:
+                # Si el nit original tenía formato, preservarlo
+                if '.' in str(self.nit) or '-' in str(self.nit):
+                    pass  # Ya tiene formato, mantenerlo
+                else:
+                    # Si no tenía formato, usar el original detectado
+                    self.nit = nit_orig if nit_orig else self.nit
+        super().save(*args, **kwargs)
         
     def __str__(self):
         return f"{self.nombre} ({self.nit}) - {self.anio_fiscal} - {self.servidor.nombre}"
@@ -1066,26 +1138,14 @@ class APIKeyCliente(models.Model):
         # Normalizar NIT de la API Key (eliminar puntos, guiones, etc.)
         nit_normalizado_api = re.sub(r"\D", "", str(self.nit))
         
-        # Intentar búsqueda directa primero (más rápido si el NIT en BD ya está normalizado)
-        empresas_directas = EmpresaServidor.objects.filter(nit=nit_normalizado_api)
+        # Buscar directamente por nit_normalizado (siempre normalizado ahora)
+        empresas_directas = EmpresaServidor.objects.filter(nit_normalizado=nit_normalizado_api)
         if empresas_directas.exists():
-            # Si encontramos empresas con búsqueda directa, usarlas
             self.empresas_asociadas.set(empresas_directas)
             return empresas_directas.count()
         
-        # Si no funcionó, iterar y normalizar (para casos donde el NIT en BD tiene formato diferente)
-        # Solo si hay pocas empresas o es necesario
-        todas_empresas = EmpresaServidor.objects.all()
-        empresas_coincidentes = []
-        
-        for empresa in todas_empresas:
-            nit_normalizado_empresa = re.sub(r"\D", "", str(empresa.nit))
-            if nit_normalizado_api == nit_normalizado_empresa:
-                empresas_coincidentes.append(empresa)
-        
-        # Asignar empresas encontradas
-        self.empresas_asociadas.set(empresas_coincidentes)
-        return len(empresas_coincidentes)
+        # Si no se encontraron empresas, retornar 0
+        return 0
     
     def incrementar_contador(self):
         """Incrementa el contador y actualiza última petición"""
@@ -1308,7 +1368,7 @@ class EmpresaDominio(models.Model):
             if nit_normalizado:
                 # Buscar todas las empresas con el mismo NIT normalizado, ordenadas por año fiscal descendente
                 empresas_mismo_nit = EmpresaServidor.objects.filter(
-                    nit=nit_normalizado
+                    nit_normalizado=nit_normalizado
                 ).order_by('-anio_fiscal')
                 
                 if empresas_mismo_nit.exists():
@@ -1331,7 +1391,7 @@ class EmpresaDominio(models.Model):
                 if nit_normalizado:
                     # Buscar todas las empresas con el mismo NIT normalizado
                     empresas_mismo_nit = EmpresaServidor.objects.filter(
-                        nit=nit_normalizado
+                        nit_normalizado=nit_normalizado
                     ).order_by('-anio_fiscal')
                     
                     if empresas_mismo_nit.exists():
@@ -2002,6 +2062,93 @@ def user_puede_gestionar_api_keys(self):
         return True
     # Usuarios con permisos de edición en al menos una empresa pueden gestionar API Keys
     return UsuarioEmpresa.objects.filter(usuario=self, puede_editar=True).exists()
+
+# ========== ENTIDADES Y CONTRASEÑAS (HOMOLOGACIÓN BCE) ==========
+
+class Entidad(models.Model):
+    """
+    Entidades externas (bancos, plataformas, servicios, etc.)
+    Homólogo de Entities en BCE
+    """
+    nombre = models.CharField(
+        max_length=100,
+        unique=True,
+        help_text='Nombre de la entidad'
+    )
+    sigla = models.CharField(
+        max_length=50,
+        null=True,
+        blank=True,
+        help_text='Sigla o abreviatura de la entidad'
+    )
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'entidades'
+        verbose_name = 'Entidad'
+        verbose_name_plural = 'Entidades'
+        ordering = ['nombre']
+    
+    def __str__(self):
+        return self.nombre
+
+
+class ContrasenaEntidad(models.Model):
+    """
+    Contraseñas y credenciales de entidades asociadas a empresas.
+    Homólogo de PasswordsEntities en BCE.
+    Se asocia a empresas por NIT normalizado.
+    """
+    empresa_servidor = models.ForeignKey(
+        'EmpresaServidor',
+        on_delete=models.CASCADE,
+        related_name='contrasenas_entidades',
+        null=True,
+        blank=True,
+        help_text='Empresa asociada (opcional, puede estar solo por NIT)'
+    )
+    nit_normalizado = models.CharField(
+        max_length=20,
+        db_index=True,
+        help_text='NIT normalizado de la empresa (sin puntos ni guiones)'
+    )
+    entidad = models.ForeignKey(
+        Entidad,
+        on_delete=models.CASCADE,
+        related_name='contrasenas',
+        help_text='Entidad a la que pertenece esta contraseña'
+    )
+    descripcion = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text='Descripción o notas sobre esta contraseña'
+    )
+    usuario = models.CharField(
+        max_length=100,
+        help_text='Usuario o identificador de acceso'
+    )
+    contrasena = models.CharField(
+        max_length=255,
+        help_text='Contraseña (debería estar encriptada en producción)'
+    )
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'contrasenas_entidades'
+        verbose_name = 'Contraseña de Entidad'
+        verbose_name_plural = 'Contraseñas de Entidades'
+        indexes = [
+            models.Index(fields=['nit_normalizado']),
+            models.Index(fields=['entidad', 'nit_normalizado']),
+        ]
+        ordering = ['entidad__nombre', 'usuario']
+    
+    def __str__(self):
+        return f"{self.entidad.nombre} - {self.usuario} (NIT: {self.nit_normalizado})"
+
 
 # Extender el modelo User
 User.add_to_class('puede_gestionar_api_keys', user_puede_gestionar_api_keys)

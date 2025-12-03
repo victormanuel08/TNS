@@ -79,7 +79,7 @@ def procesar_zip_ruts(zip_file) -> Dict:
                         continue
                     
                     # Verificar si hay empresas asociadas
-                    empresas = EmpresaServidor.objects.filter(nit=nit_normalizado)
+                    empresas = EmpresaServidor.objects.filter(nit_normalizado=nit_normalizado)
                     if not empresas.exists():
                         resultados['fallidos'].append({
                             'archivo': pdf_name,
