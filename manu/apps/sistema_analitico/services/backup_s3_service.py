@@ -80,7 +80,20 @@ class BackupS3Service:
         try:
             self.s3_client = boto3.client('s3', **s3_kwargs)
             self.bucket_name = configuracion_s3.bucket_name
-            logger.info(f"Cliente S3 creado exitosamente. Bucket: {self.bucket_name}")
+            
+            # Verificar que el bucket existe y es accesible
+            try:
+                self.s3_client.head_bucket(Bucket=self.bucket_name)
+                logger.info(f"Cliente S3 creado exitosamente. Bucket: {self.bucket_name} (verificado)")
+            except ClientError as e:
+                error_code = e.response.get('Error', {}).get('Code', 'Unknown')
+                if error_code == '404':
+                    logger.warning(f"⚠️ Bucket '{self.bucket_name}' no existe. Asegúrate de crearlo en Contabo.")
+                elif error_code == '403':
+                    logger.warning(f"⚠️ Sin permisos para acceder al bucket '{self.bucket_name}'. Verifica las credenciales.")
+                else:
+                    logger.warning(f"⚠️ Error verificando bucket '{self.bucket_name}': {error_code}")
+                logger.info(f"Cliente S3 creado. Bucket: {self.bucket_name} (no verificado)")
         except Exception as e:
             logger.error(f"Error creando cliente S3: {e}", exc_info=True)
             raise
@@ -423,11 +436,18 @@ class BackupS3Service:
             ruta_s3 = self.obtener_ruta_s3(empresa, nombre_archivo)
             
             # Subir archivo
+            # Nota: Contabo S3 puede no soportar ServerSideEncryption, así que lo removemos
+            # Si necesitas encriptación, hazlo localmente antes de subir
+            extra_args = {}
+            # Solo agregar metadata si es necesario
+            # extra_args['Metadata'] = {'empresa': empresa.nombre}
+            
+            logger.debug(f"Subiendo archivo a S3: bucket={self.bucket_name}, key={ruta_s3}")
             self.s3_client.upload_file(
                 ruta_archivo_local,
                 self.bucket_name,
                 ruta_s3,
-                ExtraArgs={'ServerSideEncryption': 'AES256'}  # Encriptación en el servidor
+                ExtraArgs=extra_args if extra_args else None
             )
             
             logger.info(f"Backup subido exitosamente a S3: {ruta_s3}")

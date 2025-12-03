@@ -29,7 +29,7 @@ S3_CONFIG = {
     'region': 'us-central-1',  # United States (Central) - Contabo
     'access_key_id': '3e673f951c2da05cf2b7a7798369c889',  # Credenciales de Contabo Object Storage
     'secret_access_key': 'b7052f69bb63b32b821ee2d79b0a8d4c',  # Credenciales de Contabo Object Storage
-    'endpoint_url': 'https://s3.contabo.com',  # Endpoint de Contabo Object Storage (S3-compatible)
+    'endpoint_url': 'https://usc1.contabostorage.com',  # Endpoint de Contabo Object Storage (S3-compatible) - US Central 1
     'activo': True
 }
 
