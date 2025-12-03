@@ -438,16 +438,16 @@ class BackupS3Service:
             # Subir archivo
             # Nota: Contabo S3 puede no soportar ServerSideEncryption, así que lo removemos
             # Si necesitas encriptación, hazlo localmente antes de subir
-            extra_args = {}
-            # Solo agregar metadata si es necesario
-            # extra_args['Metadata'] = {'empresa': empresa.nombre}
+            # No pasar ExtraArgs si está vacío (igual que en el test que funciona)
             
             logger.debug(f"Subiendo archivo a S3: bucket={self.bucket_name}, key={ruta_s3}")
+            logger.debug(f"   Archivo local: {ruta_archivo_local} ({os.path.getsize(ruta_archivo_local)} bytes)")
+            
+            # Usar upload_file sin ExtraArgs (igual que el test exitoso)
             self.s3_client.upload_file(
                 ruta_archivo_local,
                 self.bucket_name,
-                ruta_s3,
-                ExtraArgs=extra_args if extra_args else None
+                ruta_s3
             )
             
             logger.info(f"Backup subido exitosamente a S3: {ruta_s3}")
