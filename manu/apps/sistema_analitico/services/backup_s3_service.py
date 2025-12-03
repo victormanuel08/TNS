@@ -341,25 +341,53 @@ class BackupS3Service:
             # Monitorear el proceso y mostrar progreso cada 30 segundos
             inicio = time.time()
             ultimo_log = inicio
-            timeout_total = 1800  # 30 minutos máximo
+            ultimo_tamano = 0
+            timeout_total = 600  # 10 minutos máximo (reducido de 30)
+            timeout_sin_progreso = 300  # 5 minutos sin crecimiento del archivo = colgado
             
             while True:
                 # Verificar si terminó
                 if proceso.poll() is not None:
                     break
                 
-                # Verificar timeout
                 tiempo_transcurrido = time.time() - inicio
+                
+                # Verificar timeout total
                 if tiempo_transcurrido > timeout_total:
                     proceso.kill()
-                    logger.error(f"⏱️ Timeout: El backup tardó más de {timeout_total//60} minutos")
+                    logger.error(f"⏱️ Timeout total: El backup tardó más de {timeout_total//60} minutos")
                     return False, None, None
+                
+                # Verificar si el archivo está creciendo (detectar procesos colgados)
+                if os.path.exists(ruta_temporal):
+                    tamano_actual = os.path.getsize(ruta_temporal)
+                    if tamano_actual > ultimo_tamano:
+                        # El archivo está creciendo, resetear contador
+                        ultimo_tamano = tamano_actual
+                        ultimo_progreso = time.time()
+                    else:
+                        # El archivo no está creciendo
+                        if 'ultimo_progreso' not in locals():
+                            ultimo_progreso = time.time()
+                        tiempo_sin_progreso = time.time() - ultimo_progreso
+                        if tiempo_sin_progreso > timeout_sin_progreso:
+                            proceso.kill()
+                            logger.error(f"⏱️ Timeout sin progreso: El archivo no ha crecido en {timeout_sin_progreso//60} minutos. Proceso probablemente colgado.")
+                            logger.error(f"   Tamaño del archivo: {tamano_actual} bytes (sin cambios)")
+                            return False, None, None
+                else:
+                    # Archivo no existe aún, dar tiempo inicial
+                    if tiempo_transcurrido > 60:  # Si pasó 1 minuto y no existe el archivo
+                        proceso.kill()
+                        logger.error(f"⏱️ Timeout: El archivo de backup no se creó después de 1 minuto")
+                        return False, None, None
                 
                 # Mostrar progreso cada 30 segundos
                 if time.time() - ultimo_log >= 30:
                     minutos = int(tiempo_transcurrido // 60)
                     segundos = int(tiempo_transcurrido % 60)
-                    logger.info(f"⏳ Backup en progreso... Tiempo transcurrido: {minutos}m {segundos}s")
+                    tamano_mb = ultimo_tamano / (1024 * 1024) if 'ultimo_tamano' in locals() else 0
+                    logger.info(f"⏳ Backup en progreso... Tiempo: {minutos}m {segundos}s, Tamaño: {tamano_mb:.2f} MB")
                     ultimo_log = time.time()
                 
                 time.sleep(2)  # Verificar cada 2 segundos
