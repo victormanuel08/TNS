@@ -482,6 +482,51 @@ class APIKeyClienteSerializer(serializers.ModelSerializer):
         return obj.esta_expirada()
 
 
+class APIKeyNITCalendarioSerializer(serializers.ModelSerializer):
+    """Serializer para NITs de RUTs asociados a API Keys para calendario tributario"""
+    rut_razon_social = serializers.SerializerMethodField()
+    rut_tipo_contribuyente = serializers.SerializerMethodField()
+    
+    class Meta:
+        from .models import APIKeyNITCalendario
+        model = APIKeyNITCalendario
+        fields = [
+            'id', 'api_key', 'nit_normalizado', 'rut', 'rut_razon_social',
+            'rut_tipo_contribuyente', 'fecha_asociacion', 'activo'
+        ]
+        read_only_fields = ['id', 'fecha_asociacion']
+    
+    def get_rut_razon_social(self, obj):
+        """Obtener razón social del RUT si existe"""
+        if obj.rut:
+            return obj.rut.razon_social
+        return None
+    
+    def get_rut_tipo_contribuyente(self, obj):
+        """Obtener tipo de contribuyente del RUT si existe"""
+        if obj.rut:
+            return obj.rut.tipo_contribuyente
+        return None
+
+
+class AsociarNITCalendarioSerializer(serializers.Serializer):
+    """Serializer para asociar NITs de RUTs a una API Key"""
+    nits = serializers.ListField(
+        child=serializers.CharField(max_length=20),
+        help_text="Lista de NITs (pueden tener formato, se normalizarán automáticamente)"
+    )
+    
+    def validate_nits(self, value):
+        """Normalizar NITs"""
+        import re
+        nits_normalizados = []
+        for nit in value:
+            nit_normalizado = re.sub(r"\D", "", str(nit))
+            if nit_normalizado and len(nit_normalizado) >= 9:
+                nits_normalizados.append(nit_normalizado)
+        return nits_normalizados
+
+
 class GenerarAPIKeySerializer(serializers.Serializer):
     """Serializer para generar API Key"""
     nit = serializers.CharField(required=True, help_text="NIT de la empresa (sin puntos ni guiones)")

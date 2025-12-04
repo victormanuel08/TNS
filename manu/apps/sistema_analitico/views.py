@@ -610,7 +610,31 @@ class RUTViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
         # Solo superusuarios pueden ver todos los RUTs
         if not self.request.user.is_superuser:
             return RUT.objects.none()
-        return RUT.objects.all().prefetch_related('establecimientos').order_by('-fecha_actualizacion')
+        
+        queryset = RUT.objects.all().prefetch_related('establecimientos')
+        
+        # Soporte para búsqueda
+        search = self.request.query_params.get('search', '').strip()
+        if search:
+            from django.db.models import Q
+            # Buscar por NIT normalizado o razón social
+            queryset = queryset.filter(
+                Q(nit_normalizado__icontains=search) |
+                Q(nit__icontains=search) |
+                Q(razon_social__icontains=search) |
+                Q(nombre_comercial__icontains=search)
+            )
+        
+        # Límite opcional
+        limit = self.request.query_params.get('limit')
+        if limit:
+            try:
+                limit_int = int(limit)
+                queryset = queryset[:limit_int]
+            except ValueError:
+                pass
+        
+        return queryset.order_by('-fecha_actualizacion')
     
     @action(detail=False, methods=['post'], url_path='subir-pdf', parser_classes=[MultiPartParser, FormParser, JSONParser])
     def subir_pdf(self, request):
@@ -1058,32 +1082,62 @@ class CalendarioTributarioViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
         fecha_hasta_str = request.query_params.get('fecha_hasta')
         tipo_regimen = request.query_params.get('tipo_regimen')
         
-        # Si tiene API Key y no especificó empresa/nit, retornar eventos de TODAS sus empresas
+        # Si tiene API Key y no especificó empresa/nit, retornar eventos de TODAS sus empresas + NITs de RUTs
         if tiene_api_key and not es_superusuario:
             empresas_autorizadas = request.empresas_autorizadas
+            cliente_api = request.cliente_api
             
-            # Si no especificó nit ni empresa_id, retornar eventos de todas sus empresas
+            # Si no especificó nit ni empresa_id, retornar eventos de:
+            # 1. Empresas asociadas (EmpresaServidor)
+            # 2. NITs de RUTs asociados (APIKeyNITCalendario)
+            # DISTINCT para evitar duplicados
             if not nit and not empresa_id:
                 todos_eventos = []
+                nits_consultados = set()
+                
+                # 1. Eventos de empresas asociadas
                 for empresa in empresas_autorizadas:
-                    eventos_empresa = obtener_eventos_para_empresa(
-                        empresa.id,
-                        fecha_desde=fecha_desde if fecha_desde else None,
-                        fecha_hasta=fecha_hasta if fecha_hasta else None
+                    if empresa.nit_normalizado not in nits_consultados:
+                        eventos_empresa = obtener_eventos_para_empresa(
+                            empresa.id,
+                            fecha_desde=fecha_desde if fecha_desde else None,
+                            fecha_hasta=fecha_hasta if fecha_hasta else None
+                        )
+                        todos_eventos.extend(eventos_empresa)
+                        nits_consultados.add(empresa.nit_normalizado)
+                
+                # 2. Eventos de NITs de RUTs asociados (solo si no están ya en empresas)
+                from .models import APIKeyNITCalendario
+                nits_ruts = APIKeyNITCalendario.objects.filter(
+                    api_key=cliente_api,
+                    activo=True
+                ).exclude(
+                    nit_normalizado__in=nits_consultados
+                ).values_list('nit_normalizado', flat=True).distinct()
+                
+                for nit_rut in nits_ruts:
+                    eventos_rut = obtener_eventos_calendario_tributario(
+                        nit=nit_rut,
+                        tipo_regimen=tipo_regimen,
+                        fecha_desde=fecha_desde,
+                        fecha_hasta=fecha_hasta
                     )
-                    todos_eventos.extend(eventos_empresa)
+                    todos_eventos.extend(eventos_rut)
+                    nits_consultados.add(nit_rut)
                 
                 return Response({
                     'eventos': todos_eventos,
                     'total': len(todos_eventos),
+                    'nits_consultados': len(nits_consultados),
                     'empresas_consultadas': empresas_autorizadas.count(),
+                    'nits_ruts_consultados': len(nits_ruts),
                     'filtros': {
                         'nit': None,
                         'empresa_id': None,
                         'fecha_desde': fecha_desde_str,
                         'fecha_hasta': fecha_hasta_str,
                         'tipo_regimen': tipo_regimen,
-                        'modo': 'todas_las_empresas'
+                        'modo': 'todas_las_empresas_y_ruts'
                     }
                 }, status=status.HTTP_200_OK)
             
@@ -1101,12 +1155,25 @@ class CalendarioTributarioViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
                         {'error': 'empresa_id debe ser un número'},
                         status=status.HTTP_400_BAD_REQUEST
                     )
-            # Si especificó nit, validar que esté autorizada
+            # Si especificó nit, validar que esté autorizada (empresa o RUT asociado)
             elif nit:
                 nit_normalizado = ''.join(c for c in str(nit) if c.isdigit())
-                if not empresas_autorizadas.filter(nit_normalizado=nit_normalizado).exists():
+                cliente_api = request.cliente_api
+                
+                # Verificar si está en empresas asociadas
+                tiene_empresa = empresas_autorizadas.filter(nit_normalizado=nit_normalizado).exists()
+                
+                # Verificar si está en NITs de RUTs asociados
+                from .models import APIKeyNITCalendario
+                tiene_rut = APIKeyNITCalendario.objects.filter(
+                    api_key=cliente_api,
+                    nit_normalizado=nit_normalizado,
+                    activo=True
+                ).exists()
+                
+                if not tiene_empresa and not tiene_rut:
                     return Response(
-                        {'error': 'No tienes permiso para consultar eventos de esta empresa'},
+                        {'error': 'No tienes permiso para consultar eventos de este NIT. Debe estar asociado como empresa o RUT.'},
                         status=status.HTTP_403_FORBIDDEN
                     )
         # Si es superusuario sin API Key, puede consultar cualquier empresa pero debe especificarla
@@ -1225,32 +1292,61 @@ class CalendarioTributarioViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
         
         nits = request.data.get('nits', [])
         
-        # Si tiene API Key y no especificó NITs, usar TODAS sus empresas automáticamente
+        # Si tiene API Key y no especificó NITs, usar TODAS sus empresas + NITs de RUTs automáticamente
         if tiene_api_key and not es_superusuario:
             empresas_autorizadas = request.empresas_autorizadas
+            cliente_api = request.cliente_api
             
-            # Si no especificó nits, usar todas las empresas autorizadas
+            # Si no especificó nits, usar todas las empresas autorizadas + NITs de RUTs
             if not nits or len(nits) == 0:
-                nits = list(empresas_autorizadas.values_list('nit_normalizado', flat=True))
+                # NITs de empresas asociadas
+                nits_empresas = set(empresas_autorizadas.values_list('nit_normalizado', flat=True))
+                
+                # NITs de RUTs asociados
+                from .models import APIKeyNITCalendario
+                nits_ruts = set(APIKeyNITCalendario.objects.filter(
+                    api_key=cliente_api,
+                    activo=True
+                ).values_list('nit_normalizado', flat=True))
+                
+                # Combinar y obtener únicos
+                nits = list(nits_empresas | nits_ruts)
+                
                 if len(nits) == 0:
                     return Response(
-                        {'error': 'Tu API Key no tiene empresas asociadas'},
+                        {'error': 'Tu API Key no tiene empresas ni NITs de RUTs asociados'},
                         status=status.HTTP_400_BAD_REQUEST
                     )
             else:
-                # Si especificó NITs, filtrar solo los autorizados
+                # Si especificó NITs, filtrar solo los autorizados (empresas o RUTs)
                 if not isinstance(nits, list):
                     return Response(
                         {'error': 'El campo "nits" debe ser una lista'},
                         status=status.HTTP_400_BAD_REQUEST
                     )
                 
-                nits_autorizados = set(empresas_autorizadas.values_list('nit_normalizado', flat=True))
-                nits_filtrados = [nit for nit in nits if ''.join(c for c in str(nit) if c.isdigit()) in nits_autorizados]
+                # NITs autorizados: empresas + RUTs
+                nits_empresas = set(empresas_autorizadas.values_list('nit_normalizado', flat=True))
+                from .models import APIKeyNITCalendario
+                nits_ruts = set(APIKeyNITCalendario.objects.filter(
+                    api_key=cliente_api,
+                    activo=True
+                ).values_list('nit_normalizado', flat=True))
+                nits_autorizados = nits_empresas | nits_ruts
+                
+                # Normalizar y filtrar NITs proporcionados
+                nits_filtrados = []
+                for nit in nits:
+                    nit_normalizado = ''.join(c for c in str(nit) if c.isdigit())
+                    if nit_normalizado in nits_autorizados:
+                        nits_filtrados.append(nit_normalizado)
+                
+                # Eliminar duplicados
+                nits_filtrados = list(set(nits_filtrados))
                 
                 if len(nits_filtrados) == 0:
                     return Response(
-                        {'error': 'Ninguno de los NITs proporcionados está asociado a tu API Key'},
+                        {'error': 'Ninguno de los NITs proporcionados está asociado a tu API Key (como empresa o RUT)'},
                         status=status.HTTP_403_FORBIDDEN
                     )
                 
@@ -5179,6 +5275,95 @@ class APIKeyManagementViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
         }
         
         return Response(stats)
+    
+    @action(detail=True, methods=['get'], url_path='nits-calendario')
+    def listar_nits_calendario(self, request, pk=None):
+        """Lista los NITs de RUTs asociados a una API Key para calendario tributario"""
+        from .models import APIKeyNITCalendario
+        from .serializers import APIKeyNITCalendarioSerializer
+        
+        try:
+            api_key = self.get_queryset().get(pk=pk)
+            nits_calendario = APIKeyNITCalendario.objects.filter(api_key=api_key).select_related('rut')
+            serializer = APIKeyNITCalendarioSerializer(nits_calendario, many=True)
+            
+            return Response({
+                'api_key_id': api_key.id,
+                'api_key_nombre': api_key.nombre_cliente,
+                'total_nits': nits_calendario.count(),
+                'nits': serializer.data
+            })
+        except APIKeyCliente.DoesNotExist:
+            return Response({'error': 'API Key no encontrada'}, status=404)
+    
+    @action(detail=True, methods=['post'], url_path='nits-calendario/asociar')
+    def asociar_nits_calendario(self, request, pk=None):
+        """Asocia NITs de RUTs a una API Key para calendario tributario"""
+        from .models import APIKeyNITCalendario, RUT
+        from .serializers import AsociarNITCalendarioSerializer
+        
+        try:
+            api_key = self.get_queryset().get(pk=pk)
+            serializer = AsociarNITCalendarioSerializer(data=request.data)
+            
+            if not serializer.is_valid():
+                return Response(serializer.errors, status=400)
+            
+            nits_normalizados = serializer.validated_data['nits']
+            nits_asociados = []
+            nits_no_encontrados = []
+            
+            for nit_normalizado in nits_normalizados:
+                # Buscar RUT si existe
+                rut = None
+                try:
+                    rut = RUT.objects.get(nit_normalizado=nit_normalizado)
+                except RUT.DoesNotExist:
+                    pass
+                
+                # Crear o actualizar asociación
+                nit_calendario, created = APIKeyNITCalendario.objects.update_or_create(
+                    api_key=api_key,
+                    nit_normalizado=nit_normalizado,
+                    defaults={
+                        'rut': rut,
+                        'activo': True
+                    }
+                )
+                nits_asociados.append({
+                    'nit_normalizado': nit_normalizado,
+                    'rut_existe': rut is not None,
+                    'razon_social': rut.razon_social if rut else None,
+                    'creado': created
+                })
+            
+            return Response({
+                'mensaje': f'{len(nits_asociados)} NITs asociados exitosamente',
+                'nits_asociados': nits_asociados,
+                'nits_no_encontrados': nits_no_encontrados
+            })
+            
+        except APIKeyCliente.DoesNotExist:
+            return Response({'error': 'API Key no encontrada'}, status=404)
+    
+    @action(detail=True, methods=['delete'], url_path='nits-calendario/(?P<nit_id>[^/.]+)')
+    def eliminar_nit_calendario(self, request, pk=None, nit_id=None):
+        """Elimina un NIT de RUT asociado a una API Key"""
+        from .models import APIKeyNITCalendario
+        
+        try:
+            api_key = self.get_queryset().get(pk=pk)
+            nit_calendario = APIKeyNITCalendario.objects.get(api_key=api_key, id=nit_id)
+            nit_normalizado = nit_calendario.nit_normalizado
+            nit_calendario.delete()
+            
+            return Response({
+                'mensaje': f'NIT {nit_normalizado} eliminado de la API Key'
+            })
+        except APIKeyCliente.DoesNotExist:
+            return Response({'error': 'API Key no encontrada'}, status=404)
+        except APIKeyNITCalendario.DoesNotExist:
+            return Response({'error': 'NIT no encontrado en esta API Key'}, status=404)
     
     @action(detail=False, methods=['post'], authentication_classes=[], permission_classes=[AllowAny])
     def validar_api_key(self, request):

@@ -456,6 +456,7 @@
             @view-empresas="viewApiKeyEmpresas"
             @regenerate="regenerateApiKey"
             @toggle-status="toggleApiKeyStatus"
+            @manage-calendario-nits="manageCalendarioNits"
             @revoke="revokeApiKey"
           />
         </div>
@@ -2382,6 +2383,162 @@
       </div>
     </div>
 
+    <!-- Modal: Gestionar NITs de Calendario -->
+    <div v-if="showManageCalendarioNits" class="modal-overlay" @click="showManageCalendarioNits = false">
+      <div class="modal-content" @click.stop style="max-width: 900px; max-height: 90vh; overflow-y: auto;">
+        <div class="modal-header">
+          <div>
+            <h2>Gestionar NITs de Calendario Tributario</h2>
+            <p v-if="selectedApiKeyForCalendario" class="modal-subtitle">
+              API Key: {{ apiKeys.find(k => k.id === selectedApiKeyForCalendario)?.nombre_cliente }}
+            </p>
+          </div>
+          <button class="modal-close" @click="showManageCalendarioNits = false">×</button>
+        </div>
+        
+        <div class="modal-body">
+          <!-- Buscar RUTs -->
+          <div class="form-group" style="margin-bottom: 2rem;">
+            <label>Buscar RUTs por NIT o Razón Social</label>
+            <div style="display: flex; gap: 0.5rem;">
+              <input
+                v-model="rutSearchQuery"
+                type="text"
+                class="form-input"
+                placeholder="Ej: 900869750 o Nombre de empresa..."
+                @keyup.enter="searchRuts"
+              />
+              <button
+                class="btn-primary"
+                @click="searchRuts"
+                :disabled="searchingRuts || !rutSearchQuery.trim()"
+              >
+                <span v-if="searchingRuts">⟳</span>
+                <span v-else>🔍</span>
+                Buscar
+              </button>
+            </div>
+            <small>Busca RUTs para asociarlos a esta API Key. Los NITs asociados aparecerán en el calendario tributario.</small>
+          </div>
+
+          <!-- Resultados de búsqueda -->
+          <div v-if="rutSearchResults.length > 0" style="margin-bottom: 2rem;">
+            <h3 style="margin-bottom: 1rem;">Resultados de Búsqueda</h3>
+            <div style="max-height: 200px; overflow-y: auto; border: 1px solid #e5e7eb; border-radius: 0.5rem; padding: 0.5rem;">
+              <label
+                v-for="rut in rutSearchResults"
+                :key="rut.id"
+                style="display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem; cursor: pointer; border-radius: 0.25rem;"
+                :style="{ background: selectedRutNits.includes(rut.nit_normalizado) ? '#dbeafe' : 'transparent' }"
+                @mouseenter="$event.currentTarget.style.background = '#f3f4f6'"
+                @mouseleave="$event.currentTarget.style.background = selectedRutNits.includes(rut.nit_normalizado) ? '#dbeafe' : 'transparent'"
+              >
+                <input
+                  type="checkbox"
+                  :value="rut.nit_normalizado"
+                  v-model="selectedRutNits"
+                />
+                <div style="flex: 1;">
+                  <strong>{{ rut.razon_social }}</strong>
+                  <div style="font-size: 0.875rem; color: #6b7280;">
+                    NIT: {{ rut.nit }}-{{ rut.dv }} ({{ rut.nit_normalizado }})
+                    <span v-if="rut.tipo_contribuyente" style="margin-left: 0.5rem;">
+                      • {{ rut.tipo_contribuyente === 'persona_natural' ? 'Persona Natural' : 'Persona Jurídica' }}
+                    </span>
+                  </div>
+                </div>
+              </label>
+            </div>
+            <button
+              v-if="selectedRutNits.length > 0"
+              class="btn-primary"
+              style="margin-top: 1rem;"
+              @click="asociarNitsCalendario"
+              :disabled="loadingCalendarioNits"
+            >
+              <span v-if="loadingCalendarioNits">⟳</span>
+              <span v-else>+</span>
+              Asociar {{ selectedRutNits.length }} NIT{{ selectedRutNits.length > 1 ? 's' : '' }}
+            </button>
+          </div>
+
+          <!-- NITs asociados -->
+          <div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+              <h3>NITs Asociados ({{ calendarioNits.length }})</h3>
+              <button
+                class="btn-secondary"
+                @click="loadCalendarioNits"
+                :disabled="loadingCalendarioNits"
+              >
+                <span v-if="loadingCalendarioNits">⟳</span>
+                <span v-else>↻</span>
+                Actualizar
+              </button>
+            </div>
+            
+            <div v-if="loadingCalendarioNits" class="loading-state">
+              <p>Cargando NITs...</p>
+            </div>
+            
+            <div v-else-if="calendarioNits.length === 0" class="empty-state">
+              <p>No hay NITs asociados para calendario tributario</p>
+            </div>
+            
+            <div v-else style="border: 1px solid #e5e7eb; border-radius: 0.5rem; overflow: hidden;">
+              <table style="width: 100%; border-collapse: collapse;">
+                <thead style="background: #f9fafb;">
+                  <tr>
+                    <th style="padding: 0.75rem; text-align: left; border-bottom: 1px solid #e5e7eb;">NIT</th>
+                    <th style="padding: 0.75rem; text-align: left; border-bottom: 1px solid #e5e7eb;">Razón Social</th>
+                    <th style="padding: 0.75rem; text-align: left; border-bottom: 1px solid #e5e7eb;">Tipo</th>
+                    <th style="padding: 0.75rem; text-align: left; border-bottom: 1px solid #e5e7eb;">Fecha</th>
+                    <th style="padding: 0.75rem; text-align: center; border-bottom: 1px solid #e5e7eb;">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="nit in calendarioNits"
+                    :key="nit.id"
+                    style="border-bottom: 1px solid #e5e7eb;"
+                  >
+                    <td style="padding: 0.75rem;">
+                      <code>{{ nit.nit_normalizado }}</code>
+                    </td>
+                    <td style="padding: 0.75rem;">
+                      {{ nit.rut_razon_social || 'N/A' }}
+                    </td>
+                    <td style="padding: 0.75rem;">
+                      <span v-if="nit.rut_tipo_contribuyente" class="badge">
+                        {{ nit.rut_tipo_contribuyente === 'persona_natural' ? 'PN' : 'PJ' }}
+                      </span>
+                      <span v-else class="text-muted">-</span>
+                    </td>
+                    <td style="padding: 0.75rem; font-size: 0.875rem; color: #6b7280;">
+                      {{ formatDate(nit.fecha_asociacion) }}
+                    </td>
+                    <td style="padding: 0.75rem; text-align: center;">
+                      <button
+                        class="btn-tiny btn-danger"
+                        @click="eliminarNitCalendario(nit.id)"
+                        title="Eliminar"
+                      >
+                        🗑️
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        
+        <div class="modal-actions">
+          <button class="btn-secondary" @click="showManageCalendarioNits = false">Cerrar</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Modal: Crear Dominio -->
     <div v-if="showCreateDominio" class="modal-overlay" @click="showCreateDominio = false">
       <div class="modal-content" @click.stop>
@@ -3431,6 +3588,14 @@ const showEditServer = ref(false)
 const editingServer = ref<Servidor | null>(null)
 const showCreateVpn = ref(false)
 const showCreateApiKey = ref(false)
+const showManageCalendarioNits = ref(false)
+const selectedApiKeyForCalendario = ref<number | null>(null)
+const calendarioNits = ref<any[]>([])
+const loadingCalendarioNits = ref(false)
+const searchingRuts = ref(false)
+const rutSearchQuery = ref('')
+const rutSearchResults = ref<any[]>([])
+const selectedRutNits = ref<string[]>([])
 const creatingServer = ref(false)
 const creatingVpn = ref(false)
 const creatingApiKey = ref(false)
@@ -5579,6 +5744,161 @@ const viewApiKeyEmpresas = async (keyId: number) => {
     confirmButtonText: 'Cerrar',
     customClass: { container: 'swal-z-index-fix' }
   })
+}
+
+const manageCalendarioNits = async (keyId: number) => {
+  selectedApiKeyForCalendario.value = keyId
+  showManageCalendarioNits.value = true
+  selectedRutNits.value = []
+  rutSearchResults.value = []
+  rutSearchQuery.value = ''
+  await loadCalendarioNits()
+}
+
+const loadCalendarioNits = async () => {
+  if (!selectedApiKeyForCalendario.value) return
+  
+  loadingCalendarioNits.value = true
+  try {
+    const response = await api.get(`/api/api-keys/${selectedApiKeyForCalendario.value}/nits-calendario/`)
+    calendarioNits.value = response.nits || []
+  } catch (error: any) {
+    console.error('Error cargando NITs de calendario:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al cargar NITs de calendario',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    loadingCalendarioNits.value = false
+  }
+}
+
+const searchRuts = async () => {
+  if (!rutSearchQuery.value.trim()) return
+  
+  searchingRuts.value = true
+  try {
+    const query = rutSearchQuery.value.trim()
+    const response = await api.get('/api/ruts/', {
+      params: {
+        search: query,
+        limit: 50
+      }
+    })
+    
+    // Si es un array, usar directamente; si es objeto con results, usar results
+    const ruts = Array.isArray(response) ? response : (response.results || [])
+    
+    rutSearchResults.value = ruts.map((rut: any) => ({
+      id: rut.id,
+      nit: rut.nit,
+      nit_normalizado: rut.nit_normalizado,
+      razon_social: rut.razon_social,
+      tipo_contribuyente: rut.tipo_contribuyente,
+      dv: rut.dv
+    }))
+    
+    // Filtrar NITs que ya están asociados
+    const nitsAsociados = new Set(calendarioNits.value.map((n: any) => n.nit_normalizado))
+    rutSearchResults.value = rutSearchResults.value.filter((rut: any) => !nitsAsociados.has(rut.nit_normalizado))
+    
+  } catch (error: any) {
+    console.error('Error buscando RUTs:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al buscar RUTs',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    searchingRuts.value = false
+  }
+}
+
+const asociarNitsCalendario = async () => {
+  if (!selectedApiKeyForCalendario.value || selectedRutNits.value.length === 0) return
+  
+  loadingCalendarioNits.value = true
+  try {
+    await api.post(`/api/api-keys/${selectedApiKeyForCalendario.value}/nits-calendario/asociar/`, {
+      nits: selectedRutNits.value
+    })
+    
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: '¡Éxito!',
+      text: `${selectedRutNits.value.length} NIT(s) asociado(s) exitosamente`,
+      icon: 'success',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    
+    selectedRutNits.value = []
+    rutSearchResults.value = []
+    rutSearchQuery.value = ''
+    await loadCalendarioNits()
+  } catch (error: any) {
+    console.error('Error asociando NITs:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al asociar NITs',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    loadingCalendarioNits.value = false
+  }
+}
+
+const eliminarNitCalendario = async (nitId: number) => {
+  if (!selectedApiKeyForCalendario.value) return
+  
+  const Swal = (await import('sweetalert2')).default
+  const result = await Swal.fire({
+    title: '¿Eliminar NIT?',
+    text: '¿Estás seguro de que deseas eliminar este NIT del calendario tributario?',
+    icon: 'warning',
+    showCancelButton: true,
+    confirmButtonText: 'Sí, eliminar',
+    cancelButtonText: 'Cancelar',
+    customClass: { container: 'swal-z-index-fix' }
+  })
+  
+  if (result.isConfirmed) {
+    loadingCalendarioNits.value = true
+    try {
+      await api.delete(`/api/api-keys/${selectedApiKeyForCalendario.value}/nits-calendario/${nitId}/`)
+      
+      await Swal.fire({
+        title: '¡Eliminado!',
+        text: 'NIT eliminado exitosamente',
+        icon: 'success',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' }
+      })
+      
+      await loadCalendarioNits()
+    } catch (error: any) {
+      console.error('Error eliminando NIT:', error)
+      await Swal.fire({
+        title: 'Error',
+        text: error?.data?.error || error?.message || 'Error al eliminar NIT',
+        icon: 'error',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' }
+      })
+    } finally {
+      loadingCalendarioNits.value = false
+    }
+  }
 }
 
 // ========== USER MANAGEMENT FUNCTIONS ==========

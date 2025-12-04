@@ -1221,6 +1221,68 @@ class APIKeyCliente(models.Model):
         """Renueva la API Key por más días"""
         self.fecha_caducidad = timezone.now() + timedelta(days=dias)
         self.save()
+    
+    def obtener_nits_calendario_tributario(self):
+        """
+        Obtiene todos los NITs únicos para calendario tributario:
+        - NITs de empresas asociadas (EmpresaServidor)
+        - NITs de RUTs asociados a esta API Key (APIKeyNITCalendario)
+        Retorna un QuerySet de NITs normalizados únicos.
+        """
+        from django.db.models import Q
+        
+        # NITs de empresas asociadas
+        nits_empresas = self.empresas_asociadas.values_list('nit_normalizado', flat=True).distinct()
+        
+        # NITs de RUTs asociados
+        nits_ruts = self.nits_calendario.values_list('nit_normalizado', flat=True).distinct()
+        
+        # Combinar y obtener únicos
+        todos_nits = set(list(nits_empresas) + list(nits_ruts))
+        
+        return sorted(list(todos_nits))
+
+
+class APIKeyNITCalendario(models.Model):
+    """
+    Relación entre API Keys y NITs de RUTs para calendario tributario.
+    Permite asociar NITs de RUTs (que no tienen empresa en servidor) a una API Key
+    para consultar eventos del calendario tributario.
+    NO afecta la lógica de cajas autopago (que solo usa empresas_asociadas).
+    """
+    api_key = models.ForeignKey(
+        APIKeyCliente,
+        on_delete=models.CASCADE,
+        related_name='nits_calendario',
+        help_text='API Key a la que se asocia este NIT para calendario tributario'
+    )
+    nit_normalizado = models.CharField(
+        max_length=20,
+        db_index=True,
+        help_text='NIT normalizado (sin puntos ni guiones) del RUT'
+    )
+    rut = models.ForeignKey(
+        'RUT',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='api_keys_calendario',
+        help_text='RUT asociado (opcional, para referencia)'
+    )
+    fecha_asociacion = models.DateTimeField(auto_now_add=True)
+    activo = models.BooleanField(default=True, help_text='Indica si esta asociación está activa')
+    
+    class Meta:
+        db_table = 'api_key_nits_calendario'
+        unique_together = ['api_key', 'nit_normalizado']
+        indexes = [
+            models.Index(fields=['api_key', 'nit_normalizado']),
+            models.Index(fields=['nit_normalizado']),
+        ]
+    
+    def __str__(self):
+        return f"{self.api_key.nombre_cliente} - NIT: {self.nit_normalizado}"
+
 
 class EmpresaPersonalizacion(models.Model):
     """

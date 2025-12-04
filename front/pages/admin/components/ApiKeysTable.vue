@@ -83,6 +83,10 @@
                 {{ key.activa ? '⏸️ Desactivar' : '▶️ Activar' }}
               </DropdownItem>
               <DropdownDivider />
+              <DropdownItem @click="$emit('manage-calendario-nits', key.id)">
+                📅 Gestionar NITs Calendario
+              </DropdownItem>
+              <DropdownDivider />
               <DropdownItem danger @click="$emit('revoke', key.id)">
                 🗑️ Revocar
               </DropdownItem>
@@ -113,6 +117,7 @@ defineEmits<{
   'view-empresas': [keyId: number]
   regenerate: [keyId: number]
   'toggle-status': [keyId: number, newStatus: boolean]
+  'manage-calendario-nits': [keyId: number]
   revoke: [keyId: number]
 }>()
 </script>
