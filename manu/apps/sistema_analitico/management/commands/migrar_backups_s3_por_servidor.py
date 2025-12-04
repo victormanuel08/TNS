@@ -36,7 +36,7 @@ except Exception as e:
     print(f"❌ Error configurando Django: {e}")
     sys.exit(1)
 
-from apps.sistema_analitico.models import EmpresaServidor, ConfiguracionS3, BackupS3
+from apps.sistema_analitico.models import EmpresaServidor, ConfiguracionS3, BackupS3, Servidor
 from apps.sistema_analitico.services.backup_s3_service import BackupS3Service
 from botocore.exceptions import ClientError
 import re
@@ -72,6 +72,16 @@ class Command(BaseCommand):
         
         servicio = BackupS3Service(config_s3)
         
+        # Obtener nombres de servidores conocidos (normalizados)
+        servidores = Servidor.objects.all()
+        nombres_servidores = set()
+        for servidor in servidores:
+            nombre_normalizado = servidor.nombre.replace(' ', '_').replace('/', '_').replace('\\', '_')
+            nombres_servidores.add(nombre_normalizado)
+        
+        self.stdout.write(f"📋 Servidores conocidos: {', '.join(sorted(nombres_servidores)) if nombres_servidores else 'Ninguno'}")
+        self.stdout.write("")
+        
         # Listar todos los objetos en S3 con estructura antigua
         self.stdout.write("📋 Buscando backups con estructura antigua...")
         self.stdout.write("")
@@ -80,32 +90,76 @@ class Command(BaseCommand):
             # Listar todos los objetos en el bucket
             paginator = servicio.s3_client.get_paginator('list_objects_v2')
             objetos_antiguos = []
+            objetos_totales = 0
+            objetos_ignorados = []
             
             for page in paginator.paginate(Bucket=servicio.bucket_name):
                 if 'Contents' in page:
                     for obj in page['Contents']:
+                        objetos_totales += 1
                         key = obj['Key']
+                        
                         # Detectar estructura antigua: {nit}/{anio}/backups/{archivo}
-                        # NO debe empezar con un nombre de servidor conocido
+                        # El primer segmento debe ser solo números (NIT normalizado)
+                        # y NO debe ser un nombre de servidor conocido
                         match = re.match(r'^([^/]+)/(\d+)/backups/(.+)$', key)
                         if match:
-                            nit_anio, anio_str, archivo = match.groups()
-                            # Verificar que no sea estructura nueva (que tendría servidor/nit/anio)
-                            if not re.match(r'^[A-Za-z0-9_]+/\d+/backups/', key):
+                            primer_segmento, anio_str, archivo = match.groups()
+                            
+                            # Verificar que el primer segmento sea solo números (NIT normalizado)
+                            # y que NO sea un nombre de servidor conocido
+                            if primer_segmento.isdigit() and primer_segmento not in nombres_servidores:
                                 objetos_antiguos.append({
                                     'key': key,
-                                    'nit_anio': nit_anio,
+                                    'nit_anio': primer_segmento,
                                     'anio': int(anio_str),
                                     'archivo': archivo,
                                     'size': obj['Size']
                                 })
+                            else:
+                                objetos_ignorados.append({
+                                    'key': key,
+                                    'razon': 'servidor_ conocido' if primer_segmento in nombres_servidores else 'no_es_nit_numerico'
+                                })
+                        elif '/backups/' in key:
+                            # Tiene /backups/ pero no coincide con el patrón esperado
+                            objetos_ignorados.append({
+                                'key': key,
+                                'razon': 'patron_no_coincide'
+                            })
+            
+            self.stdout.write(f"📊 Total de objetos en S3: {objetos_totales}")
+            if objetos_ignorados:
+                self.stdout.write(f"   Objetos ignorados: {len(objetos_ignorados)}")
+                # Mostrar algunos ejemplos de objetos ignorados
+                if len(objetos_ignorados) <= 10:
+                    self.stdout.write("   Ejemplos de objetos ignorados:")
+                    for obj_ign in objetos_ignorados[:5]:
+                        self.stdout.write(f"      - {obj_ign['key']} ({obj_ign['razon']})")
+            self.stdout.write("")
             
             if not objetos_antiguos:
-                self.stdout.write(self.style.SUCCESS("✅ No se encontraron backups con estructura antigua"))
-                self.stdout.write("   Todos los backups ya están en la nueva estructura o no hay backups.")
+                self.stdout.write(self.style.WARNING("⚠️  No se encontraron backups con estructura antigua"))
+                self.stdout.write("")
+                self.stdout.write("   Posibles razones:")
+                self.stdout.write("   - Todos los backups ya están en la nueva estructura")
+                self.stdout.write("   - No hay backups en S3")
+                self.stdout.write("   - Los backups tienen una estructura diferente")
+                self.stdout.write("")
+                if objetos_ignorados:
+                    self.stdout.write("   Ejemplos de objetos encontrados (pero ignorados):")
+                    for obj_ign in objetos_ignorados[:10]:
+                        self.stdout.write(f"      - {obj_ign['key']} ({obj_ign['razon']})")
                 return
             
             self.stdout.write(f"📦 Encontrados {len(objetos_antiguos)} backups con estructura antigua")
+            self.stdout.write("")
+            # Mostrar algunos ejemplos
+            self.stdout.write("   Ejemplos de backups encontrados:")
+            for obj in objetos_antiguos[:5]:
+                self.stdout.write(f"      - {obj['key']} ({obj['size'] / (1024*1024):.2f} MB)")
+            if len(objetos_antiguos) > 5:
+                self.stdout.write(f"      ... y {len(objetos_antiguos) - 5} más")
             self.stdout.write("")
             
             # Agrupar por NIT y año para encontrar la empresa correspondiente
