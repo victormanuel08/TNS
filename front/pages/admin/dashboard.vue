@@ -7007,12 +7007,12 @@ const uploadRUTPDF = async () => {
       headers: {
         'Content-Type': 'multipart/form-data'
       }
-    })
+    }) as any
     
     const Swal = (await import('sweetalert2')).default
     
-    // Verificar que response.data exista
-    if (!response.data) {
+    // Verificar que response exista
+    if (!response) {
       await Swal.fire({
         title: 'Error',
         text: 'No se recibió respuesta del servidor',
@@ -7024,21 +7024,21 @@ const uploadRUTPDF = async () => {
     }
     
     // Si es procesamiento asíncrono (ZIP grande con Celery)
-    if (response.data.procesamiento_asincrono && response.data.task_id) {
+    if (response.procesamiento_asincrono && response.task_id) {
       // Monitorear progreso en tiempo real
-      await monitorearProcesamientoRUTs(response.data.task_id, response.data.total || 0)
+      await monitorearProcesamientoRUTs(response.task_id, response.total || 0)
       return
     }
     
     // Si es ZIP, mostrar resultados masivos (solo si tiene reporte_txt)
-    if (selectedRUTZipFile.value && response.data.reporte_txt) {
-      rutReporteTxt.value = response.data.reporte_txt
+    if (selectedRUTZipFile.value && response.reporte_txt) {
+      rutReporteTxt.value = response.reporte_txt
       
-      const fallidosHtml = response.data.detalles_fallidos && response.data.detalles_fallidos.length > 0
+      const fallidosHtml = response.detalles_fallidos && response.detalles_fallidos.length > 0
         ? `<div style="margin-top: 15px; max-height: 300px; overflow-y: auto; text-align: left;">
-            <strong style="color: #d32f2f;">RUTs Fallidos (${response.data.detalles_fallidos.length}):</strong>
+            <strong style="color: #d32f2f;">RUTs Fallidos (${response.detalles_fallidos.length}):</strong>
             <ul style="margin-top: 10px;">
-              ${response.data.detalles_fallidos.map((f: any) => 
+              ${response.detalles_fallidos.map((f: any) => 
                 `<li><strong>${f.archivo}</strong>: ${f.razon}</li>`
               ).join('')}
             </ul>
@@ -7049,9 +7049,9 @@ const uploadRUTPDF = async () => {
         title: '¡ZIP Procesado!',
         html: `
           <div style="text-align: left;">
-            <p><strong>Total procesados:</strong> ${response.data.total}</p>
-            <p style="color: #4CAF50;"><strong>Exitosos:</strong> ${response.data.exitosos}</p>
-            ${response.data.fallidos > 0 ? `<p style="color: #d32f2f;"><strong>Fallidos:</strong> ${response.data.fallidos}</p>` : ''}
+            <p><strong>Total procesados:</strong> ${response.total}</p>
+            <p style="color: #4CAF50;"><strong>Exitosos:</strong> ${response.exitosos}</p>
+            ${response.fallidos > 0 ? `<p style="color: #d32f2f;"><strong>Fallidos:</strong> ${response.fallidos}</p>` : ''}
             ${fallidosHtml}
             <div style="margin-top: 20px; padding: 10px; background: #f5f5f5; border-radius: 5px;">
               <strong>📄 Reporte TXT generado</strong><br>
@@ -7061,7 +7061,7 @@ const uploadRUTPDF = async () => {
             </div>
           </div>
         `,
-        icon: response.data.fallidos > 0 ? 'warning' : 'success',
+        icon: response.fallidos > 0 ? 'warning' : 'success',
         confirmButtonText: 'Aceptar',
         customClass: { container: 'swal-z-index-fix' },
         width: '700px',
@@ -7084,22 +7084,22 @@ const uploadRUTPDF = async () => {
       // ZIP procesado pero sin reporte_txt (caso raro)
       await Swal.fire({
         title: 'ZIP Procesado',
-        text: response.data?.mensaje || 'El ZIP fue procesado, pero no se generó reporte.',
+        text: response?.mensaje || 'El ZIP fue procesado, pero no se generó reporte.',
         icon: 'warning',
         confirmButtonText: 'Aceptar',
         customClass: { container: 'swal-z-index-fix' }
       })
     } else {
       // PDF individual
-      if (response.data && response.data.rut) {
+      if (response && response.rut) {
         await Swal.fire({
           title: '¡RUT Procesado!',
           html: `
             <div style="text-align: left;">
-              <p><strong>NIT:</strong> ${response.data.rut.nit || 'N/A'}-${response.data.rut.dv || ''}</p>
-              <p><strong>Razón Social:</strong> ${response.data.rut.razon_social || 'N/A'}</p>
-              <p><strong>Empresas asociadas encontradas:</strong> ${response.data.empresas_encontradas || 0}</p>
-              <p style="margin-top: 10px; color: #4CAF50;">${response.data.mensaje || 'RUT procesado exitosamente'}</p>
+              <p><strong>NIT:</strong> ${response.rut.nit || 'N/A'}-${response.rut.dv || ''}</p>
+              <p><strong>Razón Social:</strong> ${response.rut.razon_social || 'N/A'}</p>
+              <p><strong>Empresas asociadas encontradas:</strong> ${response.empresas_encontradas || 0}</p>
+              <p style="margin-top: 10px; color: #4CAF50;">${response.mensaje || 'RUT procesado exitosamente'}</p>
             </div>
           `,
           icon: 'success',
@@ -7109,7 +7109,7 @@ const uploadRUTPDF = async () => {
       } else {
         await Swal.fire({
           title: '¡RUT Procesado!',
-          text: response.data?.mensaje || 'RUT procesado exitosamente',
+          text: response?.mensaje || 'RUT procesado exitosamente',
           icon: 'success',
           confirmButtonText: 'Aceptar',
           customClass: { container: 'swal-z-index-fix' }

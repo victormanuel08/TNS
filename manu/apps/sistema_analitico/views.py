@@ -10607,7 +10607,7 @@ def celery_task_status_view(request, task_id):
     GET /api/celery/task-status/{task_id}/
     """
     from celery.result import AsyncResult
-    from config.celery_app import app as celery_app
+    from config.celery import app as celery_app
     
     try:
         task_result = AsyncResult(task_id, app=celery_app)

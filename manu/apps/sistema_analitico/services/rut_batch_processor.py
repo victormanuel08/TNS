@@ -3,8 +3,11 @@ Servicio para procesar múltiples RUTs desde un archivo ZIP
 """
 import zipfile
 import io
+import threading
 from typing import Dict, List, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from django.core.files.uploadedfile import InMemoryUploadedFile
+from django.db import connection
 from .rut_extractor import extract_rut_data_from_pdf
 
 
@@ -66,8 +69,245 @@ def procesar_zip_ruts(zip_file, task=None) -> Dict:
                 })
                 return resultados
             
-            # Procesar cada PDF
-            for idx, pdf_name in enumerate(pdf_files, 1):
+            # Lock para actualizaciones thread-safe
+            lock = threading.Lock()
+            procesados_count = {'value': 0}
+            
+            def procesar_un_rut(pdf_name: str, idx: int) -> Dict:
+                """
+                Procesa un solo RUT de forma thread-safe.
+                Retorna dict con 'exitoso' o 'fallido' y los datos correspondientes.
+                """
+                # Cada thread necesita su propia conexión de BD
+                connection.close()
+                
+                try:
+                    # Leer PDF del ZIP (thread-safe, zipfile maneja esto internamente)
+                    pdf_data_bytes = zip_ref.read(pdf_name)
+                    
+                    # Crear archivo en memoria
+                    pdf_file = io.BytesIO(pdf_data_bytes)
+                    pdf_file.name = pdf_name
+                    
+                    # Extraer datos del PDF
+                    try:
+                        rut_data = extract_rut_data_from_pdf(pdf_file)
+                    except Exception as e:
+                        return {
+                            'tipo': 'fallido',
+                            'archivo': pdf_name,
+                            'razon': f'Error al extraer datos del PDF: {str(e)}'
+                        }
+                    
+                    # Obtener NIT
+                    nit_normalizado = rut_data.get('nit_normalizado')
+                    if not nit_normalizado:
+                        return {
+                            'tipo': 'fallido',
+                            'archivo': pdf_name,
+                            'razon': 'No se pudo detectar el NIT del PDF'
+                        }
+                    
+                    # Verificar si hay empresas asociadas
+                    empresas = EmpresaServidor.objects.filter(nit_normalizado=nit_normalizado)
+                    if not empresas.exists():
+                        return {
+                            'tipo': 'fallido',
+                            'archivo': pdf_name,
+                            'nit': rut_data.get('nit', nit_normalizado),
+                            'nit_normalizado': nit_normalizado,
+                            'razon_social': rut_data.get('razon_social', 'No detectada'),
+                            'razon': f'No se encontraron empresas con NIT {nit_normalizado} en ningún servidor'
+                        }
+                    
+                    # Buscar o crear RUT
+                    rut, created = RUT.objects.get_or_create(
+                        nit_normalizado=nit_normalizado,
+                        defaults={
+                            'nit': rut_data.get('nit', nit_normalizado),
+                            'dv': rut_data.get('dv', ''),
+                            'razon_social': rut_data.get('razon_social', ''),
+                        }
+                    )
+                    
+                    # Actualizar campos desde PDF
+                    for key, value in rut_data.items():
+                        if key not in ['_texto_completo', '_codigos_ciiu_encontrados', '_establecimientos'] and hasattr(rut, key):
+                            if value is None:
+                                setattr(rut, key, None)
+                            elif value:
+                                setattr(rut, key, value)
+                    
+                    # Guardar PDF
+                    pdf_file.seek(0)
+                    if rut.archivo_pdf:
+                        rut.archivo_pdf.delete(save=False)
+                    
+                    pdf_upload = InMemoryUploadedFile(
+                        pdf_file,
+                        None,
+                        pdf_name,
+                        'application/pdf',
+                        len(pdf_data_bytes),
+                        None
+                    )
+                    rut.archivo_pdf = pdf_upload
+                    rut.save()
+                    
+                    # Procesar establecimientos
+                    from ..models import EstablecimientoRUT
+                    establecimientos_data = rut_data.get('_establecimientos', [])
+                    EstablecimientoRUT.objects.filter(rut=rut).delete()
+                    for est_data in establecimientos_data:
+                        EstablecimientoRUT.objects.create(
+                            rut=rut,
+                            nombre=est_data.get('nombre', ''),
+                            tipo_establecimiento=est_data.get('tipo_establecimiento'),
+                            tipo_establecimiento_codigo=est_data.get('tipo_establecimiento_codigo'),
+                            actividad_economica_ciiu=est_data.get('actividad_economica_ciiu'),
+                            actividad_economica_descripcion=est_data.get('actividad_economica_descripcion'),
+                            departamento_codigo=est_data.get('departamento_codigo'),
+                            departamento_nombre=est_data.get('departamento_nombre', ''),
+                            ciudad_codigo=est_data.get('ciudad_codigo'),
+                            ciudad_nombre=est_data.get('ciudad_nombre', ''),
+                            direccion=est_data.get('direccion', ''),
+                            matricula_mercantil=est_data.get('matricula_mercantil'),
+                            telefono=est_data.get('telefono'),
+                        )
+                    
+                    # Procesar códigos CIIU
+                    codigos_ciiu = rut_data.get('_codigos_ciiu_encontrados', [])
+                    if not codigos_ciiu:
+                        if rut_data.get('actividad_principal_ciiu'):
+                            codigos_ciiu.append(rut_data['actividad_principal_ciiu'])
+                        if rut_data.get('actividad_secundaria_ciiu'):
+                            codigos_ciiu.append(rut_data['actividad_secundaria_ciiu'])
+                        if rut_data.get('otras_actividades_ciiu'):
+                            codigos_ciiu.append(rut_data['otras_actividades_ciiu'])
+                    
+                    codigos_ciiu = list(set([c for c in codigos_ciiu if c and c.strip()]))
+                    
+                    if codigos_ciiu:
+                        from ..tasks import procesar_codigos_ciiu_masivo_task
+                        procesar_codigos_ciiu_masivo_task.delay(codigos_ciiu)
+                    
+                    # Procesar responsabilidades
+                    codigos_responsabilidades = rut_data.get('responsabilidades_codigos', [])
+                    if codigos_responsabilidades:
+                        from ..models import ResponsabilidadTributaria
+                        from django.db import IntegrityError
+                        
+                        descripciones_responsabilidades = {
+                            '7': 'Retención en la fuente a título de renta',
+                            '9': 'Retención en la fuente en el impuesto',
+                            '14': 'Informante de exogena',
+                            '42': 'Obligado a llevar contabilidad',
+                            '47': 'Régimen Simple de Tributación - SIM',
+                            '48': 'Impuesto sobre las ventas - IVA',
+                            '52': 'Facturador electrónico',
+                            '55': 'Informante de Beneficiarios Finales',
+                        }
+                        
+                        for codigo in codigos_responsabilidades:
+                            codigo_str = str(codigo).strip()
+                            if codigo_str:
+                                descripcion = descripciones_responsabilidades.get(
+                                    codigo_str,
+                                    f'Responsabilidad tributaria código {codigo_str}'
+                                )
+                                try:
+                                    ResponsabilidadTributaria.objects.get_or_create(
+                                        codigo=codigo_str,
+                                        defaults={'descripcion': descripcion}
+                                    )
+                                except IntegrityError:
+                                    pass
+                    
+                    return {
+                        'tipo': 'exitoso',
+                        'archivo': pdf_name,
+                        'nit': rut.nit,
+                        'nit_normalizado': rut.nit_normalizado,
+                        'razon_social': rut.razon_social,
+                        'empresas_encontradas': empresas.count(),
+                        'creado': created
+                    }
+                    
+                except Exception as e:
+                    return {
+                        'tipo': 'fallido',
+                        'archivo': pdf_name,
+                        'razon': f'Error inesperado: {str(e)}'
+                    }
+            
+            # Procesar PDFs en paralelo (máximo 5 workers para no sobrecargar)
+            max_workers = min(5, len(pdf_files))
+            
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # Enviar todas las tareas
+                future_to_pdf = {
+                    executor.submit(procesar_un_rut, pdf_name, idx): pdf_name 
+                    for idx, pdf_name in enumerate(pdf_files, 1)
+                }
+                
+                # Procesar resultados conforme se completan
+                for future in as_completed(future_to_pdf):
+                    pdf_name = future_to_pdf[future]
+                    try:
+                        resultado = future.result()
+                        
+                        # Agregar resultado de forma thread-safe
+                        with lock:
+                            if resultado['tipo'] == 'exitoso':
+                                resultados['exitosos'].append({
+                                    'archivo': resultado['archivo'],
+                                    'nit': resultado['nit'],
+                                    'nit_normalizado': resultado['nit_normalizado'],
+                                    'razon_social': resultado['razon_social'],
+                                    'empresas_encontradas': resultado['empresas_encontradas'],
+                                    'creado': resultado['creado']
+                                })
+                            else:
+                                fallido = {'archivo': resultado['archivo'], 'razon': resultado['razon']}
+                                if 'nit' in resultado:
+                                    fallido['nit'] = resultado['nit']
+                                if 'nit_normalizado' in resultado:
+                                    fallido['nit_normalizado'] = resultado['nit_normalizado']
+                                if 'razon_social' in resultado:
+                                    fallido['razon_social'] = resultado['razon_social']
+                                resultados['fallidos'].append(fallido)
+                            
+                            # Actualizar contador y progreso
+                            procesados_count['value'] += 1
+                            
+                            # Actualizar progreso en Celery (thread-safe)
+                            if task:
+                                try:
+                                    task.update_state(
+                                        state='PROCESSING',
+                                        meta={
+                                            'status': f'Procesando {procesados_count["value"]}/{len(pdf_files)}: {pdf_name}',
+                                            'total': len(pdf_files),
+                                            'procesados': procesados_count['value'],
+                                            'exitosos': len(resultados['exitosos']),
+                                            'fallidos': len(resultados['fallidos'])
+                                        }
+                                    )
+                                except Exception:
+                                    # Si falla actualizar estado, continuar de todas formas
+                                    pass
+                    
+                    except Exception as e:
+                        # Error al obtener resultado del future
+                        with lock:
+                            resultados['fallidos'].append({
+                                'archivo': pdf_name,
+                                'razon': f'Error procesando future: {str(e)}'
+                            })
+                            procesados_count['value'] += 1
+            
+            # Procesar cada PDF (código antiguo - ahora comentado para referencia)
+            # for idx, pdf_name in enumerate(pdf_files, 1):
                 # Actualizar progreso si hay tarea Celery
                 if task:
                     task.update_state(
