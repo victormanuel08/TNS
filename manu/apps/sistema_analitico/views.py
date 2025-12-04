@@ -10633,6 +10633,11 @@ def celery_task_status_view(request, task_id):
                     response_data['meta'] = task_result.info
                 else:
                     response_data['meta'] = {'status': str(task_result.info)}
+            # También verificar si hay información en el estado de la tarea
+            if task_result.state == 'PROCESSING' and hasattr(task_result, 'info'):
+                meta_info = task_result.info if isinstance(task_result.info, dict) else {}
+                if meta_info:
+                    response_data['meta'] = meta_info
         
         return Response(response_data, status=status.HTTP_200_OK)
     

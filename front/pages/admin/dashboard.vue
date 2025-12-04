@@ -7011,13 +7011,26 @@ const uploadRUTPDF = async () => {
     
     const Swal = (await import('sweetalert2')).default
     
-    // Si es procesamiento asíncrono (ZIP grande con Celery)
-    if (response.data && response.data.procesamiento_asincrono && response.data.task_id) {
-      await monitorearProcesamientoAsincrono(response.data.task_id, response.data.total)
+    // Verificar que response.data exista
+    if (!response.data) {
+      await Swal.fire({
+        title: 'Error',
+        text: 'No se recibió respuesta del servidor',
+        icon: 'error',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' }
+      })
       return
     }
     
-    // Si es ZIP, mostrar resultados masivos
+    // Si es procesamiento asíncrono (ZIP grande con Celery)
+    if (response.data.procesamiento_asincrono && response.data.task_id) {
+      // Monitorear progreso en tiempo real
+      await monitorearProcesamientoRUTs(response.data.task_id, response.data.total || 0)
+      return
+    }
+    
+    // Si es ZIP, mostrar resultados masivos (solo si tiene reporte_txt)
     if (selectedRUTZipFile.value && response.data.reporte_txt) {
       rutReporteTxt.value = response.data.reporte_txt
       
@@ -7067,6 +7080,15 @@ const uploadRUTPDF = async () => {
           }
         }
       })
+    } else if (selectedRUTZipFile.value) {
+      // ZIP procesado pero sin reporte_txt (caso raro)
+      await Swal.fire({
+        title: 'ZIP Procesado',
+        text: response.data?.mensaje || 'El ZIP fue procesado, pero no se generó reporte.',
+        icon: 'warning',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' }
+      })
     } else {
       // PDF individual
       if (response.data && response.data.rut) {
@@ -7114,6 +7136,204 @@ const uploadRUTPDF = async () => {
   } finally {
     uploadingRUT.value = false
   }
+}
+
+const monitorearProcesamientoRUTs = async (taskId: string, totalArchivos: number) => {
+  const Swal = (await import('sweetalert2')).default
+  
+  let intervalId: ReturnType<typeof setInterval> | null = null
+  let isClosed = false
+  
+  // Función para actualizar la modal
+  const actualizarModal = async (estado: any) => {
+    if (isClosed) return
+    
+    const meta = estado.meta || {}
+    const procesados = meta.procesados || 0
+    const exitosos = meta.exitosos || 0
+    const fallidos = meta.fallidos || 0
+    const total = meta.total || totalArchivos
+    const status = meta.status || estado.state || 'PROCESSING'
+    const porcentaje = total > 0 ? Math.round((procesados / total) * 100) : 0
+    
+    const html = `
+      <div style="text-align: left;">
+        <div style="margin-bottom: 20px;">
+          <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+            <span><strong>Progreso:</strong></span>
+            <span><strong>${procesados}/${total} (${porcentaje}%)</strong></span>
+          </div>
+          <div style="background: #e5e7eb; border-radius: 10px; height: 24px; overflow: hidden;">
+            <div style="background: linear-gradient(90deg, #3b82f6 0%, #2563eb 100%); height: 100%; width: ${porcentaje}%; transition: width 0.3s ease; display: flex; align-items: center; justify-content: center; color: white; font-size: 0.75rem; font-weight: 600;">
+              ${porcentaje}%
+            </div>
+          </div>
+        </div>
+        
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; margin-bottom: 20px;">
+          <div style="background: #f0f9ff; padding: 12px; border-radius: 8px; border-left: 4px solid #3b82f6;">
+            <div style="font-size: 0.85rem; color: #6b7280; margin-bottom: 4px;">Total</div>
+            <div style="font-size: 1.5rem; font-weight: 700; color: #1f2937;">${total}</div>
+          </div>
+          <div style="background: #f0fdf4; padding: 12px; border-radius: 8px; border-left: 4px solid #10b981;">
+            <div style="font-size: 0.85rem; color: #6b7280; margin-bottom: 4px;">Exitosos</div>
+            <div style="font-size: 1.5rem; font-weight: 700; color: #10b981;">${exitosos}</div>
+          </div>
+          <div style="background: #fef2f2; padding: 12px; border-radius: 8px; border-left: 4px solid #ef4444;">
+            <div style="font-size: 0.85rem; color: #6b7280; margin-bottom: 4px;">Fallidos</div>
+            <div style="font-size: 1.5rem; font-weight: 700; color: #ef4444;">${fallidos}</div>
+          </div>
+        </div>
+        
+        <div style="background: #f9fafb; padding: 12px; border-radius: 8px; margin-top: 15px;">
+          <div style="font-size: 0.85rem; color: #6b7280; margin-bottom: 4px;">Estado actual:</div>
+          <div style="font-weight: 600; color: #1f2937;">
+            ${status}
+            ${meta.status && meta.status.includes(':') ? `<br><span style="font-size: 0.8em; color: #6b7280; font-weight: normal;">${meta.status.split(':').slice(1).join(':').trim()}</span>` : ''}
+          </div>
+        </div>
+        
+        <div style="margin-top: 15px; padding: 10px; background: #fef3c7; border-radius: 6px; font-size: 0.85rem; color: #92400e;">
+          ⏳ Procesando... Por favor no cierres esta ventana.
+        </div>
+      </div>
+    `
+    
+    Swal.update({
+      html,
+      showConfirmButton: false,
+      allowOutsideClick: false,
+      allowEscapeKey: false
+    })
+  }
+  
+  // Mostrar modal inicial
+  Swal.fire({
+    title: 'Procesando ZIP de RUTs',
+    html: `
+      <div style="text-align: left;">
+        <p>Iniciando procesamiento...</p>
+        <div style="margin-top: 15px;">
+          <div style="background: #e5e7eb; border-radius: 10px; height: 24px; overflow: hidden;">
+            <div style="background: linear-gradient(90deg, #3b82f6 0%, #2563eb 100%); height: 100%; width: 0%; transition: width 0.3s ease;"></div>
+          </div>
+        </div>
+      </div>
+    `,
+    icon: 'info',
+    showConfirmButton: false,
+    allowOutsideClick: false,
+    allowEscapeKey: false,
+    customClass: { container: 'swal-z-index-fix' },
+    width: '700px',
+    didOpen: () => {
+      // Iniciar polling
+      const pollStatus = async () => {
+        try {
+          const statusResponse = await api.get(`/api/celery/task-status/${taskId}/`)
+          const estado = statusResponse as any
+          
+          if (estado.ready) {
+            // Tarea completada
+            if (intervalId) clearInterval(intervalId)
+            
+            if (estado.successful && estado.result) {
+              const resultado = estado.result
+              
+              // Mostrar resultados finales
+              const fallidosHtml = resultado.detalles_fallidos && resultado.detalles_fallidos.length > 0
+                ? `<div style="margin-top: 15px; max-height: 300px; overflow-y: auto; text-align: left;">
+                    <strong style="color: #d32f2f;">RUTs Fallidos (${resultado.detalles_fallidos.length}):</strong>
+                    <ul style="margin-top: 10px;">
+                      ${resultado.detalles_fallidos.map((f: any) => 
+                        `<li><strong>${f.archivo}</strong>: ${f.razon}</li>`
+                      ).join('')}
+                    </ul>
+                  </div>`
+                : ''
+              
+              if (resultado.reporte_txt) {
+                rutReporteTxt.value = resultado.reporte_txt
+              }
+              
+              await Swal.fire({
+                title: resultado.status === 'SUCCESS' ? '¡ZIP Procesado!' : 'Procesamiento Completado',
+                html: `
+                  <div style="text-align: left;">
+                    <p><strong>Total procesados:</strong> ${resultado.total || 0}</p>
+                    <p style="color: #4CAF50;"><strong>Exitosos:</strong> ${resultado.exitosos || 0}</p>
+                    ${resultado.fallidos > 0 ? `<p style="color: #d32f2f;"><strong>Fallidos:</strong> ${resultado.fallidos}</p>` : ''}
+                    ${fallidosHtml}
+                    ${resultado.reporte_txt ? `
+                      <div style="margin-top: 20px; padding: 10px; background: #f5f5f5; border-radius: 5px;">
+                        <strong>📄 Reporte TXT generado</strong><br>
+                        <button id="download-reporte" style="margin-top: 10px; padding: 8px 16px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                          Descargar Reporte TXT
+                        </button>
+                      </div>
+                    ` : ''}
+                  </div>
+                `,
+                icon: resultado.fallidos > 0 ? 'warning' : 'success',
+                confirmButtonText: 'Aceptar',
+                customClass: { container: 'swal-z-index-fix' },
+                width: '700px',
+                didOpen: () => {
+                  const btn = document.getElementById('download-reporte')
+                  if (btn && rutReporteTxt.value) {
+                    btn.onclick = () => {
+                      const blob = new Blob([rutReporteTxt.value!], { type: 'text/plain' })
+                      const url = URL.createObjectURL(blob)
+                      const a = document.createElement('a')
+                      a.href = url
+                      a.download = `reporte_ruts_${new Date().toISOString().split('T')[0]}.txt`
+                      a.click()
+                      URL.revokeObjectURL(url)
+                    }
+                  }
+                }
+              })
+            } else {
+              // Error en la tarea
+              await Swal.fire({
+                title: 'Error en el Procesamiento',
+                text: estado.error || 'Ocurrió un error al procesar el ZIP',
+                icon: 'error',
+                confirmButtonText: 'Aceptar',
+                customClass: { container: 'swal-z-index-fix' }
+              })
+            }
+            
+            // Limpiar formulario
+            showUploadRUT.value = false
+            selectedRUTFile.value = null
+            selectedRUTZipFile.value = null
+            rutNitManual.value = ''
+            rutReporteTxt.value = null
+            await loadRuts()
+            isClosed = true
+          } else {
+            // Actualizar progreso
+            await actualizarModal(estado)
+          }
+        } catch (error: any) {
+          console.error('Error consultando estado de tarea:', error)
+          // Continuar intentando
+        }
+      }
+      
+      // Polling cada 2 segundos
+      pollStatus() // Primera consulta inmediata
+      intervalId = setInterval(pollStatus, 2000)
+    },
+    willClose: () => {
+      isClosed = true
+      if (intervalId) {
+        clearInterval(intervalId)
+        intervalId = null
+      }
+    }
+  })
 }
 
 const onRUTZipSelected = (event: Event) => {
