@@ -271,13 +271,34 @@ class Command(BaseCommand):
                         )
                         
                         # Actualizar rutas en BD
+                        # Buscar por empresa y nombre de archivo (más confiable)
+                        nombre_archivo = mig['objeto']['archivo']
                         backups_bd = BackupS3.objects.filter(
                             empresa_servidor=empresa,
-                            ruta_s3=ruta_antigua
+                            nombre_archivo=nombre_archivo
                         )
+                        
+                        # Si no encuentra por nombre, buscar por ruta antigua
+                        if not backups_bd.exists():
+                            backups_bd = BackupS3.objects.filter(
+                                empresa_servidor=empresa,
+                                ruta_s3=ruta_antigua
+                            )
+                        
+                        # Si aún no encuentra, buscar por empresa y año fiscal (último recurso)
+                        if not backups_bd.exists():
+                            backups_bd = BackupS3.objects.filter(
+                                empresa_servidor=empresa,
+                                anio_fiscal=empresa.anio_fiscal
+                            ).order_by('-fecha_backup')[:1]  # Solo el más reciente
+                        
                         if backups_bd.exists():
+                            count = backups_bd.count()
                             backups_bd.update(ruta_s3=ruta_nueva)
-                            actualizados_bd += backups_bd.count()
+                            actualizados_bd += count
+                            self.stdout.write(f"   📝 Actualizados en BD: {count} registro(s)")
+                        else:
+                            self.stdout.write(self.style.WARNING("   ⚠️  No se encontró registro en BD para actualizar"))
                         
                         migrados += 1
                         self.stdout.write(self.style.SUCCESS("   ✅ Migrado"))
