@@ -75,7 +75,7 @@
 </template>
 
 <script setup lang="ts">
-import type { User } from '../types'
+import type { User } from '~/types/admin'
 import DropdownMenu from './DropdownMenu.vue'
 import DropdownItem from './DropdownItem.vue'
 import DropdownDivider from './DropdownDivider.vue'

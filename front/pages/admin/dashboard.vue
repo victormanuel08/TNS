@@ -2016,15 +2016,23 @@
 
     <!-- Modal: Empresas del Servidor -->
     <div v-if="showServerEmpresasModal" class="modal-overlay" @click="showServerEmpresasModal = false">
-      <div class="modal-content empresas-modal" @click.stop style="max-width: 1200px; max-height: 90vh; overflow-y: auto;">
+      <div class="modal-content empresas-modal" @click.stop style="max-width: 1400px; max-height: 90vh; overflow-y: auto;">
         <div class="modal-header">
-          <h2>Empresas del Servidor</h2>
+          <div>
+            <h2>Empresas del Servidor</h2>
+            <p v-if="selectedServerForEmpresas" class="modal-subtitle">
+              {{ servers.find(s => s.id === selectedServerForEmpresas)?.nombre }}
+            </p>
+          </div>
           <button class="modal-close" @click="showServerEmpresasModal = false">×</button>
         </div>
         <div v-if="loadingServerEmpresas" class="loading-state">
           <p>Cargando empresas...</p>
         </div>
-        <div v-else>
+        <div v-else-if="serverEmpresasList.length === 0" class="empty-state">
+          <p>No hay empresas en este servidor</p>
+        </div>
+        <div v-else class="modal-body">
           <EmpresasTable
             :empresas="serverEmpresasList"
             :backup-menu-open="backupMenuOpen"
@@ -3565,6 +3573,7 @@ const paginatedEmpresas = computed(() => {
   return sortedAndFilteredEmpresas.value.slice(start, end)
 })
 
+const usuariosItemsPerPage = ref(10)
 const filteredUsers = computed(() => {
   if (!userSearch.value) return users.value
   const search = userSearch.value.toLowerCase()
@@ -3575,6 +3584,7 @@ const filteredUsers = computed(() => {
     (u.last_name || '').toLowerCase().includes(search)
   )
 })
+const usuariosPagination = usePagination(computed(() => filteredUsers.value), usuariosItemsPerPage.value)
 
 // Computed para Calendario Tributario: valores únicos para filtros
 const uniqueImpuestos = computed(() => {
@@ -4517,8 +4527,14 @@ const viewServerEmpresas = async (serverId: number) => {
       try {
         const ultimoBackup = await api.get<any>(`/api/empresas-servidor/${empresa.id}/ultimo_backup/`)
         empresa.ultimo_backup = ultimoBackup || null
-      } catch {
-        empresa.ultimo_backup = null
+      } catch (error: any) {
+        // 404 significa que no hay backups, lo cual es válido
+        if (error?.status === 404 || error?.statusCode === 404) {
+          empresa.ultimo_backup = null
+        } else {
+          console.warn(`Error obteniendo último backup para empresa ${empresa.id}:`, error)
+          empresa.ultimo_backup = null
+        }
       }
     }
     
@@ -7970,6 +7986,21 @@ onMounted(async () => {
   font-weight: 700;
   color: #1f2937;
   margin: 0;
+}
+
+.modal-subtitle {
+  font-size: 0.875rem;
+  color: #6b7280;
+  margin: 0.25rem 0 0 0;
+  font-weight: 500;
+}
+
+.empresas-modal {
+  max-width: 1400px !important;
+}
+
+.empresas-modal .modal-body {
+  padding: 1.5rem;
 }
 
 .modal-close {

@@ -95,7 +95,7 @@
 </template>
 
 <script setup lang="ts">
-import type { APIKey } from '../types'
+import type { APIKey } from '~/types/admin'
 import { formatDate } from '../utils/formatters'
 import DropdownMenu from './DropdownMenu.vue'
 import DropdownItem from './DropdownItem.vue'

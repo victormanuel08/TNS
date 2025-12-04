@@ -1,6 +1,6 @@
 // Composable para notificaciones toast
 import { ref } from 'vue'
-import type { ToastNotification } from '../types'
+import type { ToastNotification } from '~/types/admin'
 
 const notifications = ref<ToastNotification[]>([])
 

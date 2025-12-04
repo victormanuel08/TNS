@@ -118,7 +118,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import type { VigenciaTributaria } from '../types'
+import type { VigenciaTributaria } from '~/types/admin'
 import { formatDate } from '../utils/formatters'
 
 interface Props {

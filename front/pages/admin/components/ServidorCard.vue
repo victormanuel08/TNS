@@ -21,14 +21,13 @@
       </p>
     </div>
     <div class="server-actions">
-      <DropdownMenu>
+      <DropdownMenu trigger-class="btn-menu-icon">
         <template #trigger>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="1"/>
             <circle cx="12" cy="5" r="1"/>
             <circle cx="12" cy="19" r="1"/>
           </svg>
-          Menú
         </template>
         <DropdownItem @click="$emit('scan', server.id)">
           <svg v-if="scanning" class="spinner-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -69,7 +68,7 @@
 </template>
 
 <script setup lang="ts">
-import type { Servidor } from '../types'
+import type { Servidor } from '~/types/admin'
 import DropdownMenu from './DropdownMenu.vue'
 import DropdownItem from './DropdownItem.vue'
 import DropdownDivider from './DropdownDivider.vue'
@@ -175,8 +174,37 @@ defineEmits<{
 }
 
 .server-actions {
+  margin-top: 1rem;
   display: flex;
+  gap: 0.5rem;
   justify-content: flex-end;
+}
+
+:deep(.btn-menu-icon) {
+  padding: 0.5rem;
+  min-width: auto;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  color: #4b5563;
+  transition: all 0.2s;
+}
+
+:deep(.btn-menu-icon:hover) {
+  background: #e5e7eb;
+  border-color: #d1d5db;
+  color: #1f2937;
+}
+
+:deep(.btn-menu-icon.active) {
+  background: #1f2937;
+  border-color: #1f2937;
+  color: white;
 }
 
 .spinner-icon {

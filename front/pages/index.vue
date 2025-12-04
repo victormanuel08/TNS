@@ -292,17 +292,11 @@
 import { ref } from 'vue'
 
 definePageMeta({
-  layout: false
+  layout: false,
+  middleware: 'subdomain' // Usar el middleware para manejar subdominios
 })
 
-const { getSubdomain } = useSubdomain()
-const subdomain = getSubdomain()
 const showMobileMenu = ref(false)
-
-// Si hay subdominio, no mostrar esta página
-if (subdomain) {
-  navigateTo('/subdomain/login')
-}
 
 const toggleMobileMenu = () => {
   showMobileMenu.value = !showMobileMenu.value
