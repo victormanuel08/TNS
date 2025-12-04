@@ -3276,6 +3276,8 @@
 
 <script setup lang="ts">
 import { watch, computed } from 'vue'
+import { useRuntimeConfig } from '#app'
+import { useAuthState } from '~/composables/useAuthState'
 
 definePageMeta({
   layout: false,
@@ -6543,50 +6545,100 @@ const downloadBackup = async (backup: any) => {
   
   downloadingBackupId.value = backup.id
   try {
-    const response = await api.get(
-      `/api/backups-s3/${backup.id}/descargar_backup/`,
-      { 
-        params: { formato: formato },
-        responseType: 'blob' 
+    // Usar $fetch directamente para manejar blob response
+    const config = useRuntimeConfig()
+    const { accessToken, apiKey } = useAuthState()
+    
+    const headers: Record<string, string> = {
+      'Accept': 'application/octet-stream'
+    }
+    
+    if (accessToken.value) {
+      headers['Authorization'] = `Bearer ${accessToken.value}`
+    }
+    
+    if (apiKey.value) {
+      headers['Api-Key'] = apiKey.value
+    }
+    
+    // Usar $fetch.raw para obtener la respuesta completa con headers
+    const response = await $fetch.raw(
+      `/api/backups-s3/${backup.id}/descargar_backup/?formato=${formato}`,
+      {
+        baseURL: config.public.djangoApiUrl,
+        method: 'GET',
+        headers
       }
     )
     
-    // Verificar si la respuesta es un error JSON (cuando el servidor devuelve error pero con responseType blob)
-    const contentType = response.headers['content-type'] || ''
-    if (contentType.includes('application/json')) {
-      // Es un error JSON, leerlo como texto y parsearlo
-      const blob = response.data as Blob
-      const text = await blob.text()
+    // Obtener el contenido de la respuesta
+    const responseData = response._data
+    
+    // Verificar status code primero
+    if (response.status < 200 || response.status >= 300) {
+      // Es un error, intentar leer como JSON o texto
       let errorData: any
-      try {
-        errorData = JSON.parse(text)
-      } catch {
-        errorData = { error: text }
+      if (responseData instanceof Blob) {
+        const text = await responseData.text()
+        try {
+          errorData = JSON.parse(text)
+        } catch {
+          errorData = { error: text || `Error ${response.status}` }
+        }
+      } else if (typeof responseData === 'string') {
+        try {
+          errorData = JSON.parse(responseData)
+        } catch {
+          errorData = { error: responseData || `Error ${response.status}` }
+        }
+      } else {
+        errorData = responseData || { error: `Error ${response.status}` }
       }
       throw { response: { data: errorData, status: response.status } }
     }
     
-    // Verificar status code
-    if (response.status < 200 || response.status >= 300) {
-      // Es un error, intentar leer el blob como JSON
-      const blob = response.data as Blob
-      const text = await blob.text()
+    // Verificar si la respuesta es un error JSON
+    const contentType = response.headers.get('content-type') || ''
+    if (contentType.includes('application/json')) {
+      // Es un error JSON, leerlo como texto y parsearlo
       let errorData: any
-      try {
-        errorData = JSON.parse(text)
-      } catch {
-        errorData = { error: text || `Error ${response.status}` }
+      if (responseData instanceof Blob) {
+        const text = await responseData.text()
+        try {
+          errorData = JSON.parse(text)
+        } catch {
+          errorData = { error: text }
+        }
+      } else if (typeof responseData === 'string') {
+        try {
+          errorData = JSON.parse(responseData)
+        } catch {
+          errorData = { error: responseData }
+        }
+      } else {
+        errorData = responseData
       }
       throw { response: { data: errorData, status: response.status } }
+    }
+    
+    // Obtener el blob de la respuesta
+    let blob: Blob
+    if (responseData instanceof Blob) {
+      blob = responseData
+    } else if (responseData instanceof ArrayBuffer) {
+      blob = new Blob([responseData])
+    } else {
+      // Si no es blob, intentar convertirlo
+      blob = new Blob([String(responseData)])
     }
     
     // Crear URL del blob y descargar
-    const url = window.URL.createObjectURL(new Blob([response.data]))
+    const url = window.URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
     
     // Obtener nombre del archivo desde headers o usar el nombre del backup
-    const contentDisposition = response.headers['content-disposition']
+    const contentDisposition = response.headers.get('content-disposition')
     let filename = backup.nombre_archivo
     if (contentDisposition) {
       const filenameMatch = contentDisposition.match(/filename="?(.+)"?/i)
