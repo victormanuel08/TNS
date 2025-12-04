@@ -6544,9 +6544,41 @@ const downloadBackup = async (backup: any) => {
   downloadingBackupId.value = backup.id
   try {
     const response = await api.get(
-      `/api/backups-s3/${backup.id}/descargar_backup/?formato=${formato}`,
-      { responseType: 'blob' }
+      `/api/backups-s3/${backup.id}/descargar_backup/`,
+      { 
+        params: { formato: formato },
+        responseType: 'blob' 
+      }
     )
+    
+    // Verificar si la respuesta es un error JSON (cuando el servidor devuelve error pero con responseType blob)
+    const contentType = response.headers['content-type'] || ''
+    if (contentType.includes('application/json')) {
+      // Es un error JSON, leerlo como texto y parsearlo
+      const blob = response.data as Blob
+      const text = await blob.text()
+      let errorData: any
+      try {
+        errorData = JSON.parse(text)
+      } catch {
+        errorData = { error: text }
+      }
+      throw { response: { data: errorData, status: response.status } }
+    }
+    
+    // Verificar status code
+    if (response.status < 200 || response.status >= 300) {
+      // Es un error, intentar leer el blob como JSON
+      const blob = response.data as Blob
+      const text = await blob.text()
+      let errorData: any
+      try {
+        errorData = JSON.parse(text)
+      } catch {
+        errorData = { error: text || `Error ${response.status}` }
+      }
+      throw { response: { data: errorData, status: response.status } }
+    }
     
     // Crear URL del blob y descargar
     const url = window.URL.createObjectURL(new Blob([response.data]))
@@ -6578,9 +6610,35 @@ const downloadBackup = async (backup: any) => {
     })
   } catch (error: any) {
     console.error('Error descargando backup:', error)
+    
+    // Intentar extraer el mensaje de error del response
+    let errorMessage = 'Error al descargar backup'
+    
+    if (error?.response?.data) {
+      // Si es un blob con error JSON, intentar leerlo
+      if (error.response.data instanceof Blob) {
+        try {
+          const text = await error.response.data.text()
+          const errorData = JSON.parse(text)
+          errorMessage = errorData.error || errorData.message || text
+        } catch {
+          errorMessage = 'Error al descargar backup (formato de respuesta inválido)'
+        }
+      } else if (typeof error.response.data === 'object') {
+        // Si es un objeto JSON normal
+        errorMessage = error.response.data.error || error.response.data.message || JSON.stringify(error.response.data)
+      } else {
+        errorMessage = error.response.data
+      }
+    } else if (error?.data?.error) {
+      errorMessage = error.data.error
+    } else if (error?.message) {
+      errorMessage = error.message
+    }
+    
     await Swal.fire({
       title: 'Error',
-      text: error?.data?.error || error?.message || 'Error al descargar backup',
+      text: errorMessage,
       icon: 'error',
       confirmButtonText: 'Aceptar',
       customClass: { container: 'swal-z-index-fix' }
