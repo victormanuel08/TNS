@@ -143,3 +143,56 @@ def obtener_eventos_para_empresa(
     except EmpresaServidor.DoesNotExist:
         return []
 
+
+def obtener_eventos_para_lista_nits(
+    nits: List[str],
+    tipo_regimen: Optional[str] = None,
+    fecha_desde: Optional[date] = None,
+    fecha_hasta: Optional[date] = None
+) -> Dict[str, List[Dict]]:
+    """
+    Obtiene eventos del calendario tributario para una lista de NITs.
+    
+    Args:
+        nits: Lista de NITs (pueden tener formato o estar normalizados, sin dígito de verificación)
+        tipo_regimen: Código del régimen tributario (opcional)
+        fecha_desde: Fecha desde la cual obtener eventos (opcional)
+        fecha_hasta: Fecha hasta la cual obtener eventos (opcional)
+    
+    Returns:
+        Diccionario con NIT normalizado como clave y lista de eventos como valor
+    """
+    resultados = {}
+    
+    for nit in nits:
+        if not nit:
+            continue
+        
+        # Normalizar NIT (elimina puntos, guiones, espacios y dígito de verificación si existe)
+        nit_normalizado = normalize_nit(nit)
+        if not nit_normalizado:
+            resultados[nit] = {
+                'nit_original': nit,
+                'nit_normalizado': None,
+                'error': 'NIT inválido o vacío',
+                'eventos': []
+            }
+            continue
+        
+        # Obtener eventos para este NIT
+        eventos = obtener_eventos_calendario_tributario(
+            nit=nit_normalizado,
+            tipo_regimen=tipo_regimen,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta
+        )
+        
+        resultados[nit_normalizado] = {
+            'nit_original': nit,
+            'nit_normalizado': nit_normalizado,
+            'total_eventos': len(eventos),
+            'eventos': eventos
+        }
+    
+    return resultados
+

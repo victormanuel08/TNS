@@ -931,9 +931,16 @@ class CalendarioTributarioViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     
     def get_queryset(self):
-        """Solo superusuarios pueden ver el calendario"""
-        if not self.request.user.is_superuser:
-            return VigenciaTributaria.objects.none()
+        """
+        Permite ver el calendario a:
+        - Superusuarios: pueden ver todo
+        - Usuarios con API Key: pueden ver eventos de sus empresas (filtrado en acciones específicas)
+        """
+        # Para list/retrieve, solo superusuarios
+        if self.action in ['list', 'retrieve']:
+            if not self.request.user.is_superuser:
+                return VigenciaTributaria.objects.none()
+        
         return VigenciaTributaria.objects.select_related(
             'impuesto', 'tipo_tercero', 'tipo_regimen'
         ).order_by('impuesto__codigo', 'fecha_limite')
@@ -1015,6 +1022,10 @@ class CalendarioTributarioViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
         Obtiene eventos del calendario tributario para un NIT o empresa.
         Usa el RUT para determinar si es Persona Natural o Jurídica.
         
+        AUTENTICACIÓN:
+        - Requiere API Key válida (puede consultar eventos de sus empresas asociadas)
+        - O ser superusuario (puede consultar cualquier empresa)
+        
         Parámetros:
         - nit: NIT de la empresa (requerido si no se proporciona empresa_id)
         - empresa_id: ID de la empresa (requerido si no se proporciona nit)
@@ -1028,11 +1039,83 @@ class CalendarioTributarioViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
         )
         from datetime import datetime
         
+        # Verificar autenticación: API Key o superusuario
+        tiene_api_key = hasattr(request, 'cliente_api') and request.cliente_api
+        es_superusuario = request.user.is_authenticated and request.user.is_superuser
+        
+        if not tiene_api_key and not es_superusuario:
+            return Response(
+                {
+                    'error': 'Se requiere API Key válida o autenticación de superusuario para consultar eventos del calendario tributario',
+                    'info': 'Si tienes una API Key, envíala en el header: Api-Key: <tu_api_key>'
+                },
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
         nit = request.query_params.get('nit')
         empresa_id = request.query_params.get('empresa_id')
         fecha_desde_str = request.query_params.get('fecha_desde')
         fecha_hasta_str = request.query_params.get('fecha_hasta')
         tipo_regimen = request.query_params.get('tipo_regimen')
+        
+        # Si tiene API Key y no especificó empresa/nit, retornar eventos de TODAS sus empresas
+        if tiene_api_key and not es_superusuario:
+            empresas_autorizadas = request.empresas_autorizadas
+            
+            # Si no especificó nit ni empresa_id, retornar eventos de todas sus empresas
+            if not nit and not empresa_id:
+                todos_eventos = []
+                for empresa in empresas_autorizadas:
+                    eventos_empresa = obtener_eventos_para_empresa(
+                        empresa.id,
+                        fecha_desde=fecha_desde if fecha_desde else None,
+                        fecha_hasta=fecha_hasta if fecha_hasta else None
+                    )
+                    todos_eventos.extend(eventos_empresa)
+                
+                return Response({
+                    'eventos': todos_eventos,
+                    'total': len(todos_eventos),
+                    'empresas_consultadas': empresas_autorizadas.count(),
+                    'filtros': {
+                        'nit': None,
+                        'empresa_id': None,
+                        'fecha_desde': fecha_desde_str,
+                        'fecha_hasta': fecha_hasta_str,
+                        'tipo_regimen': tipo_regimen,
+                        'modo': 'todas_las_empresas'
+                    }
+                }, status=status.HTTP_200_OK)
+            
+            # Si especificó empresa_id, validar que esté autorizada
+            if empresa_id:
+                try:
+                    empresa_id_int = int(empresa_id)
+                    if not empresas_autorizadas.filter(id=empresa_id_int).exists():
+                        return Response(
+                            {'error': 'No tienes permiso para consultar eventos de esta empresa'},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
+                except ValueError:
+                    return Response(
+                        {'error': 'empresa_id debe ser un número'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            # Si especificó nit, validar que esté autorizada
+            elif nit:
+                nit_normalizado = ''.join(c for c in str(nit) if c.isdigit())
+                if not empresas_autorizadas.filter(nit_normalizado=nit_normalizado).exists():
+                    return Response(
+                        {'error': 'No tienes permiso para consultar eventos de esta empresa'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+        # Si es superusuario sin API Key, puede consultar cualquier empresa pero debe especificarla
+        if es_superusuario and not tiene_api_key:
+            if not nit and not empresa_id:
+                return Response(
+                    {'error': 'Debe proporcionar nit o empresa_id'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
         
         # Parsear fechas
         fecha_desde = None
@@ -1091,6 +1174,141 @@ class CalendarioTributarioViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
                 'tipo_regimen': tipo_regimen
             }
         }, status=status.HTTP_200_OK)
+    
+    @action(detail=False, methods=['post'], url_path='eventos-multiples')
+    def obtener_eventos_multiples(self, request):
+        """
+        Obtiene eventos del calendario tributario para múltiples NITs.
+        
+        AUTENTICACIÓN:
+        - Requiere API Key válida (puede consultar eventos de sus empresas asociadas)
+        - O ser superusuario (puede consultar cualquier empresa)
+        
+        Body (JSON):
+        {
+            "nits": ["900869750", "132791157", "800123456"],  // Lista de NITs (sin dígito de verificación)
+            "fecha_desde": "2024-01-01",  // Opcional (formato YYYY-MM-DD)
+            "fecha_hasta": "2024-12-31",  // Opcional (formato YYYY-MM-DD)
+            "tipo_regimen": "GC"  // Opcional (código del régimen)
+        }
+        
+        Retorna:
+        {
+            "resultados": {
+                "900869750": {
+                    "nit_original": "900869750",
+                    "nit_normalizado": "900869750",
+                    "total_eventos": 5,
+                    "eventos": [...]
+                },
+                ...
+            },
+            "total_nits": 3,
+            "total_eventos": 15
+        }
+        """
+        from .services.calendario_tributario_service import obtener_eventos_para_lista_nits
+        from datetime import datetime
+        
+        # Verificar autenticación: API Key o superusuario
+        tiene_api_key = hasattr(request, 'cliente_api') and request.cliente_api
+        es_superusuario = request.user.is_authenticated and request.user.is_superuser
+        
+        if not tiene_api_key and not es_superusuario:
+            return Response(
+                {
+                    'error': 'Se requiere API Key válida o autenticación de superusuario para consultar eventos del calendario tributario',
+                    'info': 'Si tienes una API Key, envíala en el header: Api-Key: <tu_api_key>'
+                },
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        nits = request.data.get('nits', [])
+        
+        # Si tiene API Key y no especificó NITs, usar TODAS sus empresas automáticamente
+        if tiene_api_key and not es_superusuario:
+            empresas_autorizadas = request.empresas_autorizadas
+            
+            # Si no especificó nits, usar todas las empresas autorizadas
+            if not nits or len(nits) == 0:
+                nits = list(empresas_autorizadas.values_list('nit_normalizado', flat=True))
+                if len(nits) == 0:
+                    return Response(
+                        {'error': 'Tu API Key no tiene empresas asociadas'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            else:
+                # Si especificó NITs, filtrar solo los autorizados
+                if not isinstance(nits, list):
+                    return Response(
+                        {'error': 'El campo "nits" debe ser una lista'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                nits_autorizados = set(empresas_autorizadas.values_list('nit_normalizado', flat=True))
+                nits_filtrados = [nit for nit in nits if ''.join(c for c in str(nit) if c.isdigit()) in nits_autorizados]
+                
+                if len(nits_filtrados) == 0:
+                    return Response(
+                        {'error': 'Ninguno de los NITs proporcionados está asociado a tu API Key'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+                
+                nits = nits_filtrados
+        else:
+            # Superusuario debe especificar NITs
+            if not isinstance(nits, list) or len(nits) == 0:
+                return Response(
+                    {'error': 'Debe proporcionar una lista de NITs en el campo "nits"'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        # Parsear fechas
+        fecha_desde = None
+        fecha_hasta = None
+        fecha_desde_str = request.data.get('fecha_desde')
+        fecha_hasta_str = request.data.get('fecha_hasta')
+        
+        if fecha_desde_str:
+            try:
+                fecha_desde = datetime.strptime(fecha_desde_str, '%Y-%m-%d').date()
+            except ValueError:
+                return Response(
+                    {'error': 'Formato de fecha_desde inválido. Use YYYY-MM-DD'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        if fecha_hasta_str:
+            try:
+                fecha_hasta = datetime.strptime(fecha_hasta_str, '%Y-%m-%d').date()
+            except ValueError:
+                return Response(
+                    {'error': 'Formato de fecha_hasta inválido. Use YYYY-MM-DD'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        tipo_regimen = request.data.get('tipo_regimen')
+        
+        # Obtener eventos para todos los NITs
+        resultados = obtener_eventos_para_lista_nits(
+            nits=nits,
+            tipo_regimen=tipo_regimen,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta
+        )
+        
+        # Calcular totales
+        total_eventos = sum(r.get('total_eventos', 0) for r in resultados.values())
+        
+        return Response({
+            'resultados': resultados,
+            'total_nits': len(nits),
+            'total_eventos': total_eventos,
+            'filtros': {
+                'fecha_desde': fecha_desde_str,
+                'fecha_hasta': fecha_hasta_str,
+                'tipo_regimen': tipo_regimen
+            }
+        }, status=status.HTTP_200_OK)
 
 
 class EntidadViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
@@ -1113,6 +1331,12 @@ class EntidadViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
 class ContrasenaEntidadViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
     """
     ViewSet para gestionar Contraseñas de Entidades (homólogo de PasswordsEntities en BCE)
+    
+    AUTENTICACIÓN:
+    - Requiere API Key válida (retorna passwords de sus empresas asociadas automáticamente)
+    - O ser superusuario autenticado (puede ver todas)
+    
+    Si no se especifican filtros, retorna passwords de TODAS las empresas asociadas a la API Key.
     """
     from .serializers import ContrasenaEntidadSerializer
     from .models import ContrasenaEntidad
@@ -1121,11 +1345,115 @@ class ContrasenaEntidadViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
     serializer_class = ContrasenaEntidadSerializer
     permission_classes = [IsAuthenticated]
     
-    def get_queryset(self):
-        if not self.request.user.is_superuser:
-            return ContrasenaEntidad.objects.none()
+    def list(self, request, *args, **kwargs):
+        """
+        Lista contraseñas de entidades.
+        
+        AUTENTICACIÓN:
+        - Requiere API Key válida (retorna passwords de sus empresas asociadas automáticamente)
+        - O ser superusuario autenticado (puede ver todas)
+        
+        FILTROS OPCIONALES (query params):
+        - nit: Filtrar por NIT específico (debe estar en empresas autorizadas)
+        - entidad_id: Filtrar por ID de entidad
+        - empresa_id: Filtrar por ID de empresa (debe estar en empresas autorizadas)
+        
+        Si no se especifican filtros, retorna passwords de TODAS las empresas asociadas a la API Key.
+        """
+        # Verificar autenticación: API Key o superusuario
+        tiene_api_key = hasattr(request, 'cliente_api') and request.cliente_api
+        es_superusuario = request.user.is_authenticated and request.user.is_superuser
+        
+        if not tiene_api_key and not es_superusuario:
+            return Response(
+                {
+                    'error': 'Se requiere API Key válida o autenticación de superusuario para consultar passwords de entidades',
+                    'info': 'Si tienes una API Key, envíala en el header: Api-Key: <tu_api_key>'
+                },
+                status=status.HTTP_403_FORBIDDEN
+            )
         
         queryset = ContrasenaEntidad.objects.select_related('entidad', 'empresa_servidor').all()
+        
+        # Si tiene API Key, filtrar solo empresas autorizadas
+        if tiene_api_key and not es_superusuario:
+            empresas_autorizadas = request.empresas_autorizadas
+            nits_autorizados = set(empresas_autorizadas.values_list('nit_normalizado', flat=True))
+            
+            # Filtrar por NITs autorizados
+            queryset = queryset.filter(nit_normalizado__in=nits_autorizados)
+            
+            # Filtros adicionales opcionales
+            nit_filter = request.query_params.get('nit')
+            if nit_filter:
+                nit_normalizado = ''.join(c for c in str(nit_filter) if c.isdigit())
+                if nit_normalizado not in nits_autorizados:
+                    return Response(
+                        {'error': 'No tienes permiso para consultar passwords de este NIT'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+                queryset = queryset.filter(nit_normalizado=nit_normalizado)
+            
+            empresa_id = request.query_params.get('empresa_id')
+            if empresa_id:
+                try:
+                    empresa_id_int = int(empresa_id)
+                    if not empresas_autorizadas.filter(id=empresa_id_int).exists():
+                        return Response(
+                            {'error': 'No tienes permiso para consultar passwords de esta empresa'},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
+                    queryset = queryset.filter(empresa_servidor_id=empresa_id_int)
+                except ValueError:
+                    return Response(
+                        {'error': 'empresa_id debe ser un número'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+        else:
+            # Superusuario - puede ver todas, pero puede filtrar opcionalmente
+            nit_filter = request.query_params.get('nit')
+            if nit_filter:
+                nit_normalizado = ''.join(c for c in str(nit_filter) if c.isdigit())
+                queryset = queryset.filter(nit_normalizado=nit_normalizado)
+            
+            empresa_id = request.query_params.get('empresa_id')
+            if empresa_id:
+                queryset = queryset.filter(empresa_servidor_id=empresa_id)
+        
+        # Filtro por entidad (aplica a ambos casos)
+        entidad_id = request.query_params.get('entidad_id')
+        if entidad_id:
+            queryset = queryset.filter(entidad_id=entidad_id)
+        
+        queryset = queryset.order_by('entidad__nombre', 'usuario')
+        
+        # Paginación estándar de DRF
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+    
+    def get_queryset(self):
+        """
+        Para otras acciones (retrieve, create, update, delete).
+        Filtra por empresas autorizadas si tiene API Key.
+        """
+        queryset = ContrasenaEntidad.objects.select_related('entidad', 'empresa_servidor').all()
+        
+        # Si tiene API Key, filtrar solo empresas autorizadas
+        tiene_api_key = hasattr(self.request, 'cliente_api') and self.request.cliente_api
+        es_superusuario = self.request.user.is_authenticated and self.request.user.is_superuser
+        
+        if tiene_api_key and not es_superusuario:
+            empresas_autorizadas = self.request.empresas_autorizadas
+            nits_autorizados = set(empresas_autorizadas.values_list('nit_normalizado', flat=True))
+            queryset = queryset.filter(nit_normalizado__in=nits_autorizados)
+        elif not es_superusuario:
+            # Sin API Key ni superusuario, no puede ver nada
+            return ContrasenaEntidad.objects.none()
         
         # Filtros opcionales
         nit = self.request.query_params.get('nit')

@@ -1,5 +1,6 @@
 <template>
   <div class="admin-dashboard">
+    <ToastContainer />
     <header class="admin-header">
       <div class="header-content">
         <div class="header-brand">
@@ -61,61 +62,18 @@
         </div>
         
         <div v-else class="servers-grid">
-          <div v-for="server in servers" :key="server.id" class="server-card">
-            <div class="server-header">
-              <h3>{{ server.nombre }}</h3>
-              <span class="server-badge" :class="`badge-${server.tipo_servidor?.toLowerCase()}`">
-                {{ server.tipo_servidor }}
-              </span>
-            </div>
-            <div class="server-info">
-              <p class="info-item">
-                <span class="info-label">Host:</span>
-                <span class="info-value">{{ server.host }}</span>
-              </p>
-              <p class="info-item" v-if="server.puerto">
-                <span class="info-label">Puerto:</span>
-                <span class="info-value">{{ server.puerto }}</span>
-              </p>
-              <p class="info-item">
-                <span class="info-label">Usuario:</span>
-                <span class="info-value">{{ server.usuario }}</span>
-              </p>
-            </div>
-            <div class="server-actions">
-              <button 
-                class="btn-small btn-primary" 
-                @click="scanEmpresas(server.id)" 
-                :disabled="scanningServer === server.id"
-                :title="activeScanTasks[server.id] ? 'Hay un proceso en curso. Haz clic para ver el progreso.' : 'Escanear empresas en este servidor'"
-              >
-                <svg v-if="scanningServer === server.id" class="spinner-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
-                </svg>
-                <svg v-else-if="activeScanTasks[server.id]" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="12" cy="12" r="10"/>
-                  <polyline points="12 6 12 12 16 14"/>
-                </svg>
-                <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="11" cy="11" r="8"/>
-                  <path d="m21 21-4.35-4.35"/>
-                </svg>
-                {{ activeScanTasks[server.id] ? 'Ver Progreso' : 'Escanear Empresas' }}
-              </button>
-              <button class="btn-small btn-primary" @click="viewServerEmpresas(server.id)" title="Ver empresas de este servidor">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
-                  <circle cx="9" cy="7" r="4"/>
-                  <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
-                  <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-                </svg>
-                Empresas
-              </button>
-              <button class="btn-small btn-secondary" @click="editServer(server)">Editar</button>
-              <button class="btn-small btn-info" @click="viewServerDetails(server.id)">Detalles</button>
-              <button class="btn-small btn-danger" @click="deleteServer(server.id)">Eliminar</button>
-            </div>
-          </div>
+          <ServidorCard
+            v-for="server in servers"
+            :key="server.id"
+            :server="server"
+            :scanning="scanningServer === server.id"
+            :has-active-task="!!activeScanTasks[server.id]"
+            @scan="scanEmpresas"
+            @view-empresas="viewServerEmpresas"
+            @edit="editServer"
+            @details="viewServerDetails"
+            @delete="deleteServer"
+          />
         </div>
       </section>
 
@@ -297,72 +255,172 @@
           </div>
         </div>
 
-        <div v-if="loadingUsers" class="loading-state">
-          <p>Cargando usuarios...</p>
+        <!-- Tabs para Usuarios -->
+        <Tabs
+          :tabs="[
+            { id: 'usuarios', label: '👥 Usuarios' },
+            { id: 'permisos', label: '🔐 Permisos' },
+            { id: 'tenant-profiles', label: '🏢 Tenant Profiles' }
+          ]"
+          :active-tab="userActiveTab"
+          @change="userActiveTab = $event"
+        />
+
+        <!-- Tab: Usuarios -->
+        <div v-if="userActiveTab === 'usuarios'">
+          <div v-if="loadingUsers" class="loading-state">
+            <p>Cargando usuarios...</p>
+          </div>
+
+          <div v-else-if="filteredUsers.length === 0" class="empty-state">
+            <p>No hay usuarios</p>
+          </div>
+
+          <div v-else>
+            <UsuariosTable
+              :usuarios="paginatedUsers"
+              :current-user-id="user?.id"
+              @edit="editUser"
+              @reset-password="resetUserPassword"
+              @view-permisos="viewUserPermisos"
+              @view-tenant-profile="viewUserTenantProfile"
+              @delete="deleteUser"
+            />
+            <Pagination
+              v-if="usuariosPagination.totalPages.value > 1"
+              :current-page="usuariosPagination.currentPage.value"
+              :total-pages="usuariosPagination.totalPages.value"
+              :total="filteredUsers.length"
+              :items-per-page="usuariosItemsPerPage"
+              @go-to="usuariosPagination.goToPage"
+              @next="usuariosPagination.nextPage"
+              @previous="usuariosPagination.previousPage"
+            />
+          </div>
         </div>
 
-        <div v-else-if="filteredUsers.length === 0" class="empty-state">
-          <p>No hay usuarios</p>
+        <!-- Tab: Permisos -->
+        <div v-if="userActiveTab === 'permisos'">
+          <div class="section-header">
+            <div class="actions-bar">
+              <button class="btn-primary" @click="showCreatePermiso = true">
+                <span>+</span> Crear Permiso
+              </button>
+              <button class="btn-secondary" @click="loadPermisos" :disabled="loadingPermisos">
+                <span v-if="loadingPermisos">⟳</span>
+                <span v-else>↻</span>
+                Actualizar
+              </button>
+            </div>
+          </div>
+
+          <div v-if="loadingPermisos" class="loading-state">
+            <p>Cargando permisos...</p>
+          </div>
+          
+          <div v-else-if="permisosUsuarios.length === 0" class="empty-state">
+            <p>No hay permisos registrados</p>
+          </div>
+          
+          <div v-else class="table-container">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Usuario</th>
+                  <th>Empresa</th>
+                  <th>Permisos</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="permiso in permisosUsuarios" :key="permiso.id">
+                  <td>
+                    <strong>{{ permiso.usuario_username }}</strong><br>
+                    <small style="color: #666;">{{ permiso.usuario_email || 'Sin email' }}</small>
+                  </td>
+                  <td>
+                    <strong>{{ permiso.empresa_servidor_nombre }}</strong><br>
+                    <small style="color: #666;">NIT: {{ permiso.empresa_servidor_nit }}</small>
+                  </td>
+                  <td>
+                    <span class="badge" v-if="permiso.puede_consultar">Consultar</span>
+                    <span class="badge" v-if="permiso.puede_crear">Crear</span>
+                    <span class="badge" v-if="permiso.puede_editar">Editar</span>
+                    <span class="badge" v-if="permiso.puede_eliminar">Eliminar</span>
+                  </td>
+                  <td>
+                    <div class="action-buttons">
+                      <button class="btn-small btn-secondary" @click="editPermiso(permiso)" title="Editar">
+                        ✏️
+                      </button>
+                      <button class="btn-small btn-danger" @click="deletePermiso(permiso)" title="Eliminar">
+                        🗑️
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
 
-        <div v-else class="table-container">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Usuario</th>
-                <th>Email</th>
-                <th>Nombre</th>
-                <th>Superusuario</th>
-                <th>Staff</th>
-                <th>Activo</th>
-                <th>Último Login</th>
-                <th>Acciones</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="usr in filteredUsers" :key="usr.id">
-                <td>{{ usr.id }}</td>
-                <td><strong>{{ usr.username }}</strong></td>
-                <td>{{ usr.email || '-' }}</td>
-                <td>{{ (usr.first_name + ' ' + usr.last_name).trim() || '-' }}</td>
-                <td>
-                  <span class="status-badge" :class="usr.is_superuser ? 'status-active' : 'status-inactive'">
-                    {{ usr.is_superuser_display }}
-                  </span>
-                </td>
-                <td>
-                  <span class="status-badge" :class="usr.is_staff ? 'status-active' : 'status-inactive'">
-                    {{ usr.is_staff_display }}
-                  </span>
-                </td>
-                <td>
-                  <span class="status-badge" :class="usr.is_active ? 'status-active' : 'status-inactive'">
-                    {{ usr.is_active ? 'Activo' : 'Inactivo' }}
-                  </span>
-                </td>
-                <td>{{ usr.last_login_formatted || 'Nunca' }}</td>
-                <td>
-                  <div class="action-buttons">
-                    <button class="btn-small btn-secondary" @click="editUser(usr)" title="Editar">
-                      ✏️
-                    </button>
-                    <button class="btn-small btn-warning" @click="resetUserPassword(usr)" title="Resetear Contraseña">
-                      🔑
-                    </button>
-                    <button 
-                      class="btn-small btn-danger" 
-                      @click="deleteUser(usr)" 
-                      title="Eliminar"
-                      :disabled="usr.id === user?.id"
-                    >
-                      🗑️
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+        <!-- Tab: Tenant Profiles -->
+        <div v-if="userActiveTab === 'tenant-profiles'">
+          <div class="section-header">
+            <div class="actions-bar">
+              <button class="btn-primary" @click="showCreateTenantProfile = true">
+                <span>+</span> Crear Tenant Profile
+              </button>
+              <button class="btn-secondary" @click="loadTenantProfiles" :disabled="loadingTenantProfiles">
+                <span v-if="loadingTenantProfiles">⟳</span>
+                <span v-else>↻</span>
+                Actualizar
+              </button>
+            </div>
+          </div>
+
+          <div v-if="loadingTenantProfiles" class="loading-state">
+            <p>Cargando tenant profiles...</p>
+          </div>
+          
+          <div v-else-if="tenantProfiles.length === 0" class="empty-state">
+            <p>No hay tenant profiles registrados</p>
+          </div>
+          
+          <div v-else class="table-container">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Usuario</th>
+                  <th>Subdomain</th>
+                  <th>Template</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="profile in tenantProfiles" :key="profile.id">
+                  <td>
+                    <strong>{{ profile.user_username }}</strong><br>
+                    <small style="color: #666;">{{ profile.user_email || 'Sin email' }}</small>
+                  </td>
+                  <td><code>{{ profile.subdomain }}</code></td>
+                  <td>
+                    <span class="badge">{{ profile.preferred_template || 'pro' }}</span>
+                  </td>
+                  <td>
+                    <div class="action-buttons">
+                      <button class="btn-small btn-secondary" @click="editTenantProfile(profile)" title="Editar">
+                        ✏️
+                      </button>
+                      <button class="btn-small btn-danger" @click="deleteTenantProfile(profile)" title="Eliminar">
+                        🗑️
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
 
@@ -390,101 +448,16 @@
           <p>No hay API Keys generadas</p>
         </div>
         
-        <div v-else class="table-container">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>NIT</th>
-                <th>Cliente</th>
-                <th>Servidor</th>
-                <th>API Key</th>
-                <th>Empresas Asociadas</th>
-                <th>Estado</th>
-                <th>Fecha Creación</th>
-                <th>Fecha Caducidad</th>
-                <th>Peticiones</th>
-                <th>Acciones</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="key in apiKeys" :key="key.id">
-                <td><code>{{ key.nit }}</code></td>
-                <td><strong>{{ key.nombre_cliente }}</strong></td>
-                <td>
-                  <span v-if="key.servidor_nombre" class="badge">{{ key.servidor_nombre }}</span>
-                  <span v-else class="text-muted">Todos</span>
-                </td>
-                <td>
-                  <div class="api-key-cell">
-                    <code v-if="!key.showKey" class="api-key-masked">{{ key.api_key_masked || '••••••••' }}</code>
-                    <code v-else class="api-key-visible">{{ key.api_key }}</code>
-                    <button 
-                      class="btn-tiny btn-secondary" 
-                      @click="toggleApiKeyVisibility(key.id)"
-                      :title="key.showKey ? 'Ocultar' : 'Mostrar'"
-                    >
-                      {{ key.showKey ? '👁️' : '👁️‍🗨️' }}
-                    </button>
-                    <button 
-                      class="btn-tiny btn-info" 
-                      @click="copyApiKey(key.api_key)"
-                      title="Copiar"
-                    >
-                      📋
-                    </button>
-                  </div>
-                </td>
-                <td>
-                  <span class="badge">{{ key.empresas_asociadas_count || 0 }}</span>
-                  <button 
-                    v-if="key.empresas_asociadas_count > 0"
-                    class="btn-tiny btn-info" 
-                    @click="viewApiKeyEmpresas(key.id)"
-                    title="Ver empresas"
-                  >
-                    👁️
-                  </button>
-                </td>
-                <td>
-                  <span class="status-badge" :class="key.activa && !key.expirada ? 'status-active' : 'status-inactive'">
-                    {{ key.activa && !key.expirada ? 'Activa' : (key.expirada ? 'Expirada' : 'Inactiva') }}
-                  </span>
-                </td>
-                <td>{{ formatDate(key.fecha_creacion) }}</td>
-                <td>
-                  <span :class="key.expirada ? 'text-danger' : ''">
-                    {{ formatDate(key.fecha_caducidad) }}
-                  </span>
-                </td>
-                <td>{{ key.contador_peticiones || 0 }}</td>
-                <td>
-                  <div class="action-buttons">
-                    <button 
-                      class="btn-small btn-primary" 
-                      @click="regenerateApiKey(key.id)"
-                      title="Regenerar"
-                    >
-                      🔄
-                    </button>
-                    <button 
-                      class="btn-small btn-secondary" 
-                      @click="toggleApiKeyStatus(key.id, !key.activa)"
-                      :title="key.activa ? 'Desactivar' : 'Activar'"
-                    >
-                      {{ key.activa ? '⏸️' : '▶️' }}
-                    </button>
-                    <button 
-                      class="btn-small btn-danger" 
-                      @click="revokeApiKey(key.id)"
-                      title="Revocar"
-                    >
-                      🗑️
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+        <div v-else>
+          <ApiKeysTable
+            :api-keys="apiKeys"
+            @toggle-visibility="toggleApiKeyVisibility"
+            @copy="copyApiKey"
+            @view-empresas="viewApiKeyEmpresas"
+            @regenerate="regenerateApiKey"
+            @toggle-status="toggleApiKeyStatus"
+            @revoke="revokeApiKey"
+          />
         </div>
       </section>
 
@@ -633,155 +606,6 @@
         </div>
       </section>
 
-      <!-- Permisos Usuarios -->
-      <section v-if="activeSection === 'permisos'" class="section">
-        <div class="section-header">
-          <h2>Gestión de Permisos Usuario-Empresa</h2>
-          <div class="actions-bar">
-            <button class="btn-primary" @click="showCreatePermiso = true">
-              <span>+</span> Crear Permiso
-            </button>
-            <button class="btn-secondary" @click="loadPermisos" :disabled="loadingPermisos">
-              <span v-if="loadingPermisos">⟳</span>
-              <span v-else>↻</span>
-              Actualizar
-            </button>
-          </div>
-        </div>
-        
-        <div v-if="loadingPermisos" class="loading-state">
-          <p>Cargando permisos...</p>
-        </div>
-        
-        <div v-else-if="permisosUsuarios.length === 0" class="empty-state">
-          <p>No hay permisos registrados</p>
-        </div>
-        
-        <div v-else class="table-container">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Usuario</th>
-                <th>Empresa</th>
-                <th>Puede Ver</th>
-                <th>Puede Editar</th>
-                <th>Template</th>
-                <th>Fecha Asignación</th>
-                <th>Acciones</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="permiso in permisosUsuarios" :key="permiso.id">
-                <td>
-                  <strong>{{ permiso.usuario_username }}</strong><br>
-                  <small style="color: #666;">{{ permiso.usuario_email || 'Sin email' }}</small>
-                </td>
-                <td>
-                  <strong>{{ permiso.empresa_nombre }}</strong><br>
-                  <small style="color: #666;">NIT: {{ permiso.empresa_nit || 'N/A' }} | Año: {{ permiso.empresa_anio_fiscal }}</small><br>
-                  <small style="color: #999;">Servidor: {{ permiso.empresa_servidor_nombre }}</small>
-                </td>
-                <td>
-                  <span class="status-badge" :class="permiso.puede_ver ? 'status-active' : 'status-inactive'">
-                    {{ permiso.puede_ver ? 'Sí' : 'No' }}
-                  </span>
-                </td>
-                <td>
-                  <span class="status-badge" :class="permiso.puede_editar ? 'status-active' : 'status-inactive'">
-                    {{ permiso.puede_editar ? 'Sí' : 'No' }}
-                  </span>
-                </td>
-                <td>
-                  <span class="status-badge" :class="{
-                    'status-active': permiso.preferred_template === 'pro',
-                    'status-warning': permiso.preferred_template === 'retail',
-                    'status-inactive': permiso.preferred_template === 'restaurant'
-                  }">
-                    {{ permiso.preferred_template === 'pro' ? 'Pro' : permiso.preferred_template === 'retail' ? 'Retail' : 'Restaurant' }}
-                  </span>
-                </td>
-                <td>{{ formatDate(permiso.fecha_asignacion) }}</td>
-                <td>
-                  <div class="action-buttons">
-                    <button class="btn-small btn-secondary" @click="editPermiso(permiso)" title="Editar">
-                      ✏️
-                    </button>
-                    <button class="btn-small btn-danger" @click="deletePermiso(permiso)" title="Eliminar">
-                      🗑️
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <!-- Tenant Profiles -->
-      <section v-if="activeSection === 'tenant-profiles'" class="section">
-        <div class="section-header">
-          <h2>Gestión de Tenant Profiles</h2>
-          <div class="actions-bar">
-            <button class="btn-primary" @click="showCreateTenantProfile = true">
-              <span>+</span> Crear Tenant Profile
-            </button>
-            <button class="btn-secondary" @click="loadTenantProfiles" :disabled="loadingTenantProfiles">
-              <span v-if="loadingTenantProfiles">⟳</span>
-              <span v-else>↻</span>
-              Actualizar
-            </button>
-          </div>
-        </div>
-        
-        <div v-if="loadingTenantProfiles" class="loading-state">
-          <p>Cargando tenant profiles...</p>
-        </div>
-        
-        <div v-else-if="tenantProfiles.length === 0" class="empty-state">
-          <p>No hay tenant profiles registrados</p>
-        </div>
-        
-        <div v-else class="table-container">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Usuario</th>
-                <th>Subdomain</th>
-                <th>Template Preferido</th>
-                <th>Acciones</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="profile in tenantProfiles" :key="profile.id">
-                <td>
-                  <strong>{{ profile.user_username }}</strong><br>
-                  <small style="color: #666;">{{ profile.user_email || 'Sin email' }}</small>
-                </td>
-                <td><code>{{ profile.subdomain }}</code></td>
-                <td>
-                  <span class="status-badge" :class="{
-                    'status-active': profile.preferred_template === 'pro',
-                    'status-warning': profile.preferred_template === 'retail',
-                    'status-inactive': profile.preferred_template === 'restaurant'
-                  }">
-                    {{ profile.preferred_template === 'pro' ? 'Pro' : profile.preferred_template === 'retail' ? 'Retail' : 'Restaurant' }}
-                  </span>
-                </td>
-                <td>
-                  <div class="action-buttons">
-                    <button class="btn-small btn-secondary" @click="editTenantProfile(profile)" title="Editar">
-                      ✏️
-                    </button>
-                    <button class="btn-small btn-danger" @click="deleteTenantProfile(profile)" title="Eliminar">
-                      🗑️
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
 
       <!-- RUTs -->
       <section v-if="activeSection === 'ruts'" class="section">
@@ -901,31 +725,15 @@
           </p>
         </div>
         
-        <div v-else class="table-container">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Impuesto</th>
-                <th>Dígitos NIT</th>
-                <th>Tipo Tercero</th>
-                <th>Régimen</th>
-                <th>Fecha Límite</th>
-                <th>Descripción</th>
-                <th>Última Actualización</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="vigencia in vigenciasTributarias" :key="vigencia.id">
-                <td><strong>{{ vigencia.impuesto?.codigo }}</strong><br><small>{{ vigencia.impuesto?.nombre }}</small></td>
-                <td><code>{{ vigencia.digitos_nit || 'TODOS' }}</code></td>
-                <td>{{ vigencia.tipo_tercero?.codigo || 'TODOS' }}</td>
-                <td>{{ vigencia.tipo_regimen?.codigo || 'TODOS' }}</td>
-                <td><strong>{{ formatDate(vigencia.fecha_limite) }}</strong></td>
-                <td>{{ vigencia.descripcion || '-' }}</td>
-                <td>{{ formatDate(vigencia.fecha_actualizacion) }}</td>
-              </tr>
-            </tbody>
-          </table>
+        <div v-else>
+          <CalendarioTributarioTable
+            :vigencias="filteredAndSortedVigencias"
+            :sort-by="calendarioSortBy"
+            :sort-order="calendarioSortOrder"
+            :filters="calendarioFilters"
+            @sort="sortCalendario"
+            @filter-change="(f) => calendarioFilters = f"
+          />
         </div>
       </section>
 
@@ -2217,63 +2025,16 @@
           <p>Cargando empresas...</p>
         </div>
         <div v-else>
-          <div class="table-container" style="margin-top: 16px;">
-            <table class="data-table">
-              <thead>
-                <tr>
-                  <th>CODIGO</th>
-                  <th>NOMBRE</th>
-                  <th>NIT</th>
-                  <th>REPRES</th>
-                  <th>ANOFIS</th>
-                  <th>ARCHIVO</th>
-                  <th>Acciones</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-if="serverEmpresasList.length === 0">
-                  <td colspan="7" class="text-center">
-                    No hay empresas en este servidor.
-                  </td>
-                </tr>
-                <tr v-for="empresa in serverEmpresasList" :key="empresa.id">
-                  <td>{{ empresa.codigo }}</td>
-                  <td>{{ empresa.nombre }}</td>
-                  <td>{{ empresa.nit || empresa.nit_normalizado }}</td>
-                  <td>{{ empresa.representante_legal || '-' }}</td>
-                  <td>{{ empresa.anio_fiscal }}</td>
-                  <td>
-                    <code style="font-size: 11px;">{{ empresa.ruta_base ? empresa.ruta_base.split('/').pop() || empresa.ruta_base.split('\\').pop() : '-' }}</code>
-                  </td>
-                  <td>
-                    <div style="display: flex; gap: 4px; flex-wrap: wrap;">
-                      <button
-                        class="btn-small btn-primary"
-                        @click="hacerBackupEmpresa(empresa.id)"
-                        title="Crear backup"
-                      >
-                        📦 Backup
-                      </button>
-                      <button
-                        class="btn-small btn-info"
-                        @click="descargarUltimoBackupEmpresa(empresa.id)"
-                        title="Descargar último backup"
-                      >
-                        ⬇️ Descargar
-                      </button>
-                      <button
-                        class="btn-small btn-secondary"
-                        @click="editEmpresa(empresa)"
-                        title="Editar empresa"
-                      >
-                        ✏️ Editar
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+          <EmpresasTable
+            :empresas="serverEmpresasList"
+            :backup-menu-open="backupMenuOpen"
+            @backup-click="handleBackupClick"
+            @create-backup="hacerBackupEmpresa"
+            @download-fbk="(id) => downloadBackupFromEmpresa(id, 'fbk')"
+            @request-gdb="requestGdbDownload"
+            @edit="editEmpresa"
+            @close-backup-menu="backupMenuOpen = null"
+          />
         </div>
         <div class="modal-actions">
           <button class="btn-secondary" @click="showServerEmpresasModal = false">Cerrar</button>
@@ -3324,9 +3085,21 @@
 </template>
 
 <script setup lang="ts">
-import { watch, computed } from 'vue'
+import { watch, computed, onMounted } from 'vue'
 import { useRuntimeConfig } from '#app'
 import { useAuthState } from '~/composables/useAuthState'
+import ServidorCard from './components/ServidorCard.vue'
+import ToastContainer from './components/ToastContainer.vue'
+import EmpresasTable from './components/EmpresasTable.vue'
+import CalendarioTributarioTable from './components/CalendarioTributarioTable.vue'
+import UsuariosTable from './components/UsuariosTable.vue'
+import ApiKeysTable from './components/ApiKeysTable.vue'
+import Tabs from './components/Tabs.vue'
+import SearchBar from './components/SearchBar.vue'
+import Pagination from './components/Pagination.vue'
+import { usePagination } from './composables/usePagination'
+import { exportToCSV, exportToExcel } from './utils/exporters'
+import { useToast } from './composables/useToast'
 
 definePageMeta({
   layout: false,
@@ -3431,22 +3204,6 @@ const sections = [
     </svg>`
   },
   { 
-    id: 'permisos', 
-    name: '7. Permisos Usuarios',
-    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-      <path d="M9 12l2 2 4-4"/>
-    </svg>`
-  },
-  { 
-    id: 'tenant-profiles', 
-    name: '8. Tenant Profiles',
-    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <rect x="3" y="3" width="18" height="18" rx="2"/>
-      <path d="M3 9h18M9 3v18"/>
-    </svg>`
-  },
-  { 
     id: 'ruts', 
     name: '9. RUTs',
     icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -3542,6 +3299,8 @@ const loadingUsers = ref(false)
 const userSearch = ref('')
 const showCreateUser = ref(false)
 const showEditUser = ref(false)
+const userActiveTab = ref<'usuarios' | 'permisos' | 'tenant-profiles'>('usuarios')
+const openUserMenu = ref<number | null>(null) // ID del usuario cuyo menú está abierto
 const editingUser = ref<any>(null)
 const showEditEmpresaSQL = ref(false)
 const showEditEmpresaConfig = ref(false)
@@ -3609,6 +3368,24 @@ const loadingCalendario = ref(false)
 const showUploadCalendario = ref(false)
 const uploadingCalendario = ref(false)
 const selectedCalendarioFile = ref<File | null>(null)
+// Filtros y ordenamiento para Calendario Tributario
+const calendarioSortBy = ref<string>('fecha_limite')
+const calendarioSortOrder = ref<'asc' | 'desc'>('asc')
+const calendarioFilters = ref({
+  impuesto: '',
+  tipo_tercero: '',
+  tipo_regimen: '',
+  digitos_nit: ''
+})
+const calendarioItemsPerPage = ref(50)
+const calendarioPagination = usePagination(computed(() => filteredAndSortedVigencias.value), calendarioItemsPerPage.value)
+const paginatedVigencias = computed(() => {
+  // Resetear paginación si cambian los filtros
+  if (calendarioPagination.currentPage.value > calendarioPagination.totalPages.value) {
+    calendarioPagination.reset()
+  }
+  return calendarioPagination.paginatedItems.value
+})
 const rutNitManual = ref('')
 const selectedRUT = ref<any>(null)
 const showRUTDetails = ref(false)
@@ -3632,9 +3409,15 @@ const serverEmpresasList = ref<any[]>([])
 const loadingServerEmpresas = ref(false)
 const showEditEmpresaModal = ref(false)
 const editingEmpresa = ref<any>(null)
+const empresaMenuOpen = ref<number | null>(null)
+const backupMenuOpen = ref<number | null>(null)
+const empresasItemsPerPage = ref(25)
+const empresasPagination = usePagination(computed(() => serverEmpresasList.value), empresasItemsPerPage.value)
+const paginatedEmpresasList = computed(() => empresasPagination.paginatedItems.value)
 
 const scanningServer = ref<number | null>(null)
 const activeScanTasks = ref<Record<number, string>>({}) // servidor_id -> task_id
+const openServerMenu = ref<number | null>(null) // ID del servidor cuyo menú está abierto
 const showCreateServer = ref(false)
 const showEditServer = ref(false)
 const editingServer = ref<Servidor | null>(null)
@@ -3791,6 +3574,94 @@ const filteredUsers = computed(() => {
     (u.first_name || '').toLowerCase().includes(search) ||
     (u.last_name || '').toLowerCase().includes(search)
   )
+})
+
+// Computed para Calendario Tributario: valores únicos para filtros
+const uniqueImpuestos = computed(() => {
+  const impuestos = new Set<string>()
+  vigenciasTributarias.value.forEach(v => {
+    if (v.impuesto?.codigo) impuestos.add(v.impuesto.codigo)
+  })
+  return Array.from(impuestos).sort()
+})
+
+const uniqueTiposTercero = computed(() => {
+  const tipos = new Set<string>()
+  vigenciasTributarias.value.forEach(v => {
+    const tipo = v.tipo_tercero?.codigo || 'TODOS'
+    tipos.add(tipo)
+  })
+  return Array.from(tipos).sort()
+})
+
+const uniqueRegimenes = computed(() => {
+  const regimenes = new Set<string>()
+  vigenciasTributarias.value.forEach(v => {
+    const regimen = v.tipo_regimen?.codigo || 'TODOS'
+    regimenes.add(regimen)
+  })
+  return Array.from(regimenes).sort()
+})
+
+// Computed para filtrar y ordenar vigencias tributarias
+const filteredAndSortedVigencias = computed(() => {
+  let filtered = [...vigenciasTributarias.value]
+  
+  // Aplicar filtros
+  if (calendarioFilters.value.impuesto) {
+    filtered = filtered.filter(v => v.impuesto?.codigo === calendarioFilters.value.impuesto)
+  }
+  if (calendarioFilters.value.tipo_tercero) {
+    const tipo = calendarioFilters.value.tipo_tercero === 'TODOS' ? null : calendarioFilters.value.tipo_tercero
+    filtered = filtered.filter(v => (v.tipo_tercero?.codigo || 'TODOS') === (tipo || 'TODOS'))
+  }
+  if (calendarioFilters.value.tipo_regimen) {
+    const regimen = calendarioFilters.value.tipo_regimen === 'TODOS' ? null : calendarioFilters.value.tipo_regimen
+    filtered = filtered.filter(v => (v.tipo_regimen?.codigo || 'TODOS') === (regimen || 'TODOS'))
+  }
+  if (calendarioFilters.value.digitos_nit) {
+    filtered = filtered.filter(v => (v.digitos_nit || '').includes(calendarioFilters.value.digitos_nit))
+  }
+  
+  // Aplicar ordenamiento
+  filtered.sort((a, b) => {
+    let aVal: any, bVal: any
+    
+    switch (calendarioSortBy.value) {
+      case 'impuesto':
+        aVal = a.impuesto?.codigo || ''
+        bVal = b.impuesto?.codigo || ''
+        break
+      case 'digitos_nit':
+        aVal = a.digitos_nit || 'TODOS'
+        bVal = b.digitos_nit || 'TODOS'
+        break
+      case 'tipo_tercero':
+        aVal = a.tipo_tercero?.codigo || 'TODOS'
+        bVal = b.tipo_tercero?.codigo || 'TODOS'
+        break
+      case 'tipo_regimen':
+        aVal = a.tipo_regimen?.codigo || 'TODOS'
+        bVal = b.tipo_regimen?.codigo || 'TODOS'
+        break
+      case 'fecha_limite':
+        aVal = new Date(a.fecha_limite).getTime()
+        bVal = new Date(b.fecha_limite).getTime()
+        break
+      case 'fecha_actualizacion':
+        aVal = new Date(a.fecha_actualizacion || 0).getTime()
+        bVal = new Date(b.fecha_actualizacion || 0).getTime()
+        break
+      default:
+        return 0
+    }
+    
+    if (aVal < bVal) return calendarioSortOrder.value === 'asc' ? -1 : 1
+    if (aVal > bVal) return calendarioSortOrder.value === 'asc' ? 1 : -1
+    return 0
+  })
+  
+  return filtered
 })
 
 const sortEmpresas = (field: string) => {
@@ -4373,6 +4244,8 @@ const formatBytes = (bytes: number): string => {
   return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i]
 }
 
+const formatFileSize = formatBytes // Alias para consistencia
+
 const formatHandshakeTime = (secondsAgo: number): string => {
   if (secondsAgo === null || secondsAgo === undefined) return 'Nunca'
   if (secondsAgo < 60) return `Hace ${secondsAgo}s`
@@ -4608,13 +4481,49 @@ const viewServerDetails = async (serverId: number) => {
   }
 }
 
+const exportEmpresas = () => {
+  try {
+    const dataToExport = serverEmpresasList.value.map(e => ({
+      'Código': e.codigo,
+      'Nombre': e.nombre,
+      'NIT': e.nit || e.nit_normalizado,
+      'Representante Legal': e.representante_legal || '',
+      'Año Fiscal': e.anio_fiscal,
+      'Archivo': e.ruta_base ? e.ruta_base.split('/').pop() || e.ruta_base.split('\\').pop() : '',
+      'Último Backup': e.ultimo_backup ? formatDate(e.ultimo_backup.fecha_backup) : 'Sin backup',
+      'Tamaño Backup': e.ultimo_backup ? formatFileSize(e.ultimo_backup.tamano_bytes) : ''
+    }))
+    
+    exportToCSV(dataToExport, `empresas_servidor_${selectedServerForEmpresas.value}_${new Date().toISOString().split('T')[0]}.csv`)
+    
+    const { success } = useToast()
+    success('Empresas exportadas exitosamente')
+  } catch (error: any) {
+    console.error('Error exportando empresas:', error)
+    const { error: showError } = useToast()
+    showError('Error al exportar empresas')
+  }
+}
+
 const viewServerEmpresas = async (serverId: number) => {
   selectedServerForEmpresas.value = serverId
   loadingServerEmpresas.value = true
   try {
     const empresasResponse = await api.get<any>(`/api/empresas-servidor/?servidor=${serverId}`)
     const empresasData = Array.isArray(empresasResponse) ? empresasResponse : (empresasResponse as any).results || []
+    
+    // Cargar último backup para cada empresa
+    for (const empresa of empresasData) {
+      try {
+        const ultimoBackup = await api.get<any>(`/api/empresas-servidor/${empresa.id}/ultimo_backup/`)
+        empresa.ultimo_backup = ultimoBackup || null
+      } catch {
+        empresa.ultimo_backup = null
+      }
+    }
+    
     serverEmpresasList.value = empresasData
+    empresasPagination.reset()
     showServerEmpresasModal.value = true
   } catch (error: any) {
     console.error('Error cargando empresas del servidor:', error)
@@ -4709,6 +4618,103 @@ const hacerBackupEmpresa = async (empresaId: number) => {
     await Swal.fire({
       title: 'Error',
       text: error?.data?.error || error?.message || 'Error al iniciar el backup',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  }
+}
+
+const toggleEmpresaMenu = (empresaId: number) => {
+  empresaMenuOpen.value = empresaMenuOpen.value === empresaId ? null : empresaId
+  backupMenuOpen.value = null
+}
+
+const handleBackupClick = (empresa: any) => {
+  if (backupMenuOpen.value === empresa.id) {
+    backupMenuOpen.value = null
+  } else {
+    backupMenuOpen.value = empresa.id
+    empresaMenuOpen.value = null
+  }
+}
+
+const downloadBackupFromEmpresa = async (backupId: number, formato: 'fbk' | 'gdb' = 'fbk') => {
+  backupMenuOpen.value = null
+  try {
+    const backup = { id: backupId }
+    if (formato === 'gdb') {
+      // Solicitar GDB por email
+      await requestGdbDownload(backupId, null)
+    } else {
+      // Descarga directa FBK
+      await downloadBackup(backup)
+    }
+  } catch (error: any) {
+    console.error('Error descargando backup:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al descargar backup',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  }
+}
+
+const requestGdbDownload = async (backupId: number, empresa: any | null) => {
+  backupMenuOpen.value = null
+  const Swal = (await import('sweetalert2')).default
+  
+  const emailResult = await Swal.fire({
+    title: 'Email para descarga GDB',
+    text: 'Ingresa tu email para recibir el link de descarga seguro',
+    input: 'email',
+    inputPlaceholder: 'tu@email.com',
+    inputValidator: (value) => {
+      if (!value) {
+        return 'Debes ingresar un email válido'
+      }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+        return 'Email inválido'
+      }
+      return null
+    },
+    showCancelButton: true,
+    confirmButtonText: 'Enviar',
+    cancelButtonText: 'Cancelar',
+    customClass: { container: 'swal-z-index-fix' }
+  })
+  
+  if (emailResult.isDismissed || !emailResult.value) return
+  
+  try {
+    await api.post(`/api/backups-s3/${backupId}/solicitar_descarga_gdb/`, {
+      email: emailResult.value
+    })
+    
+    await Swal.fire({
+      title: 'Solicitud recibida',
+      html: `
+        <p>Se está procesando la conversión a GDB.</p>
+        <p>Recibirás un correo en <strong>${emailResult.value}</strong> con el link de descarga en breve.</p>
+        <p><small>El link será válido por 24 horas.</small></p>
+      `,
+      icon: 'success',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    
+    // Recargar lista de empresas para actualizar último backup
+    if (selectedServerForEmpresas.value) {
+      await viewServerEmpresas(selectedServerForEmpresas.value)
+    }
+  } catch (error: any) {
+    console.error('Error solicitando descarga GDB:', error)
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al solicitar la descarga',
       icon: 'error',
       confirmButtonText: 'Aceptar',
       customClass: { container: 'swal-z-index-fix' }
@@ -5032,6 +5038,33 @@ const formatUptime = (seconds: number) => {
 }
 
 // Watch para cargar servicios cuando se cambia a esa pestaña
+// Cerrar menús al hacer clic fuera
+onMounted(() => {
+  document.addEventListener('click', (e) => {
+    if (!(e.target as HTMLElement).closest('.dropdown-menu-container') && 
+        !(e.target as HTMLElement).closest('.backup-info-clickable') &&
+        !(e.target as HTMLElement).closest('.backup-menu')) {
+      openServerMenu.value = null
+      openUserMenu.value = null
+      empresaMenuOpen.value = null
+      backupMenuOpen.value = null
+    }
+  })
+})
+
+watch(userActiveTab, (newTab) => {
+  if (activeSection.value === 'usuarios') {
+    if (newTab === 'permisos') {
+      if (users.value.length === 0) loadUsers()
+      if (empresas.value.length === 0) loadEmpresas()
+      loadPermisos()
+    } else if (newTab === 'tenant-profiles') {
+      if (users.value.length === 0) loadUsers()
+      loadTenantProfiles()
+    }
+  }
+})
+
 watch(activeSection, (newSection) => {
   if (newSection === 'servicios') {
     // Cargar servicios automáticamente al cambiar a esta pestaña
@@ -5061,15 +5094,12 @@ watch(activeSection, (newSection) => {
   } else if (newSection === 'pasarelas') {
     // Cargar pasarelas automáticamente
     loadPasarelas()
-  } else if (newSection === 'permisos') {
-    // Cargar permisos, usuarios y empresas automáticamente
+  } else if (newSection === 'usuarios') {
+    // Cargar usuarios, permisos y tenant profiles automáticamente
     if (users.value.length === 0) loadUsers()
     if (empresas.value.length === 0) loadEmpresas()
-    loadPermisos()
-  } else if (newSection === 'tenant-profiles') {
-    // Cargar tenant profiles y usuarios automáticamente
-    if (users.value.length === 0) loadUsers()
-    loadTenantProfiles()
+    if (userActiveTab.value === 'permisos') loadPermisos()
+    if (userActiveTab.value === 'tenant-profiles') loadTenantProfiles()
   } else if (newSection === 'ruts') {
     // Cargar RUTs automáticamente
     loadRuts()
@@ -5684,6 +5714,69 @@ const deleteUser = async (usr: any) => {
         customClass: { container: 'swal-z-index-fix' }
       })
     }
+  }
+}
+
+const toggleUserMenu = (userId: number) => {
+  openUserMenu.value = openUserMenu.value === userId ? null : userId
+}
+
+const viewUserPermisos = (userId: number) => {
+  userActiveTab.value = 'permisos'
+  openUserMenu.value = null
+  // Filtrar permisos por usuario si es necesario
+  if (users.value.length === 0) loadUsers()
+  if (empresas.value.length === 0) loadEmpresas()
+  loadPermisos()
+}
+
+const viewUserTenantProfile = (userId: number) => {
+  userActiveTab.value = 'tenant-profiles'
+  openUserMenu.value = null
+  if (users.value.length === 0) loadUsers()
+  loadTenantProfiles()
+}
+
+const sortCalendario = (column: string) => {
+  if (calendarioSortBy.value === column) {
+    calendarioSortOrder.value = calendarioSortOrder.value === 'asc' ? 'desc' : 'asc'
+  } else {
+    calendarioSortBy.value = column
+    calendarioSortOrder.value = 'asc'
+  }
+}
+
+const resetCalendarioFilters = () => {
+  calendarioFilters.value = {
+    impuesto: '',
+    tipo_tercero: '',
+    tipo_regimen: '',
+    digitos_nit: ''
+  }
+  calendarioPagination.reset()
+}
+
+const exportCalendario = () => {
+  try {
+    const dataToExport = filteredAndSortedVigencias.value.map(v => ({
+      'Impuesto Código': v.impuesto?.codigo || '',
+      'Impuesto Nombre': v.impuesto?.nombre || '',
+      'Dígitos NIT': v.digitos_nit || 'TODOS',
+      'Tipo Tercero': v.tipo_tercero?.codigo || 'TODOS',
+      'Tipo Régimen': v.tipo_regimen?.codigo || 'TODOS',
+      'Fecha Límite': v.fecha_limite,
+      'Descripción': v.descripcion || '',
+      'Última Actualización': v.fecha_actualizacion || ''
+    }))
+    
+    exportToCSV(dataToExport, `calendario_tributario_${new Date().toISOString().split('T')[0]}.csv`)
+    
+    const { success } = useToast()
+    success('Calendario exportado exitosamente')
+  } catch (error: any) {
+    console.error('Error exportando calendario:', error)
+    const { error: showError } = useToast()
+    showError('Error al exportar calendario')
   }
 }
 
@@ -8974,6 +9067,236 @@ onMounted(async () => {
   font-size: 0.875rem;
   font-weight: 500;
   color: #374151;
+}
+
+/* Estilos para Dropdown Menu */
+.dropdown-menu-container {
+  position: relative;
+  display: inline-block;
+}
+
+.dropdown-trigger {
+  position: relative;
+}
+
+.dropdown-trigger.active {
+  background: #374151;
+}
+
+.dropdown-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 0.25rem;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.5rem;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  min-width: 180px;
+  z-index: 1000;
+  overflow: hidden;
+}
+
+.dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.625rem 1rem;
+  border: none;
+  background: none;
+  text-align: left;
+  font-size: 0.875rem;
+  color: #374151;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.dropdown-item:hover:not(:disabled) {
+  background: #f3f4f6;
+}
+
+.dropdown-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.dropdown-item-danger {
+  color: #dc2626;
+}
+
+.dropdown-item-danger:hover:not(:disabled) {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.dropdown-divider {
+  height: 1px;
+  background: #e5e7eb;
+  margin: 0.25rem 0;
+}
+
+/* Estilos para Tabs */
+.tabs-container {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+  border-bottom: 2px solid #e5e7eb;
+}
+
+.tab-btn {
+  padding: 0.75rem 1.5rem;
+  border: none;
+  background: none;
+  color: #6b7280;
+  font-size: 0.95rem;
+  font-weight: 500;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  transition: all 0.2s;
+}
+
+.tab-btn:hover {
+  color: #374151;
+  background: #f9fafb;
+}
+
+.tab-btn.active {
+  color: #1f2937;
+  border-bottom-color: #1f2937;
+  font-weight: 600;
+}
+
+/* Estilos para Filtros */
+.filters-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  padding: 1rem;
+  background: #f9fafb;
+  border-radius: 0.5rem;
+  margin-bottom: 1.5rem;
+  align-items: flex-end;
+}
+
+.filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.filter-group label {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #374151;
+}
+
+.filter-input {
+  padding: 0.5rem 0.75rem;
+  border: 1.5px solid #d1d5db;
+  border-radius: 0.5rem;
+  background: white;
+  color: #1f2937;
+  font-size: 0.875rem;
+  min-width: 150px;
+  transition: all 0.2s;
+}
+
+.filter-input:focus {
+  outline: none;
+  border-color: #4b5563;
+  box-shadow: 0 0 0 3px rgba(75, 85, 99, 0.1);
+}
+
+/* Estilos para Ordenamiento en Tablas */
+.sortable {
+  cursor: pointer;
+  user-select: none;
+  position: relative;
+  padding-right: 1.5rem;
+}
+
+.sortable:hover {
+  background: #f9fafb;
+}
+
+.sort-icon {
+  position: absolute;
+  right: 0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.75rem;
+  color: #9ca3af;
+}
+
+.sortable.sort-asc .sort-icon,
+.sortable.sort-desc .sort-icon {
+  color: #1f2937;
+  font-weight: bold;
+}
+
+/* Estilos para columna de Último Backup */
+.ultimo-backup-cell {
+  position: relative;
+}
+
+.backup-info-clickable {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem;
+  border-radius: 0.375rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: 1px solid transparent;
+}
+
+.backup-info-clickable:hover {
+  background: #f3f4f6;
+  border-color: #d1d5db;
+}
+
+.backup-date {
+  font-size: 0.75rem;
+  color: #6b7280;
+  font-weight: 500;
+}
+
+.backup-size {
+  font-size: 0.7rem;
+  color: #9ca3af;
+}
+
+.backup-status {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  text-align: center;
+  line-height: 18px;
+  font-size: 0.7rem;
+}
+
+.backup-status.status-completado {
+  background: #d1fae5;
+  color: #10b981;
+}
+
+.backup-status.status-error {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.backup-status.status-pendiente,
+.backup-status.status-procesando {
+  background: #fef3c7;
+  color: #f59e0b;
+}
+
+.backup-menu {
+  min-width: 200px;
+  z-index: 1001;
 }
 
 .stats-grid {
