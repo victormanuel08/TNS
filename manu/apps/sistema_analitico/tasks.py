@@ -521,6 +521,79 @@ def realizar_backup_empresa_task(self, empresa_id: int, configuracion_s3_id: int
         }
 
 
+@shared_task(name='sistema_analitico.explorar_empresas_todos_servidores')
+def explorar_empresas_todos_servidores_task():
+    """
+    Tarea Celery programada para explorar empresas en todos los servidores activos.
+    Se ejecuta automáticamente a la 1:00 AM para detectar nuevas empresas creadas.
+    
+    Esta tarea inicia el descubrimiento de empresas en todos los servidores de forma asíncrona.
+    No espera los resultados para no bloquear, pero registra que se iniciaron las tareas.
+    
+    Returns:
+        dict con información de las tareas iniciadas
+    """
+    from .models import Servidor
+    
+    try:
+        logger.info("🔍 Iniciando exploración automática de empresas en todos los servidores (1:00 AM)")
+        
+        # Obtener todos los servidores activos
+        servidores_activos = Servidor.objects.filter(activo=True)
+        
+        if not servidores_activos.exists():
+            logger.warning("⚠️ No hay servidores activos para explorar")
+            return {
+                'status': 'SKIPPED',
+                'mensaje': 'No hay servidores activos'
+            }
+        
+        tareas_iniciadas = []
+        
+        for servidor in servidores_activos:
+            try:
+                logger.info(f"📡 Iniciando exploración de empresas en servidor: {servidor.nombre} (ID: {servidor.id})")
+                
+                # Llamar a la tarea de descubrimiento de forma asíncrona
+                # No esperamos el resultado para que se ejecute en paralelo y no bloquee
+                task_result = descubrir_empresas_task.delay(servidor.id)
+                
+                tareas_iniciadas.append({
+                    'servidor_id': servidor.id,
+                    'servidor_nombre': servidor.nombre,
+                    'task_id': task_result.id,
+                    'status': 'INICIADA'
+                })
+                
+                logger.info(f"✅ Tarea de exploración iniciada para servidor {servidor.nombre} (Task ID: {task_result.id})")
+                    
+            except Exception as e:
+                logger.error(f"❌ Error iniciando exploración en servidor {servidor.nombre}: {e}", exc_info=True)
+                tareas_iniciadas.append({
+                    'servidor_id': servidor.id,
+                    'servidor_nombre': servidor.nombre,
+                    'status': 'ERROR',
+                    'error': str(e)
+                })
+        
+        logger.info(f"✅ Exploración automática iniciada: {len(tareas_iniciadas)} tarea(s) iniciada(s)")
+        
+        return {
+            'status': 'SUCCESS',
+            'total_servidores': len(servidores_activos),
+            'tareas_iniciadas': len([t for t in tareas_iniciadas if t.get('status') == 'INICIADA']),
+            'tareas_por_servidor': tareas_iniciadas,
+            'mensaje': f'Se iniciaron {len([t for t in tareas_iniciadas if t.get("status") == "INICIADA"])} tarea(s) de exploración en {len(servidores_activos)} servidor(es). Las tareas se ejecutan en paralelo.'
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error en exploración automática de empresas: {e}", exc_info=True)
+        return {
+            'status': 'ERROR',
+            'error': str(e)
+        }
+
+
 @shared_task(name='sistema_analitico.procesar_backups_programados', rate_limit='10/m')  # Máximo 10 por minuto
 def procesar_backups_programados_task():
     """

@@ -102,6 +102,15 @@
                 </svg>
                 {{ activeScanTasks[server.id] ? 'Ver Progreso' : 'Escanear Empresas' }}
               </button>
+              <button class="btn-small btn-primary" @click="viewServerEmpresas(server.id)" title="Ver empresas de este servidor">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                  <circle cx="9" cy="7" r="4"/>
+                  <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                  <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                </svg>
+                Empresas
+              </button>
               <button class="btn-small btn-secondary" @click="editServer(server)">Editar</button>
               <button class="btn-small btn-info" @click="viewServerDetails(server.id)">Detalles</button>
               <button class="btn-small btn-danger" @click="deleteServer(server.id)">Eliminar</button>
@@ -1152,15 +1161,27 @@
                         </span>
                       </td>
                       <td>
-                        <button
-                          class="btn-small btn-danger"
-                          @click="deleteBackup(backup)"
-                          :disabled="deletingBackupId === backup.id"
-                        >
-                          <span v-if="deletingBackupId === backup.id">⏳</span>
-                          <span v-else>🗑️</span>
-                          Eliminar
-                        </button>
+                        <div style="display: flex; gap: 8px;">
+                          <button
+                            class="btn-small btn-primary"
+                            @click="downloadBackup(backup)"
+                            :disabled="downloadingBackupId === backup.id"
+                            title="Descargar backup"
+                          >
+                            <span v-if="downloadingBackupId === backup.id">⏳</span>
+                            <span v-else>⬇️</span>
+                            Descargar
+                          </button>
+                          <button
+                            class="btn-small btn-danger"
+                            @click="deleteBackup(backup)"
+                            :disabled="deletingBackupId === backup.id"
+                          >
+                            <span v-if="deletingBackupId === backup.id">⏳</span>
+                            <span v-else>🗑️</span>
+                            Eliminar
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   </tbody>
@@ -2171,6 +2192,153 @@
               Escanear Empresas
             </button>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Empresas del Servidor -->
+    <div v-if="showServerEmpresasModal" class="modal-overlay" @click="showServerEmpresasModal = false">
+      <div class="modal-content empresas-modal" @click.stop style="max-width: 1200px; max-height: 90vh; overflow-y: auto;">
+        <div class="modal-header">
+          <h2>Empresas del Servidor</h2>
+          <button class="modal-close" @click="showServerEmpresasModal = false">×</button>
+        </div>
+        <div v-if="loadingServerEmpresas" class="loading-state">
+          <p>Cargando empresas...</p>
+        </div>
+        <div v-else>
+          <div class="table-container" style="margin-top: 16px;">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>CODIGO</th>
+                  <th>NOMBRE</th>
+                  <th>NIT</th>
+                  <th>REPRES</th>
+                  <th>ANOFIS</th>
+                  <th>ARCHIVO</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-if="serverEmpresasList.length === 0">
+                  <td colspan="7" class="text-center">
+                    No hay empresas en este servidor.
+                  </td>
+                </tr>
+                <tr v-for="empresa in serverEmpresasList" :key="empresa.id">
+                  <td>{{ empresa.codigo }}</td>
+                  <td>{{ empresa.nombre }}</td>
+                  <td>{{ empresa.nit || empresa.nit_normalizado }}</td>
+                  <td>{{ empresa.representante_legal || '-' }}</td>
+                  <td>{{ empresa.anio_fiscal }}</td>
+                  <td>
+                    <code style="font-size: 11px;">{{ empresa.ruta_base ? empresa.ruta_base.split('/').pop() || empresa.ruta_base.split('\\').pop() : '-' }}</code>
+                  </td>
+                  <td>
+                    <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+                      <button
+                        class="btn-small btn-primary"
+                        @click="hacerBackupEmpresa(empresa.id)"
+                        title="Crear backup"
+                      >
+                        📦 Backup
+                      </button>
+                      <button
+                        class="btn-small btn-info"
+                        @click="descargarUltimoBackupEmpresa(empresa.id)"
+                        title="Descargar último backup"
+                      >
+                        ⬇️ Descargar
+                      </button>
+                      <button
+                        class="btn-small btn-secondary"
+                        @click="editEmpresa(empresa)"
+                        title="Editar empresa"
+                      >
+                        ✏️ Editar
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn-secondary" @click="showServerEmpresasModal = false">Cerrar</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Editar Empresa -->
+    <div v-if="showEditEmpresaModal && editingEmpresa" class="modal-overlay" @click="showEditEmpresaModal = false">
+      <div class="modal-content" @click.stop style="max-width: 600px;">
+        <div class="modal-header">
+          <h2>Editar Empresa</h2>
+          <button class="modal-close" @click="showEditEmpresaModal = false">×</button>
+        </div>
+        <div class="form-container">
+          <div class="form-group">
+            <label>
+              <span class="label-text">Código</span>
+              <input
+                v-model="editingEmpresa.codigo"
+                type="text"
+                class="form-input"
+                disabled
+              />
+            </label>
+          </div>
+          <div class="form-group">
+            <label>
+              <span class="label-text">NIT</span>
+              <input
+                v-model="editingEmpresa.nit"
+                type="text"
+                class="form-input"
+                placeholder="900.869.750-0"
+              />
+            </label>
+          </div>
+          <div class="form-group">
+            <label>
+              <span class="label-text">Razón Social</span>
+              <input
+                v-model="editingEmpresa.nombre"
+                type="text"
+                class="form-input"
+                placeholder="Nombre de la empresa"
+              />
+            </label>
+          </div>
+          <div class="form-group">
+            <label>
+              <span class="label-text">Año Fiscal</span>
+              <input
+                v-model.number="editingEmpresa.anio_fiscal"
+                type="number"
+                class="form-input"
+                min="2000"
+                max="2100"
+              />
+            </label>
+          </div>
+          <div class="form-group">
+            <label>
+              <span class="label-text">Representante Legal</span>
+              <input
+                v-model="editingEmpresa.representante_legal"
+                type="text"
+                class="form-input"
+                placeholder="Nombre completo del representante legal"
+              />
+            </label>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn-secondary" @click="showEditEmpresaModal = false">Cancelar</button>
+          <button class="btn-primary" @click="saveEmpresa">Guardar</button>
         </div>
       </div>
     </div>
@@ -3405,6 +3573,13 @@ const selectedBackupEmpresaId = ref<number | null>(null)
 const backupStats = ref<any | null>(null)
 const triggeringBackup = ref(false)
 const deletingBackupId = ref<number | null>(null)
+const downloadingBackupId = ref<number | null>(null)
+const showServerEmpresasModal = ref(false)
+const selectedServerForEmpresas = ref<number | null>(null)
+const serverEmpresasList = ref<any[]>([])
+const loadingServerEmpresas = ref(false)
+const showEditEmpresaModal = ref(false)
+const editingEmpresa = ref<any>(null)
 
 const scanningServer = ref<number | null>(null)
 const activeScanTasks = ref<Record<number, string>>({}) // servidor_id -> task_id
@@ -4378,6 +4553,146 @@ const viewServerDetails = async (serverId: number) => {
     alert('Error al cargar detalles del servidor')
   } finally {
     loadingServerDetails.value = false
+  }
+}
+
+const viewServerEmpresas = async (serverId: number) => {
+  selectedServerForEmpresas.value = serverId
+  loadingServerEmpresas.value = true
+  try {
+    const empresasResponse = await api.get<any>(`/api/empresas-servidor/?servidor=${serverId}`)
+    const empresasData = Array.isArray(empresasResponse) ? empresasResponse : (empresasResponse as any).results || []
+    serverEmpresasList.value = empresasData
+    showServerEmpresasModal.value = true
+  } catch (error: any) {
+    console.error('Error cargando empresas del servidor:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al cargar empresas',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    loadingServerEmpresas.value = false
+  }
+}
+
+const editEmpresa = (empresa: any) => {
+  editingEmpresa.value = { ...empresa }
+  showEditEmpresaModal.value = true
+}
+
+const saveEmpresa = async () => {
+  if (!editingEmpresa.value) return
+  
+  try {
+    await api.patch(`/api/empresas-servidor/${editingEmpresa.value.id}/actualizar_campos/`, {
+      nit: editingEmpresa.value.nit,
+      nombre: editingEmpresa.value.nombre,
+      anio_fiscal: editingEmpresa.value.anio_fiscal,
+      representante_legal: editingEmpresa.value.representante_legal
+    })
+    
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Éxito',
+      text: 'Empresa actualizada correctamente',
+      icon: 'success',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    
+    showEditEmpresaModal.value = false
+    editingEmpresa.value = null
+    
+    // Recargar lista de empresas
+    if (selectedServerForEmpresas.value) {
+      await viewServerEmpresas(selectedServerForEmpresas.value)
+    }
+  } catch (error: any) {
+    console.error('Error guardando empresa:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al guardar empresa',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  }
+}
+
+const hacerBackupEmpresa = async (empresaId: number) => {
+  if (!activeS3Config.value || !activeS3Config.value.id) {
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Configuración S3',
+      text: 'Debes guardar una configuración S3 activa antes de crear backups.',
+      icon: 'warning',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    return
+  }
+
+  try {
+    const response = await api.post<any>('/api/backups-s3/realizar_backup/', {
+      empresa_id: empresaId,
+      configuracion_s3_id: activeS3Config.value.id
+    })
+
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Backup iniciado',
+      text: `Se inició la tarea de backup. Task ID: ${response.task_id}`,
+      icon: 'info',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } catch (error: any) {
+    console.error('Error iniciando backup:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al iniciar el backup',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  }
+}
+
+const descargarUltimoBackupEmpresa = async (empresaId: number) => {
+  try {
+    // Obtener último backup
+    const ultimoBackup = await api.get<any>(`/api/empresas-servidor/${empresaId}/ultimo_backup/`)
+    
+    if (!ultimoBackup) {
+      const Swal = (await import('sweetalert2')).default
+      await Swal.fire({
+        title: 'Sin backups',
+        text: 'Esta empresa no tiene backups disponibles.',
+        icon: 'info',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' }
+      })
+      return
+    }
+    
+    // Llamar a la función de descarga
+    await downloadBackup(ultimoBackup)
+  } catch (error: any) {
+    console.error('Error obteniendo último backup:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al obtener último backup',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
   }
 }
 
@@ -6203,6 +6518,75 @@ const triggerBackupForSelectedEmpresa = async () => {
     })
   } finally {
     triggeringBackup.value = false
+  }
+}
+
+const downloadBackup = async (backup: any) => {
+  const Swal = (await import('sweetalert2')).default
+  
+  // Preguntar formato
+  const result = await Swal.fire({
+    title: 'Formato de descarga',
+    text: '¿En qué formato deseas descargar el backup?',
+    icon: 'question',
+    showCancelButton: true,
+    confirmButtonText: 'FBK (Backup)',
+    cancelButtonText: 'GDB (Base de datos)',
+    showDenyButton: true,
+    denyButtonText: 'Cancelar',
+    customClass: { container: 'swal-z-index-fix' }
+  })
+
+  if (result.isDismissed || result.isDenied) return
+
+  const formato = result.isConfirmed ? 'fbk' : 'gdb'
+  
+  downloadingBackupId.value = backup.id
+  try {
+    const response = await api.get(
+      `/api/backups-s3/${backup.id}/descargar_backup/?formato=${formato}`,
+      { responseType: 'blob' }
+    )
+    
+    // Crear URL del blob y descargar
+    const url = window.URL.createObjectURL(new Blob([response.data]))
+    const link = document.createElement('a')
+    link.href = url
+    
+    // Obtener nombre del archivo desde headers o usar el nombre del backup
+    const contentDisposition = response.headers['content-disposition']
+    let filename = backup.nombre_archivo
+    if (contentDisposition) {
+      const filenameMatch = contentDisposition.match(/filename="?(.+)"?/i)
+      if (filenameMatch) {
+        filename = filenameMatch[1]
+      }
+    }
+    
+    link.setAttribute('download', filename)
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.URL.revokeObjectURL(url)
+    
+    await Swal.fire({
+      title: 'Descarga iniciada',
+      text: `El archivo ${filename} se está descargando.`,
+      icon: 'success',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } catch (error: any) {
+    console.error('Error descargando backup:', error)
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al descargar backup',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    downloadingBackupId.value = null
   }
 }
 

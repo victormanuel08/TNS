@@ -434,6 +434,113 @@ class EmpresaServidorViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(servidor_id=servidor_id)
         return queryset
     
+    @action(detail=True, methods=['patch'])
+    def actualizar_campos(self, request, pk=None):
+        """
+        Actualiza campos específicos de una empresa: NIT, razón social, representante legal, año fiscal.
+        """
+        try:
+            empresa = self.get_object()
+            data = request.data
+            
+            # Campos permitidos para actualizar
+            campos_permitidos = ['nit', 'nombre', 'anio_fiscal']
+            campos_actualizados = []
+            
+            # Actualizar NIT (normaliza automáticamente en save())
+            if 'nit' in data:
+                empresa.nit = data['nit']
+                campos_actualizados.append('nit')
+            
+            # Actualizar nombre (razón social)
+            if 'nombre' in data:
+                empresa.nombre = data['nombre']
+                campos_actualizados.append('nombre')
+            
+            # Actualizar año fiscal
+            if 'anio_fiscal' in data:
+                empresa.anio_fiscal = data['anio_fiscal']
+                campos_actualizados.append('anio_fiscal')
+            
+            # Actualizar representante legal (si existe en RUT)
+            if 'representante_legal' in data:
+                # Buscar RUT asociado
+                from .models import RUT
+                rut = RUT.objects.filter(nit_normalizado=empresa.nit_normalizado).first()
+                if rut:
+                    representante = data['representante_legal']
+                    # Actualizar campos de representante legal
+                    if 'primer_nombre' in representante:
+                        rut.representante_legal_primer_nombre = representante.get('primer_nombre', '')[:100]
+                    if 'primer_apellido' in representante:
+                        rut.representante_legal_primer_apellido = representante.get('primer_apellido', '')[:100]
+                    if 'otros_nombres' in representante:
+                        rut.representante_legal_otros_nombres = representante.get('otros_nombres', '')[:100]
+                    rut.save()
+                    campos_actualizados.append('representante_legal')
+            
+            if not campos_actualizados:
+                return Response(
+                    {'error': 'No se proporcionaron campos válidos para actualizar'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            empresa.save()
+            
+            serializer = self.get_serializer(empresa)
+            return Response({
+                'mensaje': f'Campos actualizados: {", ".join(campos_actualizados)}',
+                'empresa': serializer.data
+            }, status=status.HTTP_200_OK)
+            
+        except EmpresaServidor.DoesNotExist:
+            return Response(
+                {'error': 'Empresa no encontrada'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            logger.error(f"Error actualizando empresa: {e}", exc_info=True)
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=True, methods=['get'])
+    def ultimo_backup(self, request, pk=None):
+        """
+        Obtiene el último backup de una empresa.
+        """
+        try:
+            empresa = self.get_object()
+            from .models import BackupS3
+            
+            ultimo_backup = BackupS3.objects.filter(
+                empresa_servidor=empresa,
+                estado='completado'
+            ).order_by('-fecha_backup').first()
+            
+            if not ultimo_backup:
+                return Response(
+                    {'mensaje': 'No hay backups para esta empresa'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            from .serializers import BackupS3Serializer
+            serializer = BackupS3Serializer(ultimo_backup)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+            
+        except EmpresaServidor.DoesNotExist:
+            return Response(
+                {'error': 'Empresa no encontrada'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            logger.error(f"Error obteniendo último backup: {e}", exc_info=True)
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
 class UsuarioEmpresaViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
     """
     ViewSet para gestionar permisos de usuarios a empresas.
@@ -10361,6 +10468,174 @@ class BackupS3ViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
             )
         except Exception as e:
             logger.error(f"Error obteniendo estadísticas: {e}", exc_info=True)
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=True, methods=['get'])
+    def descargar_backup(self, request, pk=None):
+        """
+        Descarga un backup desde S3 en formato FBK o GDB (convertido).
+        
+        Query params:
+            formato: 'fbk' o 'gdb' (default: 'fbk')
+        """
+        from django.http import HttpResponse, FileResponse
+        import tempfile
+        import os
+        import subprocess
+        
+        try:
+            backup = self.get_object()
+            formato = request.query_params.get('formato', 'fbk').lower()
+            
+            if formato not in ['fbk', 'gdb']:
+                return Response(
+                    {'error': 'Formato debe ser "fbk" o "gdb"'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            from .models import ConfiguracionS3
+            from .services.backup_s3_service import BackupS3Service
+            
+            config_s3 = backup.configuracion_s3
+            if not config_s3:
+                return Response(
+                    {'error': 'Backup no tiene configuración S3 asociada'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            servicio = BackupS3Service(config_s3)
+            empresa = backup.empresa_servidor
+            
+            # Descargar FBK desde S3 a archivo temporal
+            temp_dir = tempfile.gettempdir()
+            temp_fbk = os.path.join(temp_dir, f"backup_{backup.id}_{backup.nombre_archivo}")
+            
+            try:
+                servicio.s3_client.download_file(
+                    servicio.bucket_name,
+                    backup.ruta_s3,
+                    temp_fbk
+                )
+                
+                # Si el formato es FBK, devolver directamente
+                if formato == 'fbk':
+                    nombre_descarga = backup.nombre_archivo
+                    response = FileResponse(
+                        open(temp_fbk, 'rb'),
+                        content_type='application/octet-stream'
+                    )
+                    response['Content-Disposition'] = f'attachment; filename="{nombre_descarga}"'
+                    return response
+                
+                # Si el formato es GDB, convertir usando gbak restore
+                # Obtener nombre del archivo GDB original desde ruta_base
+                ruta_base = empresa.ruta_base
+                nombre_gdb = os.path.basename(ruta_base)
+                if not nombre_gdb.endswith('.gdb') and not nombre_gdb.endswith('.GDB'):
+                    nombre_gdb = f"{empresa.codigo}.GDB"
+                
+                temp_gdb = os.path.join(temp_dir, f"restore_{backup.id}_{nombre_gdb}")
+                
+                # Buscar gbak
+                gbak_path = None
+                posibles_rutas = [
+                    '/opt/firebird2.5/bin/gbak',
+                    '/opt/firebird2.5/opt/firebird/bin/gbak',
+                    '/usr/local/bin/gbak',
+                    '/usr/bin/gbak',
+                    'gbak'
+                ]
+                
+                for ruta in posibles_rutas:
+                    if os.path.exists(ruta) or ruta == 'gbak':
+                        try:
+                            result = subprocess.run(
+                                [ruta, '-?'],
+                                capture_output=True,
+                                timeout=5
+                            )
+                            gbak_path = ruta
+                            break
+                        except:
+                            continue
+                
+                if not gbak_path:
+                    # Limpiar archivo temporal
+                    if os.path.exists(temp_fbk):
+                        os.remove(temp_fbk)
+                    return Response(
+                        {'error': 'No se encontró gbak para convertir el backup. Instala Firebird 2.5.'},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                    )
+                
+                # Convertir FBK a GDB usando gbak restore
+                # gbak -c -v -user SYSDBA -password masterkey backup.fbk destino.gdb
+                comando = [
+                    gbak_path,
+                    '-c',  # Create database
+                    '-v',  # Verbose
+                    '-user', 'SYSDBA',
+                    '-password', 'masterkey',
+                    temp_fbk,
+                    temp_gdb
+                ]
+                
+                logger.info(f"Convirtiendo backup {backup.id} a GDB: {' '.join(comando)}")
+                resultado = subprocess.run(
+                    comando,
+                    capture_output=True,
+                    text=True,
+                    timeout=600  # 10 minutos máximo
+                )
+                
+                if resultado.returncode != 0:
+                    error_msg = resultado.stderr or resultado.stdout or "Error desconocido"
+                    logger.error(f"Error convirtiendo backup a GDB: {error_msg}")
+                    # Limpiar archivos temporales
+                    if os.path.exists(temp_fbk):
+                        os.remove(temp_fbk)
+                    if os.path.exists(temp_gdb):
+                        os.remove(temp_gdb)
+                    return Response(
+                        {'error': f'Error al convertir backup a GDB: {error_msg}'},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                    )
+                
+                # Devolver archivo GDB
+                response = FileResponse(
+                    open(temp_gdb, 'rb'),
+                    content_type='application/octet-stream'
+                )
+                response['Content-Disposition'] = f'attachment; filename="{nombre_gdb}"'
+                
+                # Limpiar archivo FBK temporal (el GDB se limpiará después de enviar)
+                if os.path.exists(temp_fbk):
+                    os.remove(temp_fbk)
+                
+                return response
+                
+            except Exception as e:
+                logger.error(f"Error descargando backup: {e}", exc_info=True)
+                # Limpiar archivos temporales
+                if os.path.exists(temp_fbk):
+                    os.remove(temp_fbk)
+                if 'temp_gdb' in locals() and os.path.exists(temp_gdb):
+                    os.remove(temp_gdb)
+                return Response(
+                    {'error': f'Error al descargar backup: {str(e)}'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+                
+        except BackupS3.DoesNotExist:
+            return Response(
+                {'error': 'Backup no encontrado'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            logger.error(f"Error en descargar_backup: {e}", exc_info=True)
             return Response(
                 {'error': str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR

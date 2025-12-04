@@ -211,6 +211,12 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'sistema_analitico.procesar_backups_programados',
         'schedule': crontab(minute=0),  # Cada hora en el minuto 0 (ej: 1:00, 2:00, 3:00...)
     },
+    # Explorar empresas en todos los servidores automáticamente a la 1:00 AM
+    # Detecta nuevas empresas creadas en los servidores
+    'explorar-empresas-todos-servidores': {
+        'task': 'sistema_analitico.explorar_empresas_todos_servidores',
+        'schedule': crontab(hour=1, minute=0),  # Todos los días a la 1:00 AM
+    },
 }
 
 # ==================== Configuración de Cache ====================
