@@ -594,6 +594,190 @@ def explorar_empresas_todos_servidores_task():
         }
 
 
+@shared_task(bind=True, name='sistema_analitico.convertir_backup_a_gdb')
+def convertir_backup_a_gdb_task(self, descarga_temporal_id: int):
+    """
+    Tarea Celery para convertir un backup FBK a GDB y enviar el link de descarga por correo.
+    
+    Args:
+        descarga_temporal_id: ID del registro DescargaTemporalBackup
+        
+    Returns:
+        dict con resultado de la conversión
+    """
+    from .models import DescargaTemporalBackup, ConfiguracionS3
+    from .services.backup_s3_service import BackupS3Service
+    import tempfile
+    import os
+    import subprocess
+    import secrets
+    
+    try:
+        descarga = DescargaTemporalBackup.objects.get(id=descarga_temporal_id)
+        backup = descarga.backup
+        empresa = backup.empresa_servidor
+        
+        # Actualizar estado
+        descarga.estado = 'procesando'
+        descarga.save()
+        
+        logger.info(f"🔄 Iniciando conversión de backup {backup.id} a GDB para {descarga.email}")
+        
+        # Obtener configuración S3 y servicio
+        config_s3 = backup.configuracion_s3
+        if not config_s3:
+            raise ValueError('Backup no tiene configuración S3 asociada')
+        
+        servicio = BackupS3Service(config_s3)
+        
+        # Descargar FBK desde S3
+        temp_dir = tempfile.gettempdir()
+        temp_fbk = os.path.join(temp_dir, f"backup_{backup.id}_{backup.nombre_archivo}")
+        
+        servicio.s3_client.download_file(
+            servicio.bucket_name,
+            backup.ruta_s3,
+            temp_fbk
+        )
+        
+        # Obtener nombre del archivo GDB
+        ruta_base = empresa.ruta_base
+        nombre_gdb = os.path.basename(ruta_base)
+        if not nombre_gdb.endswith('.gdb') and not nombre_gdb.endswith('.GDB'):
+            nombre_gdb = f"{empresa.codigo}.GDB"
+        
+        # Crear ruta temporal para GDB (en una carpeta persistente para que dure 1 día)
+        gdb_dir = os.path.join(temp_dir, 'backups_gdb_temporales')
+        os.makedirs(gdb_dir, exist_ok=True)
+        temp_gdb = os.path.join(gdb_dir, f"{descarga.token}_{nombre_gdb}")
+        
+        # Buscar gbak
+        gbak_path = None
+        posibles_rutas = [
+            '/opt/firebird2.5/bin/gbak',
+            '/opt/firebird2.5/opt/firebird/bin/gbak',
+            '/usr/local/bin/gbak',
+            '/usr/bin/gbak',
+            'gbak'
+        ]
+        
+        for ruta in posibles_rutas:
+            if os.path.exists(ruta) or ruta == 'gbak':
+                try:
+                    result = subprocess.run(
+                        [ruta, '-?'],
+                        capture_output=True,
+                        timeout=5
+                    )
+                    gbak_path = ruta
+                    break
+                except:
+                    continue
+        
+        if not gbak_path:
+            descarga.estado = 'expirado'
+            descarga.save()
+            raise ValueError('No se encontró gbak para convertir el backup')
+        
+        # Convertir FBK a GDB
+        comando = [
+            gbak_path,
+            '-c',  # Create database
+            '-v',  # Verbose
+            '-user', 'SYSDBA',
+            '-password', 'masterkey',
+            temp_fbk,
+            temp_gdb
+        ]
+        
+        logger.info(f"⏳ Convirtiendo backup a GDB: {' '.join(comando)}")
+        resultado = subprocess.run(
+            comando,
+            capture_output=True,
+            text=True,
+            timeout=600  # 10 minutos máximo
+        )
+        
+        # Limpiar FBK temporal
+        if os.path.exists(temp_fbk):
+            os.remove(temp_fbk)
+        
+        if resultado.returncode != 0:
+            error_msg = resultado.stderr or resultado.stdout or "Error desconocido"
+            logger.error(f"❌ Error convirtiendo backup a GDB: {error_msg}")
+            descarga.estado = 'expirado'
+            descarga.save()
+            raise Exception(f'Error al convertir backup a GDB: {error_msg}')
+        
+        # Guardar ruta del GDB
+        descarga.ruta_gdb_temporal = temp_gdb
+        descarga.estado = 'listo'
+        descarga.save()
+        
+        logger.info(f"✅ Backup convertido exitosamente a GDB: {temp_gdb}")
+        
+        # Enviar correo con el link de descarga
+        from django.core.mail import send_mail
+        from django.conf import settings
+        
+        # Construir URL de descarga segura (usar el dominio del backend API)
+        # Esta URL es pública y no requiere autenticación, solo el token
+        # No expone información del backend ni frontend, solo el token seguro
+        api_url = getattr(settings, 'API_PUBLIC_URL', None) or getattr(settings, 'FRONTEND_URL', 'https://api.eddeso.com')
+        download_url = f"{api_url}/api/backups/descargar/{descarga.token}/"
+        
+        # Enviar correo
+        try:
+            send_mail(
+                subject=f'Link de descarga - Backup GDB {empresa.nombre}',
+                message=f'''Hola,
+
+Se ha generado tu archivo GDB del backup de {empresa.nombre}.
+
+Link de descarga (válido por 24 horas):
+{download_url}
+
+Este link expirará el {descarga.fecha_expiracion.strftime('%d/%m/%Y a las %H:%M')}.
+
+Si no solicitaste esta descarga, puedes ignorar este correo.
+
+Saludos,
+Sistema de Backups''',
+                from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@eddeso.com'),
+                recipient_list=[descarga.email],
+                fail_silently=False,
+            )
+            logger.info(f"✅ Correo enviado exitosamente a {descarga.email}")
+        except Exception as e:
+            logger.error(f"❌ Error enviando correo: {e}", exc_info=True)
+            # No fallar la tarea si falla el correo, el link ya está listo
+        
+        return {
+            'status': 'SUCCESS',
+            'mensaje': 'Backup convertido y correo enviado exitosamente',
+            'token': descarga.token
+        }
+        
+    except DescargaTemporalBackup.DoesNotExist:
+        logger.error(f"❌ DescargaTemporalBackup {descarga_temporal_id} no encontrado")
+        return {
+            'status': 'ERROR',
+            'error': 'Descarga temporal no encontrada'
+        }
+    except Exception as e:
+        logger.error(f"❌ Error en convertir_backup_a_gdb_task: {e}", exc_info=True)
+        try:
+            descarga = DescargaTemporalBackup.objects.get(id=descarga_temporal_id)
+            descarga.estado = 'expirado'
+            descarga.save()
+        except:
+            pass
+        return {
+            'status': 'ERROR',
+            'error': str(e)
+        }
+
+
 @shared_task(name='sistema_analitico.procesar_backups_programados', rate_limit='10/m')  # Máximo 10 por minuto
 def procesar_backups_programados_task():
     """

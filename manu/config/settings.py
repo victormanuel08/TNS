@@ -217,6 +217,11 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'sistema_analitico.explorar_empresas_todos_servidores',
         'schedule': crontab(hour=1, minute=0),  # Todos los días a la 1:00 AM
     },
+    # Limpiar descargas temporales expiradas diariamente a las 2:00 AM
+    'limpiar-descargas-expiradas': {
+        'task': 'sistema_analitico.limpiar_descargas_expiradas',
+        'schedule': crontab(hour=2, minute=0),  # Todos los días a las 2:00 AM
+    },
 }
 
 # ==================== Configuración de Cache ====================
@@ -233,6 +238,17 @@ CACHES = {
         'TIMEOUT': 604800,  # 7 días por defecto (igual que BCE)
     }
 }
+
+# Configuración de Email
+EMAIL_BACKEND = env('EMAIL_BACKEND', default='django.core.mail.backends.smtp.EmailBackend')
+EMAIL_HOST = env('EMAIL_HOST', default='smtp.gmail.com')
+EMAIL_PORT = env.int('EMAIL_PORT', default=587)
+EMAIL_USE_TLS = env.bool('EMAIL_USE_TLS', default=True)
+EMAIL_HOST_USER = env('EMAIL_HOST_USER', default='')
+EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD', default='')
+DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL', default='noreply@eddeso.com')
+FRONTEND_URL = env('FRONTEND_URL', default='https://api.eddeso.com')
+API_PUBLIC_URL = env('API_PUBLIC_URL', default='https://api.eddeso.com')  # URL pública del API para links de descarga
 
 # Configuración API DIAN
 API_DIAN_ROUTE = env('API_DIAN_ROUTE', default='http://45.149.204.184:81')

@@ -2355,6 +2355,83 @@ class BackupS3(models.Model):
         return round(self.tamano_bytes / (1024 * 1024 * 1024), 2)
 
 
+class DescargaTemporalBackup(models.Model):
+    """
+    Links temporales y seguros para descargar backups convertidos a GDB.
+    Los links expiran después de 1 día y son únicos por token.
+    """
+    ESTADO_CHOICES = [
+        ('pendiente', 'Pendiente'),
+        ('procesando', 'Procesando'),
+        ('listo', 'Listo'),
+        ('expirado', 'Expirado'),
+        ('descargado', 'Descargado'),
+    ]
+    
+    backup = models.ForeignKey(
+        BackupS3,
+        on_delete=models.CASCADE,
+        related_name='descargas_temporales',
+        help_text='Backup que se está convirtiendo a GDB'
+    )
+    token = models.CharField(
+        max_length=64,
+        unique=True,
+        db_index=True,
+        help_text='Token único y seguro para la descarga'
+    )
+    email = models.EmailField(
+        help_text='Email del destinatario al que se envió el link'
+    )
+    estado = models.CharField(
+        max_length=20,
+        choices=ESTADO_CHOICES,
+        default='pendiente',
+        help_text='Estado del proceso de conversión'
+    )
+    ruta_gdb_temporal = models.CharField(
+        max_length=500,
+        null=True,
+        blank=True,
+        help_text='Ruta temporal del archivo GDB generado'
+    )
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_expiracion = models.DateTimeField(
+        help_text='Fecha en que expira el link (1 día después de la creación)'
+    )
+    fecha_descarga = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text='Fecha en que se descargó el archivo'
+    )
+    intentos_descarga = models.IntegerField(
+        default=0,
+        help_text='Número de veces que se ha intentado descargar'
+    )
+    
+    class Meta:
+        db_table = 'descargas_temporales_backup'
+        verbose_name = 'Descarga Temporal de Backup'
+        verbose_name_plural = 'Descargas Temporales de Backup'
+        indexes = [
+            models.Index(fields=['token']),
+            models.Index(fields=['fecha_expiracion']),
+            models.Index(fields=['estado']),
+        ]
+        ordering = ['-fecha_creacion']
+    
+    def __str__(self):
+        return f"Descarga {self.token[:8]}... - {self.email} - {self.estado}"
+    
+    def esta_expirado(self):
+        """Verifica si el link ha expirado"""
+        return timezone.now() > self.fecha_expiracion
+    
+    def puede_descargar(self):
+        """Verifica si el link puede ser descargado"""
+        return self.estado == 'listo' and not self.esta_expirado()
+
+
 # Extender el modelo User
 User.add_to_class('puede_gestionar_api_keys', user_puede_gestionar_api_keys)
 User.add_to_class('has_empresa_permission', user_has_empresa_permission)

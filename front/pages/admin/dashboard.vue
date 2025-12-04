@@ -6595,6 +6595,79 @@ const downloadBackup = async (backup: any) => {
 
   const formato = result.isConfirmed ? 'fbk' : 'gdb'
   
+  // Si es GDB, pedir email
+  if (formato === 'gdb') {
+    const emailResult = await Swal.fire({
+      title: 'Email para descarga GDB',
+      text: 'Ingresa tu email para recibir el link de descarga seguro',
+      input: 'email',
+      inputPlaceholder: 'tu@email.com',
+      inputValidator: (value) => {
+        if (!value) {
+          return 'Debes ingresar un email válido'
+        }
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+          return 'Email inválido'
+        }
+        return null
+      },
+      showCancelButton: true,
+      confirmButtonText: 'Enviar',
+      cancelButtonText: 'Cancelar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    
+    if (emailResult.isDismissed || !emailResult.value) return
+    
+    downloadingBackupId.value = backup.id
+    try {
+      const config = useRuntimeConfig()
+      const { accessToken, apiKey } = useAuthState()
+      
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json'
+      }
+      
+      if (accessToken.value) {
+        headers['Authorization'] = `Bearer ${accessToken.value}`
+      }
+      
+      if (apiKey.value) {
+        headers['Api-Key'] = apiKey.value
+      }
+      
+      // Solicitar conversión a GDB y envío por correo
+      await api.post(`/api/backups-s3/${backup.id}/solicitar_descarga_gdb/`, {
+        email: emailResult.value
+      })
+      
+      await Swal.fire({
+        title: 'Solicitud recibida',
+        html: `
+          <p>Se está procesando la conversión a GDB.</p>
+          <p>Recibirás un correo en <strong>${emailResult.value}</strong> con el link de descarga en breve.</p>
+          <p><small>El link será válido por 24 horas.</small></p>
+        `,
+        icon: 'success',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' }
+      })
+    } catch (error: any) {
+      console.error('Error solicitando descarga GDB:', error)
+      await Swal.fire({
+        title: 'Error',
+        text: error?.data?.error || error?.message || 'Error al solicitar la descarga',
+        icon: 'error',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' }
+      })
+    } finally {
+      downloadingBackupId.value = null
+    }
+    return
+  }
+  
+  // Si es FBK, descarga directa
   downloadingBackupId.value = backup.id
   try {
     // Usar $fetch directamente para manejar blob response
@@ -6612,11 +6685,10 @@ const downloadBackup = async (backup: any) => {
     }
     
     // Construir URL completa sin parámetros adicionales
-    const url = `${config.public.djangoApiUrl}/api/backups-s3/${backup.id}/descargar_backup/?formato=${encodeURIComponent(formato)}`
+    const downloadUrl = `${config.public.djangoApiUrl}/api/backups-s3/${backup.id}/descargar_backup/?formato=fbk`
     
     // Usar $fetch.raw para obtener la respuesta completa con headers
-    // NO pasar params como objeto, solo en la URL
-    const response = await $fetch.raw(url, {
+    const response = await $fetch.raw(downloadUrl, {
       method: 'GET',
       headers
     })
@@ -6695,9 +6767,9 @@ const downloadBackup = async (backup: any) => {
     }
     
     // Crear URL del blob y descargar
-    const url = window.URL.createObjectURL(blob)
+    const blobUrlDownload = window.URL.createObjectURL(blob)
     const link = document.createElement('a')
-    link.href = url
+    link.href = blobUrlDownload
     
     // Obtener nombre del archivo desde headers o usar el nombre del backup
     const contentDisposition = getHeader('content-disposition')
@@ -6713,7 +6785,7 @@ const downloadBackup = async (backup: any) => {
     document.body.appendChild(link)
     link.click()
     link.remove()
-    window.URL.revokeObjectURL(url)
+    window.URL.revokeObjectURL(blobUrlDownload)
     
     await Swal.fire({
       title: 'Descarga iniciada',
