@@ -18,6 +18,86 @@ def normalize_nit(nit: str) -> str:
     return ''.join(c for c in str(nit) if c.isdigit())
 
 
+def truncar_campo(valor: str, max_length: int, campo_nombre: str = '') -> Tuple[str, bool]:
+    """
+    Trunca un campo a max_length y retorna (valor_truncado, fue_truncado).
+    Si fue truncado, agrega '...' al final.
+    """
+    if not valor or len(valor) <= max_length:
+        return valor, False
+    
+    # Truncar dejando espacio para '...'
+    valor_truncado = valor[:max_length - 3] + '...'
+    return valor_truncado, True
+
+
+def obtener_razon_social_mejorada(rut_data: Dict) -> str:
+    """
+    Obtiene la razón social mejorada:
+    - Para personas jurídicas: usa razón social (campo 35) directamente
+    - Para personas naturales: si razón social está vacía/inválida, construye con campos 31-34
+    """
+    razon_social = rut_data.get('razon_social', '').strip()
+    tipo_contribuyente = rut_data.get('tipo_contribuyente')
+    
+    # Verificar si la razón social es inválida
+    razon_social_invalida = (
+        not razon_social or 
+        '36. Nombre comercial' in razon_social or 
+        '37. Sigla' in razon_social or
+        razon_social.startswith('36.') or
+        razon_social.startswith('37.')
+    )
+    
+    # Para personas jurídicas: usar razón social directamente (no tocar lo que funciona)
+    if tipo_contribuyente == 'persona_juridica':
+        if razon_social and not razon_social_invalida:
+            return razon_social
+        # Si está inválida, intentar nombre comercial o sigla
+        nombre_comercial = rut_data.get('nombre_comercial', '').strip()
+        if nombre_comercial and nombre_comercial not in ['36. Nombre comercial', '37. Sigla', '']:
+            if not nombre_comercial.startswith('36.') and not nombre_comercial.startswith('37.'):
+                return nombre_comercial
+        sigla = rut_data.get('sigla', '').strip()
+        if sigla and sigla not in ['36. Nombre comercial', '37. Sigla', '']:
+            if not sigla.startswith('36.') and not sigla.startswith('37.'):
+                return sigla
+        return razon_social if razon_social else 'Sin razón social'
+    
+    # Para personas naturales: construir razón social con campos 31-34 si está vacía/inválida
+    if tipo_contribuyente == 'persona_natural':
+        if razon_social_invalida:
+            # Construir con campos 31-34: Apellidos + Nombres
+            pn_apellido1 = rut_data.get('persona_natural_primer_apellido', '').strip()
+            pn_apellido2 = rut_data.get('persona_natural_segundo_apellido', '').strip()
+            pn_nombre = rut_data.get('persona_natural_primer_nombre', '').strip()
+            pn_otros = rut_data.get('persona_natural_otros_nombres', '').strip()
+            
+            nombre_completo = ' '.join(filter(None, [
+                pn_apellido1,
+                pn_apellido2,
+                pn_nombre,
+                pn_otros
+            ]))
+            
+            if nombre_completo and len(nombre_completo) > 3:
+                return nombre_completo
+            
+            # Fallback: nombre comercial
+            nombre_comercial = rut_data.get('nombre_comercial', '').strip()
+            if nombre_comercial and nombre_comercial not in ['36. Nombre comercial', '37. Sigla', '']:
+                if not nombre_comercial.startswith('36.') and not nombre_comercial.startswith('37.'):
+                    return nombre_comercial
+            
+            return 'PERSONA NATURAL'
+        
+        # Si la razón social es válida, usarla
+        return razon_social
+    
+    # Si no se determinó el tipo o es otro caso, usar razón social original
+    return razon_social if razon_social else 'Sin razón social'
+
+
 def procesar_zip_ruts(zip_file, task=None) -> Dict:
     """
     Procesa un archivo ZIP con múltiples PDFs de RUT.
@@ -78,6 +158,9 @@ def procesar_zip_ruts(zip_file, task=None) -> Dict:
                 Procesa un solo RUT de forma thread-safe.
                 Retorna dict con 'exitoso' o 'fallido' y los datos correspondientes.
                 """
+                import logging
+                logger = logging.getLogger(__name__)
+                
                 # Cada thread necesita su propia conexión de BD
                 connection.close()
                 
@@ -92,7 +175,11 @@ def procesar_zip_ruts(zip_file, task=None) -> Dict:
                     # Extraer datos del PDF
                     try:
                         rut_data = extract_rut_data_from_pdf(pdf_file)
+                        logger.debug(f"[RUT {pdf_name}] Datos extraídos: NIT={rut_data.get('nit_normalizado')}, "
+                                   f"Razón Social Original='{rut_data.get('razon_social', '')[:50]}...', "
+                                   f"Tipo={rut_data.get('tipo_contribuyente')}")
                     except Exception as e:
+                        logger.error(f"[RUT {pdf_name}] Error al extraer datos del PDF: {str(e)}", exc_info=True)
                         return {
                             'tipo': 'fallido',
                             'archivo': pdf_name,
@@ -105,38 +192,57 @@ def procesar_zip_ruts(zip_file, task=None) -> Dict:
                         return {
                             'tipo': 'fallido',
                             'archivo': pdf_name,
-                            'razon': 'No se pudo detectar el NIT del PDF'
+                            'razon': 'No se pudo detectar el NIT del PDF. Por favor, proporciona el NIT manualmente.'
                         }
+                    
+                    # Obtener razón social mejorada
+                    razon_social_mejorada = obtener_razon_social_mejorada(rut_data)
+                    logger.debug(f"[RUT {pdf_name}] Razón social mejorada: '{razon_social_mejorada[:50]}...'")
                     
                     # Verificar si hay empresas asociadas
                     empresas = EmpresaServidor.objects.filter(nit_normalizado=nit_normalizado)
-                    if not empresas.exists():
-                        return {
-                            'tipo': 'fallido',
-                            'archivo': pdf_name,
-                            'nit': rut_data.get('nit', nit_normalizado),
-                            'nit_normalizado': nit_normalizado,
-                            'razon_social': rut_data.get('razon_social', 'No detectada'),
-                            'razon': f'No se encontraron empresas con NIT {nit_normalizado} en ningún servidor'
-                        }
+                    empresas_count = empresas.count()
+                    sin_empresas = empresas_count == 0
                     
-                    # Buscar o crear RUT
+                    if sin_empresas:
+                        logger.warning(f"[RUT {pdf_name}] NIT {nit_normalizado} no tiene empresas asociadas, pero se creará el RUT")
+                    
+                    # Buscar o crear RUT (ahora se crea aunque no tenga empresas)
+                    razon_social_final, _ = truncar_campo(razon_social_mejorada, 255, 'razon_social')
+                    
                     rut, created = RUT.objects.get_or_create(
                         nit_normalizado=nit_normalizado,
                         defaults={
                             'nit': rut_data.get('nit', nit_normalizado),
                             'dv': rut_data.get('dv', ''),
-                            'razon_social': rut_data.get('razon_social', ''),
+                            'razon_social': razon_social_final,
                         }
                     )
                     
-                    # Actualizar campos desde PDF
+                    # Actualizar campos desde PDF con truncamiento automático
+                    campos_truncados = []
                     for key, value in rut_data.items():
                         if key not in ['_texto_completo', '_codigos_ciiu_encontrados', '_establecimientos'] and hasattr(rut, key):
                             if value is None:
                                 setattr(rut, key, None)
                             elif value:
-                                setattr(rut, key, value)
+                                # Obtener max_length del campo
+                                field = rut._meta.get_field(key)
+                                max_length = getattr(field, 'max_length', None)
+                                
+                                if max_length and isinstance(value, str) and len(value) > max_length:
+                                    valor_truncado, fue_truncado = truncar_campo(value, max_length, key)
+                                    setattr(rut, key, valor_truncado)
+                                    if fue_truncado:
+                                        campos_truncados.append(f"{key} (truncado a {max_length} caracteres)")
+                                        logger.warning(f"[RUT {pdf_name}] Campo '{key}' truncado: {len(value)} → {max_length} chars. "
+                                                    f"Original: '{value[:100]}...' → Truncado: '{valor_truncado}'")
+                                else:
+                                    setattr(rut, key, value)
+                    
+                    # Actualizar razón social si fue mejorada
+                    if razon_social_mejorada != rut_data.get('razon_social', ''):
+                        rut.razon_social = razon_social_final
                     
                     # Guardar PDF
                     pdf_file.seek(0)
@@ -223,14 +329,33 @@ def procesar_zip_ruts(zip_file, task=None) -> Dict:
                                 except IntegrityError:
                                     pass
                     
+                    # Mensaje de advertencia si hay campos truncados
+                    advertencia = ''
+                    if campos_truncados:
+                        advertencia = f" (Campos truncados: {', '.join(campos_truncados)})"
+                    
+                    # Si no tiene empresas, marcar como exitoso pero con advertencia
+                    if sin_empresas:
+                        return {
+                            'tipo': 'exitoso',
+                            'archivo': pdf_name,
+                            'nit': rut.nit,
+                            'nit_normalizado': rut.nit_normalizado,
+                            'razon_social': rut.razon_social,
+                            'empresas_encontradas': 0,
+                            'creado': created,
+                            'advertencia': f'RUT creado pero sin empresas asociadas{advertencia}'
+                        }
+                    
                     return {
                         'tipo': 'exitoso',
                         'archivo': pdf_name,
                         'nit': rut.nit,
                         'nit_normalizado': rut.nit_normalizado,
                         'razon_social': rut.razon_social,
-                        'empresas_encontradas': empresas.count(),
-                        'creado': created
+                        'empresas_encontradas': empresas_count,
+                        'creado': created,
+                        'advertencia': advertencia if campos_truncados else None
                     }
                     
                 except Exception as e:
@@ -306,183 +431,6 @@ def procesar_zip_ruts(zip_file, task=None) -> Dict:
                             })
                             procesados_count['value'] += 1
             
-            # Procesar cada PDF (código antiguo - ahora comentado para referencia)
-            # for idx, pdf_name in enumerate(pdf_files, 1):
-                # Actualizar progreso si hay tarea Celery
-                if task:
-                    task.update_state(
-                        state='PROCESSING',
-                        meta={
-                            'status': f'Procesando {idx}/{len(pdf_files)}: {pdf_name}',
-                            'total': len(pdf_files),
-                            'procesados': idx - 1,
-                            'exitosos': len(resultados['exitosos']),
-                            'fallidos': len(resultados['fallidos'])
-                        }
-                    )
-                try:
-                    # Leer PDF del ZIP
-                    pdf_data_bytes = zip_ref.read(pdf_name)
-                    
-                    # Crear archivo en memoria
-                    pdf_file = io.BytesIO(pdf_data_bytes)
-                    pdf_file.name = pdf_name
-                    
-                    # Extraer datos del PDF
-                    try:
-                        rut_data = extract_rut_data_from_pdf(pdf_file)
-                    except Exception as e:
-                        resultados['fallidos'].append({
-                            'archivo': pdf_name,
-                            'razon': f'Error al extraer datos del PDF: {str(e)}'
-                        })
-                        continue
-                    
-                    # Obtener NIT
-                    nit_normalizado = rut_data.get('nit_normalizado')
-                    if not nit_normalizado:
-                        resultados['fallidos'].append({
-                            'archivo': pdf_name,
-                            'razon': 'No se pudo detectar el NIT del PDF'
-                        })
-                        continue
-                    
-                    # Verificar si hay empresas asociadas
-                    empresas = EmpresaServidor.objects.filter(nit_normalizado=nit_normalizado)
-                    if not empresas.exists():
-                        resultados['fallidos'].append({
-                            'archivo': pdf_name,
-                            'nit': rut_data.get('nit', nit_normalizado),
-                            'nit_normalizado': nit_normalizado,
-                            'razon_social': rut_data.get('razon_social', 'No detectada'),
-                            'razon': f'No se encontraron empresas con NIT {nit_normalizado} en ningún servidor'
-                        })
-                        continue
-                    
-                    # Buscar o crear RUT
-                    rut, created = RUT.objects.get_or_create(
-                        nit_normalizado=nit_normalizado,
-                        defaults={
-                            'nit': rut_data.get('nit', nit_normalizado),
-                            'dv': rut_data.get('dv', ''),
-                            'razon_social': rut_data.get('razon_social', ''),
-                        }
-                    )
-                    
-                    # Actualizar campos desde PDF
-                    for key, value in rut_data.items():
-                        if key not in ['_texto_completo', '_codigos_ciiu_encontrados', '_establecimientos'] and hasattr(rut, key):
-                            # Si el valor es None, establecerlo explícitamente para limpiar campos
-                            if value is None:
-                                setattr(rut, key, None)
-                            elif value:  # Solo asignar si tiene valor
-                                setattr(rut, key, value)
-                    
-                    # Guardar PDF
-                    pdf_file.seek(0)  # Resetear posición
-                    if rut.archivo_pdf:
-                        rut.archivo_pdf.delete(save=False)
-                    
-                    # Crear InMemoryUploadedFile para guardar
-                    pdf_upload = InMemoryUploadedFile(
-                        pdf_file,
-                        None,
-                        pdf_name,
-                        'application/pdf',
-                        len(pdf_data_bytes),
-                        None
-                    )
-                    rut.archivo_pdf = pdf_upload
-                    rut.save()
-                    
-                    # Procesar establecimientos
-                    from ..models import EstablecimientoRUT
-                    establecimientos_data = rut_data.get('_establecimientos', [])
-                    # Eliminar establecimientos antiguos
-                    EstablecimientoRUT.objects.filter(rut=rut).delete()
-                    # Crear nuevos establecimientos
-                    for est_data in establecimientos_data:
-                        EstablecimientoRUT.objects.create(
-                            rut=rut,
-                            nombre=est_data.get('nombre', ''),
-                            tipo_establecimiento=est_data.get('tipo_establecimiento'),
-                            tipo_establecimiento_codigo=est_data.get('tipo_establecimiento_codigo'),
-                            actividad_economica_ciiu=est_data.get('actividad_economica_ciiu'),
-                            actividad_economica_descripcion=est_data.get('actividad_economica_descripcion'),
-                            departamento_codigo=est_data.get('departamento_codigo'),
-                            departamento_nombre=est_data.get('departamento_nombre', ''),
-                            ciudad_codigo=est_data.get('ciudad_codigo'),
-                            ciudad_nombre=est_data.get('ciudad_nombre', ''),
-                            direccion=est_data.get('direccion', ''),
-                            matricula_mercantil=est_data.get('matricula_mercantil'),
-                            telefono=est_data.get('telefono'),
-                        )
-                    
-                    # Procesar códigos CIIU
-                    codigos_ciiu = rut_data.get('_codigos_ciiu_encontrados', [])
-                    if not codigos_ciiu:
-                        if rut_data.get('actividad_principal_ciiu'):
-                            codigos_ciiu.append(rut_data['actividad_principal_ciiu'])
-                        if rut_data.get('actividad_secundaria_ciiu'):
-                            codigos_ciiu.append(rut_data['actividad_secundaria_ciiu'])
-                        if rut_data.get('otras_actividades_ciiu'):
-                            codigos_ciiu.append(rut_data['otras_actividades_ciiu'])
-                    
-                    codigos_ciiu = list(set([c for c in codigos_ciiu if c and c.strip()]))
-                    
-                    if codigos_ciiu:
-                        from ..tasks import procesar_codigos_ciiu_masivo_task
-                        procesar_codigos_ciiu_masivo_task.delay(codigos_ciiu)
-                    
-                    # Procesar responsabilidades
-                    codigos_responsabilidades = rut_data.get('responsabilidades_codigos', [])
-                    if codigos_responsabilidades:
-                        from ..models import ResponsabilidadTributaria
-                        from django.db import IntegrityError
-                        
-                        descripciones_responsabilidades = {
-                            '7': 'Retención en la fuente a título de renta',
-                            '9': 'Retención en la fuente en el impuesto',
-                            '14': 'Informante de exogena',
-                            '42': 'Obligado a llevar contabilidad',
-                            '47': 'Régimen Simple de Tributación - SIM',
-                            '48': 'Impuesto sobre las ventas - IVA',
-                            '52': 'Facturador electrónico',
-                            '55': 'Informante de Beneficiarios Finales',
-                        }
-                        
-                        for codigo in codigos_responsabilidades:
-                            codigo_str = str(codigo).strip()
-                            if codigo_str:
-                                descripcion = descripciones_responsabilidades.get(
-                                    codigo_str,
-                                    f'Responsabilidad tributaria código {codigo_str}'
-                                )
-                                try:
-                                    ResponsabilidadTributaria.objects.get_or_create(
-                                        codigo=codigo_str,
-                                        defaults={'descripcion': descripcion}
-                                    )
-                                except IntegrityError:
-                                    pass
-                    
-                    # Agregar a exitosos
-                    resultados['exitosos'].append({
-                        'archivo': pdf_name,
-                        'nit': rut.nit,
-                        'nit_normalizado': rut.nit_normalizado,
-                        'razon_social': rut.razon_social,
-                        'empresas_encontradas': empresas.count(),
-                        'creado': created
-                    })
-                    
-                except Exception as e:
-                    resultados['fallidos'].append({
-                        'archivo': pdf_name,
-                        'razon': f'Error inesperado: {str(e)}'
-                    })
-                    continue
-            
             # Generar reporte TXT
             resultados['reporte_txt'] = generar_reporte_txt(resultados)
         finally:
@@ -525,6 +473,8 @@ def generar_reporte_txt(resultados: Dict) -> str:
             reporte.append(f"   Razón Social: {exitoso['razon_social']}")
             reporte.append(f"   Empresas encontradas: {exitoso['empresas_encontradas']}")
             reporte.append(f"   Estado: {'Creado' if exitoso['creado'] else 'Actualizado'}")
+            if exitoso.get('advertencia'):
+                reporte.append(f"   ⚠️ Advertencia: {exitoso['advertencia']}")
             reporte.append("")
     
     if resultados['fallidos']:

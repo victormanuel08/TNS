@@ -1,0 +1,414 @@
+================================================================================
+REPORTE DE PROCESAMIENTO DE RUTs
+================================================================================
+
+Total de archivos procesados: 85
+Exitosos: 31
+Fallidos: 54
+
+================================================================================
+RUTs PROCESADOS EXITOSAMENTE
+================================================================================
+
+1. RUT EMPRESAS BCE/RUT AMERICAN COAL.pdf
+   NIT: 901460044 (Normalizado: 901460044)
+   Razón Social: AMERICAN COAL GA SAS
+   Empresas encontradas: 2
+   Estado: Actualizado
+
+2. RUT EMPRESAS BCE/RUT ACTIVIDAD ECONÓMICA GLOBAL HACARÍ SAS.pdf
+   NIT: 901595755 (Normalizado: 901595755)
+   Razón Social: ACTIVIDAD ECONÓMICA GLOBAL HACARÍ S.A.S.
+   Empresas encontradas: 0
+   Estado: Creado
+
+3. RUT EMPRESAS BCE/RUT ACTIVIDAD ECONÓMICA GLOBAL ARBOLEDAS SAS.pdf
+   NIT: 901595825 (Normalizado: 901595825)
+   Razón Social: ACTIVIDAD ECONÓMICA GLOBAL ARBOLEDAS S.A.S.
+   Empresas encontradas: 3
+   Estado: Actualizado
+
+4. RUT EMPRESAS BCE/RUT ASBEIDY AVENDAÑO.pdf
+   NIT: 1090432500 (Normalizado: 1090432500)
+   Razón Social: 36. Nombre comercial 37. Sigla
+   Empresas encontradas: 0
+   Estado: Creado
+
+5. RUT EMPRESAS BCE/RUT COMERCIALIZADORA A.M GRUP.pdf
+   NIT: 901522576 (Normalizado: 901522576)
+   Razón Social: COMERCIALIZADORA A.M GRUP S.A.S.
+   Empresas encontradas: 2
+   Estado: Actualizado
+
+6. RUT EMPRESAS BCE/RUT COMERCIALIZADORA GLOBAL TOLEDO SAS.pdf
+   NIT: 901596540 (Normalizado: 901596540)
+   Razón Social: COMERCIALIZADORA GLOBAL TOLEDO S.A.S.
+   Empresas encontradas: 0
+   Estado: Creado
+
+7. RUT EMPRESAS BCE/RUT COMERCIALIZADORA JL PINO SAS.pdf
+   NIT: 901697183 (Normalizado: 901697183)
+   Razón Social: COMERCIALIZADORA JL PINO S.A.S.
+   Empresas encontradas: 0
+   Estado: Creado
+
+8. RUT EMPRESAS BCE/RUT DANIEL ABREO.pdf
+   NIT: 1090421776 (Normalizado: 1090421776)
+   Razón Social: 36. Nombre comercial 37. Sigla
+   Empresas encontradas: 0
+   Estado: Creado
+
+9. RUT EMPRESAS BCE/RUT DIEGO RINCON.pdf
+   NIT: 1090391023 (Normalizado: 1090391023)
+   Razón Social: RAMIREZ RINCON
+   Empresas encontradas: 2
+   Estado: Actualizado
+
+10. RUT EMPRESAS BCE/RUT FABIO AVENDAÑO.pdf
+   NIT: 1092334447 (Normalizado: 1092334447)
+   Razón Social: 36. Nombre comercial 37. Sigla
+   Empresas encontradas: 0
+   Estado: Creado
+
+11. RUT EMPRESAS BCE/RUT GERSON AVENDAÑO.pdf
+   NIT: 1090454072 (Normalizado: 1090454072)
+   Razón Social: 36. Nombre comercial 37. Sigla
+   Empresas encontradas: 0
+   Estado: Creado
+
+12. RUT EMPRESAS BCE/RUT GLOBAL SAFE SALUD SAS.pdf
+   NIT: 900493038 (Normalizado: 900493038)
+   Razón Social: GLOBAL SAFE SALUD S.A.S
+   Empresas encontradas: 4
+   Estado: Actualizado
+
+13. RUT EMPRESAS BCE/RUT GRUPO J&R ASOCIADOS SAS.pdf
+   NIT: 901503011 (Normalizado: 901503011)
+   Razón Social: GRUPO J&R ASOCIADOS S.A.S
+   Empresas encontradas: 1
+   Estado: Actualizado
+
+14. RUT EMPRESAS BCE/RUT GKMD GROUP SAS.pdf
+   NIT: 901693288 (Normalizado: 901693288)
+   Razón Social: GKMD GROUP S.A.S.
+   Empresas encontradas: 0
+   Estado: Creado
+
+15. RUT EMPRESAS BCE/RUT GUSTAVO BARRERA.pdf
+   NIT: 1093756472 (Normalizado: 1093756472)
+   Razón Social: RINCON BARRERA
+   Empresas encontradas: 0
+   Estado: Creado
+
+16. RUT EMPRESAS BCE/RUT HARBEY AVENDAÑO.pdf
+   NIT: 1057591575 (Normalizado: 1057591575)
+   Razón Social: 36. Nombre comercial 37. Sigla
+   Empresas encontradas: 0
+   Estado: Creado
+
+17. RUT EMPRESAS BCE/RUT INFECTOPED SAS.pdf
+   NIT: 901506205 (Normalizado: 901506205)
+   Razón Social: INFECTOPED S.A.S.
+   Empresas encontradas: 5
+   Estado: Actualizado
+
+18. RUT EMPRESAS BCE/RUT INFECTONORTE SAS.pdf
+   NIT: 901597207 (Normalizado: 901597207)
+   Razón Social: INFECTONORTE S.A.S.
+   Empresas encontradas: 4
+   Estado: Actualizado
+
+19. RUT EMPRESAS BCE/RUT INVERSIONES IJAU SAS.pdf
+   NIT: 901666537 (Normalizado: 901666537)
+   Razón Social: INVERSIONES IJAU S.A.S.
+   Empresas encontradas: 0
+   Estado: Creado
+
+20. RUT EMPRESAS BCE/RUT JORGE IVAN MENDEZ.pdf
+   NIT: 1093801539 (Normalizado: 1093801539)
+   Razón Social: SANCHEZ MENDEZ
+   Empresas encontradas: 0
+   Estado: Creado
+
+21. RUT EMPRESAS BCE/RUT JAVP TRADING SAS.pdf
+   NIT: 901238574 (Normalizado: 901238574)
+   Razón Social: JAVP TRADING S.A.S.
+   Empresas encontradas: 2
+   Estado: Actualizado
+
+22. RUT EMPRESAS BCE/RUT JEG.pdf
+   NIT: 901765344 (Normalizado: 901765344)
+   Razón Social: JEG SOCIEDAD GASTRONOMICA Y HOSPITALARIA S.A.S.
+   Empresas encontradas: 0
+   Estado: Creado
+
+23. RUT EMPRESAS BCE/RUT MAQUIAGRICOLA.pdf
+   NIT: 901544032 (Normalizado: 901544032)
+   Razón Social: MAQUIAGRICOLA DEL NORTE S.A.S
+   Empresas encontradas: 0
+   Estado: Creado
+
+24. RUT EMPRESAS BCE/RUT MASTER DIESEL.pdf
+   NIT: 901507305 (Normalizado: 901507305)
+   Razón Social: MASTER DIESEL H & A S.A.S.
+   Empresas encontradas: 0
+   Estado: Creado
+
+25. RUT EMPRESAS BCE/RUT MINERALES TATAN SAS.pdf
+   NIT: 901632539 (Normalizado: 901632539)
+   Razón Social: MINERALES TATAN S.A.S.
+   Empresas encontradas: 0
+   Estado: Creado
+
+26. RUT EMPRESAS BCE/RUT MR. BROCHETA SAS.pdf
+   NIT: 901597005 (Normalizado: 901597005)
+   Razón Social: MR. BROCHETA S.A.S.
+   Empresas encontradas: 4
+   Estado: Actualizado
+
+27. RUT EMPRESAS BCE/RUT MINIG PRO SAS.pdf
+   NIT: 901776101 (Normalizado: 901776101)
+   Razón Social: MINIG PRO S.A.S
+   Empresas encontradas: 3
+   Estado: Actualizado
+
+28. RUT EMPRESAS BCE/RUT PABLO GALVIS.pdf
+   NIT: 88211939 (Normalizado: 88211939)
+   Razón Social: CENTURION GALVIS
+   Empresas encontradas: 3
+   Estado: Actualizado
+
+29. RUT EMPRESAS BCE/RUT TGESTIONA SEGUROS LTDA.pdf
+   NIT: 901289889 (Normalizado: 901289889)
+   Razón Social: TGESTIONA SEGUROS LTDA
+   Empresas encontradas: 7
+   Estado: Actualizado
+
+30. RUT EMPRESAS BCE/RUT UT VIAS EL ZULIA.pdf
+   NIT: 901807173 (Normalizado: 901807173)
+   Razón Social: UNIÓN TEMPORAL VIAS EL ZULIA 2024
+   Empresas encontradas: 1
+   Estado: Actualizado
+
+31. RUT EMPRESAS BCE/RUT ZAFRA STORE GROUP SAS.pdf
+   NIT: 901808478 (Normalizado: 901808478)
+   Razón Social: ZAFRA STORE GROUP S.A.S.
+   Empresas encontradas: 1
+   Estado: Actualizado
+
+================================================================================
+RUTs FALLIDOS
+================================================================================
+
+1. Archivo: RUT EMPRESAS BCE/RUT AGROLUXURY.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+2. Archivo: RUT EMPRESAS BCE/RUT ABRAHAN AVENDAÑO.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+3. Archivo: RUT EMPRESAS BCE/RUT ANNY PARRA (TAPITAS CAOBOS).pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+4. Archivo: RUT EMPRESAS BCE/RUT ARONNY BARRERA.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+5. Archivo: RUT EMPRESAS BCE/RUT AUTOR.CUC SAS.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+6. Archivo: RUT EMPRESAS BCE/RUT CAMILO ZAFRA.pdf
+   Razón del fallo: Error al extraer datos del PDF: No se pudo extraer el NIT del PDF. Por favor, proporciona el NIT manualmente.
+
+7. Archivo: RUT EMPRESAS BCE/RUT CARBONES LAS INDIAS.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+8. Archivo: RUT EMPRESAS BCE/RUT CARBONES LA MIRLA.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+9. Archivo: RUT EMPRESAS BCE/RUT CARDINORTE.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+10. Archivo: RUT EMPRESAS BCE/RUT CARDINOR.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+11. Archivo: RUT EMPRESAS BCE/RUT CARLOS TOLOZA.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+12. Archivo: RUT EMPRESAS BCE/RUT CARDIO COUNTRY SAS.pdf
+   Razón del fallo: Error al extraer datos del PDF: No se pudo extraer el NIT del PDF. Por favor, proporciona el NIT manualmente.
+
+13. Archivo: RUT EMPRESAS BCE/RUT CENTRAL DE INGENIERIA SAS.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+14. Archivo: RUT EMPRESAS BCE/RUT COSEINCOL SAS.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+15. Archivo: RUT EMPRESAS BCE/RUT DANIEL RANGEL.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+16. Archivo: RUT EMPRESAS BCE/RUT DAR ARQUITECTURA & CONSTRUCCION SAS.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+17. Archivo: RUT EMPRESAS BCE/RUT EDGAR GOMEZ.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+18. Archivo: RUT EMPRESAS BCE/RUT DIPROMEDICOS SAS.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+19. Archivo: RUT EMPRESAS BCE/RUT FERREINSUMOS.pdf
+   Razón del fallo: Error al extraer datos del PDF: No se pudo extraer el NIT del PDF. Por favor, proporciona el NIT manualmente.
+
+20. Archivo: RUT EMPRESAS BCE/RUT ELECTRO ARCO.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+21. Archivo: RUT EMPRESAS BCE/RUT FUEGO GROUP.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+22. Archivo: RUT EMPRESAS BCE/RUT FUEZZA INVERSIONES SAS.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+23. Archivo: RUT EMPRESAS BCE/RUT GOMEZ GLOBAL INVERSIONES SAS.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+24. Archivo: RUT EMPRESAS BCE/RUT GRUPO AUTOMOTRIZ DEL ORIENTE.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+25. Archivo: RUT EMPRESAS BCE/RUT GRUPO EMPRESARIAL ECOHOME SAS.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+26. Archivo: RUT EMPRESAS BCE/RUT GUERREROS BURGERS SAS.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+27. Archivo: RUT EMPRESAS BCE/RUT GUSTAVO BARRERA INVERSIONES SAS.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+28. Archivo: RUT EMPRESAS BCE/RUT GUSTAVO BEDOYA.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+29. Archivo: RUT EMPRESAS BCE/RUT INDUSTRIAL COAL.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+30. Archivo: RUT EMPRESAS BCE/RUT INMOBILIARIA MARELSA.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+31. Archivo: RUT EMPRESAS BCE/RUT INNOVA HERRAJES Y ACCESORIOS SAS.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+32. Archivo: RUT EMPRESAS BCE/RUT IVAN JOSE GUTIERREZ (LA REPIZZA).pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+33. Archivo: RUT EMPRESAS BCE/RUT INTORVOLCA LOGISTIC SAS.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+34. Archivo: RUT EMPRESAS BCE/RUT JAVIER PEÑALOZA.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+35. Archivo: RUT EMPRESAS BCE/RUT INVERSIONES ROCKMOUNTAIN SAS.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+36. Archivo: RUT EMPRESAS BCE/RUT LUZ MARINA PAREDES.pdf
+   Razón del fallo: Error al extraer datos del PDF: No se pudo extraer el NIT del PDF. Por favor, proporciona el NIT manualmente.
+
+37. Archivo: RUT EMPRESAS BCE/RUT LUIS CARLOS ANDRADE (TAPITAS NIZA).pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+38. Archivo: RUT EMPRESAS BCE/RUT MADERAS Y LISTONES MERCHAN.pdf
+   Razón del fallo: Error al extraer datos del PDF: No se pudo extraer el NIT del PDF. Por favor, proporciona el NIT manualmente.
+
+39. Archivo: RUT EMPRESAS BCE/RUT MATEO BAUTISTA.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+40. Archivo: RUT EMPRESAS BCE/RUT NIDIA AVENDAÑO.pdf
+   Razón del fallo: Error al extraer datos del PDF: No se pudo extraer el NIT del PDF. Por favor, proporciona el NIT manualmente.
+
+41. Archivo: RUT EMPRESAS BCE/RUT MEDICPAIS.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+42. Archivo: RUT EMPRESAS BCE/RUT NORFETUS.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+43. Archivo: RUT EMPRESAS BCE/RUT PROYECTO MINERO PEÑITAS SAS.pdf
+   Razón del fallo: Error al extraer datos del PDF: No se pudo extraer el NIT del PDF. Por favor, proporciona el NIT manualmente.
+
+44. Archivo: RUT EMPRESAS BCE/RUT PAOLA BELEN (REPIZZA ATALAYA).pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+45. Archivo: RUT EMPRESAS BCE/RUT OFOSI.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+46. Archivo: RUT EMPRESAS BCE/RUT RICHARD DUARTE.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+47. Archivo: RUT EMPRESAS BCE/RUT SIMON OMAÑA (SALCHIXX).pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+48. Archivo: RUT EMPRESAS BCE/RUT SIERVO AVENDAÑO.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+49. Archivo: RUT EMPRESAS BCE/RUT TGESTIONA SOLUCIONES FINANCIERAS SAS.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+50. Archivo: RUT EMPRESAS BCE/RUT TGESTIONA INVERSIONES LTDA.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+51. Archivo: RUT EMPRESAS BCE/RUT UNYASMA.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+52. Archivo: RUT EMPRESAS BCE/RUT WLADIMIR VELASQUEZ (COMPLICITO).pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+53. Archivo: RUT EMPRESAS BCE/RUT WENDY ROJAS.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+54. Archivo: RUT EMPRESAS BCE/RUT YOLEIDY AVENDAÑO.pdf
+   Razón del fallo: Error inesperado: el valor es demasiado largo para el tipo character varying(100)
+
+
+================================================================================
+FIN DEL REPORTE
+================================================================================

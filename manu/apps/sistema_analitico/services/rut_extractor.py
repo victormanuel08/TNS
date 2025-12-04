@@ -74,7 +74,10 @@ def extract_rut_data_from_pdf(pdf_file) -> Dict:
     if match := re.search(r"4\.\s*Número de formulario\s*(\d+)", texto_completo):
         data['numero_formulario'] = match.group(1).strip()
     
-    # NIT y DV - método de BCE (más robusto)
+    # NIT y DV - método de BCE (más robusto) con múltiples patrones
+    nit_encontrado = False
+    
+    # Patrón 1: Método original de BCE
     nit_match = re.search(
         r"5\.\s*N(?:úmero|IT)[^\n]*Tributaria\s*\(?NIT\)?[^\n]*\n([\d\s]+[^\n]*)", 
         texto_completo, 
@@ -89,24 +92,72 @@ def extract_rut_data_from_pdf(pdf_file) -> Dict:
         if partes:
             # Procesar números iniciales (todos los dígitos antes de la dirección)
             numeros = partes.group(1).replace(" ", "")
-            if len(numeros) > 0:
+            if len(numeros) >= 9:  # NIT mínimo 9 dígitos
                 nit = numeros[:-1]  # Todos menos el último dígito
                 dv = numeros[-1]    # Último dígito
+                if 9 <= len(nit) <= 11:  # Validar longitud
+                    data['nit'] = nit
+                    data['nit_normalizado'] = nit
+                    data['dv'] = dv
+                    nit_encontrado = True
+    
+    # Patrón 2: Buscar NIT y DV por separado (más flexible)
+    if not nit_encontrado:
+        nit_dv_match = re.search(
+            r'5\.\s*N(?:úmero|IT)[^\n]*Tributaria[^\n]*\(?NIT\)?[^\n]*\n([\d\s]{9,15})\s*\n\s*6\.\s*DV[^\n]*\n\s*(\d)', 
+            texto_completo, 
+            re.IGNORECASE | re.DOTALL
+        )
+        if nit_dv_match:
+            nit_raw = nit_dv_match.group(1).replace(' ', '').replace('\n', '').strip()
+            dv = nit_dv_match.group(2).strip()
+            if 9 <= len(nit_raw) <= 11:
+                data['nit'] = nit_raw
+                data['nit_normalizado'] = nit_raw
+                data['dv'] = dv
+                nit_encontrado = True
+    
+    # Patrón 3: Buscar cualquier secuencia de 9-11 dígitos después de "5. Número" o "5. NIT"
+    if not nit_encontrado:
+        nit_pattern3 = re.search(
+            r'5\.\s*N(?:úmero|IT)[^\n]*Tributaria[^\n]*\(?NIT\)?[^\n]*\n\s*([\d\s]{9,15})',
+            texto_completo,
+            re.IGNORECASE
+        )
+        if nit_pattern3:
+            nit_raw = nit_pattern3.group(1).replace(' ', '').replace('\n', '').strip()
+            if 9 <= len(nit_raw) <= 11:
+                # Asumir que el último dígito es el DV
+                nit = nit_raw[:-1]
+                dv = nit_raw[-1]
                 data['nit'] = nit
                 data['nit_normalizado'] = nit
                 data['dv'] = dv
-        else:
-            # Fallback: buscar NIT y DV por separado
-            nit_dv_match = re.search(r'5\.\s*Número de Identificación Tributaria.*?\(NIT\)\s*(\d(?:\s+\d){8,})\s+6\.\s*DV\s*(\d)', texto_completo, re.IGNORECASE | re.DOTALL)
-            if nit_dv_match:
-                nit_raw = nit_dv_match.group(1).replace(' ', '').strip()
-                dv = nit_dv_match.group(2).strip()
-                if 9 <= len(nit_raw) <= 11:
+                nit_encontrado = True
+    
+    # Patrón 4: Buscar en formato "NIT: 123456789-0" o similar
+    if not nit_encontrado:
+        nit_pattern4 = re.search(
+            r'(?:NIT|Nit|nit)[\s:]*([\d]{8,11})[\s\-]*(\d)?',
+            texto_completo,
+            re.IGNORECASE
+        )
+        if nit_pattern4:
+            nit_raw = nit_pattern4.group(1)
+            dv = nit_pattern4.group(2) if nit_pattern4.group(2) else ''
+            if 9 <= len(nit_raw) <= 11:
+                if dv:
                     data['nit'] = nit_raw
                     data['nit_normalizado'] = nit_raw
                     data['dv'] = dv
+                else:
+                    # Si no hay DV separado, asumir que está al final
+                    data['nit'] = nit_raw[:-1]
+                    data['nit_normalizado'] = nit_raw[:-1]
+                    data['dv'] = nit_raw[-1]
+                nit_encontrado = True
     
-    if not data.get('nit'):
+    if not nit_encontrado:
         raise ValueError("No se pudo extraer el NIT del PDF. Por favor, proporciona el NIT manualmente.")
     
     # Dirección seccional
@@ -125,6 +176,23 @@ def extract_rut_data_from_pdf(pdf_file) -> Dict:
             data['tipo_contribuyente'] = 'persona_juridica'
         elif "natural" in tipo.lower():
             data['tipo_contribuyente'] = 'persona_natural'
+    
+    # ========== NOMBRES PARA PERSONAS NATURALES (campos 31-34) ==========
+    # Campo 31: Primer apellido
+    if match := re.search(r"31\.\s*Primer apellido\s*\n([^\n]+)", texto_completo):
+        data['persona_natural_primer_apellido'] = match.group(1).strip()
+    
+    # Campo 32: Segundo apellido
+    if match := re.search(r"32\.\s*Segundo apellido\s*\n([^\n]+)", texto_completo):
+        data['persona_natural_segundo_apellido'] = match.group(1).strip()
+    
+    # Campo 33: Primer nombre
+    if match := re.search(r"33\.\s*Primer nombre\s*\n([^\n]+)", texto_completo):
+        data['persona_natural_primer_nombre'] = match.group(1).strip()
+    
+    # Campo 34: Otros nombres
+    if match := re.search(r"34\.\s*Otros nombres\s*\n([^\n]+)", texto_completo):
+        data['persona_natural_otros_nombres'] = match.group(1).strip()
     
     # Razón social (campo 35)
     if match := re.search(r"35\.\s*Razón social\s*\n([^\n]+)", texto_completo):
@@ -319,11 +387,42 @@ def extract_rut_data_from_pdf(pdf_file) -> Dict:
     data['informante_beneficiarios_finales'] = 55 in codigos_set
     
     # ========== REPRESENTANTE LEGAL ==========
-    # Buscar "984. Nombre" seguido del nombre completo
-    if match := re.search(r"984\.\s*Nombre\s+([A-Z]+)\s+([A-Z]+)\s+([A-Z]+)", texto_completo):
-        data['representante_legal_primer_apellido'] = match.group(1).strip()
-        data['representante_legal_primer_nombre'] = match.group(2).strip()
-        data['representante_legal_otros_nombres'] = match.group(3).strip()
+    # Buscar "984. Nombre" seguido del nombre completo (múltiples patrones)
+    # Patrón 1: Formato estándar "984. Nombre APELLIDO1 APELLIDO2 NOMBRE1 NOMBRE2"
+    if match := re.search(r"984\.\s*Nombre\s+([A-ZÁÉÍÓÚÑ\s]+?)(?=\s+985\.|\s+\d+\.|$)", texto_completo, re.IGNORECASE):
+        nombre_completo = match.group(1).strip()
+        # Dividir en partes (generalmente: apellido1 apellido2 nombre1 nombre2)
+        partes = nombre_completo.split()
+        if len(partes) >= 2:
+            # Asumir que los primeros son apellidos y los últimos nombres
+            if len(partes) == 2:
+                data['representante_legal_primer_apellido'] = partes[0]
+                data['representante_legal_primer_nombre'] = partes[1]
+            elif len(partes) == 3:
+                data['representante_legal_primer_apellido'] = partes[0]
+                data['representante_legal_segundo_apellido'] = partes[1]
+                data['representante_legal_primer_nombre'] = partes[2]
+            elif len(partes) >= 4:
+                data['representante_legal_primer_apellido'] = partes[0]
+                data['representante_legal_segundo_apellido'] = partes[1]
+                data['representante_legal_primer_nombre'] = partes[2]
+                data['representante_legal_otros_nombres'] = ' '.join(partes[3:])
+    
+    # Patrón 2: Buscar en formato más flexible
+    if not data.get('representante_legal_primer_nombre'):
+        if match := re.search(r"984\.\s*Nombre[^\n]*\n\s*([A-ZÁÉÍÓÚÑ\s]+?)(?=\n\s*985\.|\n\s*\d+\.|$)", texto_completo, re.IGNORECASE | re.MULTILINE):
+            nombre_completo = match.group(1).strip()
+            partes = nombre_completo.split()
+            if len(partes) >= 2:
+                if len(partes) == 2:
+                    data['representante_legal_primer_apellido'] = partes[0]
+                    data['representante_legal_primer_nombre'] = partes[1]
+                elif len(partes) >= 3:
+                    data['representante_legal_primer_apellido'] = partes[0]
+                    data['representante_legal_segundo_apellido'] = partes[1] if len(partes) > 2 else ''
+                    data['representante_legal_primer_nombre'] = partes[2] if len(partes) > 2 else partes[1]
+                    if len(partes) > 3:
+                        data['representante_legal_otros_nombres'] = ' '.join(partes[3:])
     
     # Cargo del representante legal
     # Cortar antes de "Fecha generación documento PDF" o de cualquier nuevo bloque numerado
