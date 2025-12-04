@@ -114,6 +114,121 @@ class BackupS3Service:
         server_name = empresa.servidor.nombre.replace(' ', '_').replace('/', '_').replace('\\', '_')
         return f"{server_name}/{empresa.nit_normalizado}/{empresa.anio_fiscal}/backups/{nombre_archivo}"
     
+    def _normalizar_nombre_archivo(self, nombre: str) -> str:
+        """
+        Normaliza un nombre de archivo para S3 (sin caracteres especiales).
+        
+        Args:
+            nombre: Nombre original
+            
+        Returns:
+            Nombre normalizado
+        """
+        # Reemplazar caracteres problemáticos
+        nombre = nombre.replace('/', '_').replace('\\', '_').replace(':', '_')
+        nombre = nombre.replace('*', '_').replace('?', '_').replace('"', '_')
+        nombre = nombre.replace('<', '_').replace('>', '_').replace('|', '_')
+        return nombre.strip()
+    
+    def registrar_backup_en_log(self, empresa: EmpresaServidor, exito: bool, peso_bytes: Optional[int] = None, 
+                                 nombre_archivo: Optional[str] = None, error: Optional[str] = None) -> bool:
+        """
+        Registra un backup en el archivo de log de la empresa.
+        El archivo se llama {razon_social}.txt y está en {server_name}/{nit_normalizado}/
+        
+        Si el archivo no existe, lo crea con un header. Luego apendee cada backup como una línea de log.
+        
+        Estructura:
+            {server_name}/{nit_normalizado}/{razon_social}.txt
+        
+        Formato del log:
+            [YYYY-MM-DD HH:MM:SS] [ÉXITO/ERROR] Backup: {nombre_archivo} | Peso: {peso_mb} MB | {error si falló}
+        
+        Args:
+            empresa: Empresa para la cual registrar el backup
+            exito: True si el backup fue exitoso, False si falló
+            peso_bytes: Tamaño del archivo de backup en bytes (si fue exitoso)
+            nombre_archivo: Nombre del archivo de backup
+            error: Mensaje de error si falló
+            
+        Returns:
+            True si se registró exitosamente, False si hubo algún error
+        """
+        try:
+            from datetime import datetime
+            
+            server_name = empresa.servidor.nombre.replace(' ', '_').replace('/', '_').replace('\\', '_')
+            prefix_empresa = f"{server_name}/{empresa.nit_normalizado}/"
+            
+            # Normalizar razón social para el nombre del archivo
+            razon_social = getattr(empresa, 'razon_social', None) or empresa.nombre or f"Empresa_{empresa.codigo}"
+            razon_social_normalizada = self._normalizar_nombre_archivo(razon_social)
+            nombre_txt = f"{razon_social_normalizada}.txt"
+            ruta_s3_txt = f"{prefix_empresa}{nombre_txt}"
+            
+            # Verificar si el archivo ya existe
+            contenido_existente = ""
+            try:
+                response = self.s3_client.get_object(Bucket=self.bucket_name, Key=ruta_s3_txt)
+                contenido_existente = response['Body'].read().decode('utf-8')
+            except ClientError as e:
+                if e.response.get('Error', {}).get('Code') != 'NoSuchKey':
+                    # Error diferente a "no existe", registrar y continuar
+                    logger.warning(f"Error leyendo archivo de log existente: {e}")
+                # Si no existe, contenido_existente queda vacío y crearemos el header
+            
+            # Preparar la línea de log
+            fecha_hora = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            estado = "ÉXITO" if exito else "ERROR"
+            
+            # Formatear peso
+            if peso_bytes and peso_bytes > 0:
+                peso_mb = peso_bytes / (1024 * 1024)
+                peso_str = f"{peso_mb:.2f} MB"
+            else:
+                peso_str = "N/A"
+            
+            # Construir línea de log
+            linea_log = f"[{fecha_hora}] [{estado}]"
+            if nombre_archivo:
+                linea_log += f" Backup: {nombre_archivo}"
+            linea_log += f" | Peso: {peso_str}"
+            if not exito and error:
+                linea_log += f" | Error: {error}"
+            linea_log += "\n"
+            
+            # Si el archivo no existe, crear header primero
+            if not contenido_existente:
+                header = f"=== LOG DE BACKUPS - {razon_social} ===\n"
+                header += f"NIT: {empresa.nit_normalizado}\n"
+                if getattr(empresa, 'nit', None):
+                    header += f"NIT original: {empresa.nit}\n"
+                if getattr(empresa, 'representante_legal', None):
+                    header += f"Representante Legal: {empresa.representante_legal}\n"
+                header += f"Código: {empresa.codigo}\n"
+                header += f"Servidor: {empresa.servidor.nombre}\n"
+                header += "=" * 50 + "\n\n"
+                contenido_existente = header
+            
+            # Agregar la nueva línea de log
+            nuevo_contenido = contenido_existente + linea_log
+            
+            # Subir el archivo actualizado
+            contenido_bytes = nuevo_contenido.encode('utf-8')
+            self.s3_client.put_object(
+                Bucket=self.bucket_name,
+                Key=ruta_s3_txt,
+                Body=contenido_bytes,
+                ContentType='text/plain; charset=utf-8'
+            )
+            
+            logger.debug(f"Backup registrado en log: {ruta_s3_txt}")
+            return True
+                    
+        except Exception as e:
+            logger.error(f"Error registrando backup en log para {empresa.nombre}: {e}", exc_info=True)
+            return False
+    
     def obtener_tamano_actual_gb(self, empresa: EmpresaServidor) -> float:
         """
         Calcula el tamaño total en GB usado en S3 por una empresa (por servidor y NIT normalizado),
@@ -512,6 +627,20 @@ class BackupS3Service:
             )
             
             logger.info(f"Backup subido exitosamente a S3: {ruta_s3}")
+            
+            # Registrar backup exitoso en el log
+            try:
+                peso_bytes = os.path.getsize(ruta_archivo_local)
+                self.registrar_backup_en_log(
+                    empresa=empresa,
+                    exito=True,
+                    peso_bytes=peso_bytes,
+                    nombre_archivo=nombre_archivo
+                )
+            except Exception as e:
+                # No fallar el backup si falla el registro en el log
+                logger.warning(f"No se pudo registrar backup en log para {empresa.nombre}: {e}")
+            
             return True, ruta_s3
             
         except ClientError as e:
@@ -717,8 +846,18 @@ class BackupS3Service:
         logger.info(f"📦 Creando backup local con gbak para {empresa.nombre}...")
         exito, ruta_local, tamano = self.crear_backup_firebird(empresa, gbak_path, usuario, contrasena)
         if not exito:
-            logger.error(f"❌ Error al crear backup local para {empresa.nombre}")
-            return False, None, "Error al crear backup local"
+            error_msg = "Error al crear backup local"
+            logger.error(f"❌ {error_msg} para {empresa.nombre}")
+            # Registrar error en log
+            try:
+                self.registrar_backup_en_log(
+                    empresa=empresa,
+                    exito=False,
+                    error=error_msg
+                )
+            except Exception as e:
+                logger.warning(f"No se pudo registrar error en log: {e}")
+            return False, None, error_msg
         
         tamano_mb = tamano / (1024 * 1024) if tamano else 0
         logger.info(f"✅ Backup local creado: {os.path.basename(ruta_local)} ({tamano_mb:.2f} MB)")
@@ -730,11 +869,23 @@ class BackupS3Service:
             logger.info(f"☁️ Subiendo backup a S3 (Contabo) para {empresa.nombre}...")
             exito_upload, ruta_s3 = self.subir_backup_a_s3(empresa, ruta_local, nombre_archivo)
             if not exito_upload:
-                logger.error(f"❌ Error al subir backup a S3 para {empresa.nombre}")
+                error_msg = "Error al subir backup a S3"
+                logger.error(f"❌ {error_msg} para {empresa.nombre}")
+                # Registrar error en log
+                try:
+                    self.registrar_backup_en_log(
+                        empresa=empresa,
+                        exito=False,
+                        peso_bytes=tamano,
+                        nombre_archivo=nombre_archivo,
+                        error=error_msg
+                    )
+                except Exception as e:
+                    logger.warning(f"No se pudo registrar error en log: {e}")
                 # Limpiar archivo local
                 if os.path.exists(ruta_local):
                     os.remove(ruta_local)
-                return False, None, "Error al subir backup a S3"
+                return False, None, error_msg
             
             logger.info(f"✅ Backup subido exitosamente a S3: {ruta_s3}")
             
@@ -765,11 +916,21 @@ class BackupS3Service:
             return True, backup_s3, None
             
         except Exception as e:
-            logger.error(f"Error en backup completo para {empresa.nombre}: {e}", exc_info=True)
+            error_msg = str(e)
+            logger.error(f"Error en backup completo para {empresa.nombre}: {error_msg}", exc_info=True)
+            # Registrar error en log
+            try:
+                self.registrar_backup_en_log(
+                    empresa=empresa,
+                    exito=False,
+                    error=error_msg
+                )
+            except Exception as log_error:
+                logger.warning(f"No se pudo registrar error en log: {log_error}")
             # Limpiar archivo local
             if os.path.exists(ruta_local):
                 os.remove(ruta_local)
-            return False, None, str(e)
+            return False, None, error_msg
     
     def listar_backups(self, empresa: EmpresaServidor) -> List[Dict]:
         """

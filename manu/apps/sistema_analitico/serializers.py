@@ -447,16 +447,17 @@ class APIKeyClienteSerializer(serializers.ModelSerializer):
     empresas_asociadas = serializers.SerializerMethodField()
     expirada = serializers.SerializerMethodField()
     empresas_asociadas_count = serializers.SerializerMethodField()
+    servidor_nombre = serializers.CharField(source='servidor.nombre', read_only=True)
     
     class Meta:
         model = APIKeyCliente
         fields = [
-            'id', 'nit', 'nombre_cliente', 'api_key', 'activa',
+            'id', 'nit', 'nombre_cliente', 'api_key', 'activa', 'servidor', 'servidor_nombre',
             'fecha_creacion', 'fecha_actualizacion', 'fecha_caducidad',
             'contador_peticiones', 'fecha_ultima_peticion',
             'empresas_asociadas', 'empresas_asociadas_count', 'expirada'
         ]
-        read_only_fields = ['id', 'fecha_creacion', 'fecha_actualizacion']
+        read_only_fields = ['id', 'fecha_creacion', 'fecha_actualizacion', 'servidor_nombre']
     
     def get_empresas_asociadas(self, obj):
         """Obtener lista de empresas asociadas"""
@@ -580,15 +581,16 @@ class CreateUserSerializer(serializers.ModelSerializer):
 class EmpresaDominioSerializer(serializers.ModelSerializer):
     empresa_servidor_nombre = serializers.CharField(source='empresa_servidor.nombre', read_only=True)
     empresa_servidor_nit = serializers.CharField(source='empresa_servidor.nit', read_only=True)
+    servidor_nombre = serializers.CharField(source='servidor.nombre', read_only=True)
     
     class Meta:
         model = EmpresaDominio
         fields = [
-            'id', 'dominio', 'nit', 'empresa_servidor', 'empresa_servidor_nombre', 
-            'empresa_servidor_nit', 'anio_fiscal', 'modo', 'activo',
+            'id', 'dominio', 'nit', 'servidor', 'servidor_nombre', 'empresa_servidor', 
+            'empresa_servidor_nombre', 'empresa_servidor_nit', 'anio_fiscal', 'modo', 'activo',
             'fecha_creacion', 'fecha_actualizacion'
         ]
-        read_only_fields = ['id', 'fecha_creacion', 'fecha_actualizacion']
+        read_only_fields = ['id', 'fecha_creacion', 'fecha_actualizacion', 'servidor_nombre']
     
     def validate_nit(self, value):
         """Normalizar NIT: eliminar puntos, guiones y espacios"""

@@ -85,22 +85,18 @@ class DataManager:
                 nit = fila['NIT']
                 anio_fiscal = fila['ANOFIS']
                 
-                # Verificar si ya existe una empresa con este NIT y año fiscal en otro servidor
-                # Normalizar NIT antes de buscar
+                # Verificar si ya existe una empresa con este NIT y año fiscal en el MISMO servidor
+                # Ahora permitimos duplicados en diferentes servidores, solo verificamos duplicados en el mismo servidor
                 from ..models import normalize_nit_and_extract_dv
                 nit_norm, _, _ = normalize_nit_and_extract_dv(nit) if nit else ('', None, '')
                 empresa_existente = EmpresaServidor.objects.filter(
-                    nit_normalizado=nit_norm, anio_fiscal=anio_fiscal
-                ).exclude(servidor=servidor).first() if nit_norm else None
+                    servidor=servidor,
+                    nit_normalizado=nit_norm, 
+                    anio_fiscal=anio_fiscal
+                ).first() if nit_norm else None
                 
-                if empresa_existente:
-                    empresas_registradas.append({
-                        'empresa': fila['NOMBRE'], 'nit': nit, 
-                        'anio_fiscal': anio_fiscal, 
-                        'accion': 'omitida',
-                        'razon': f'Ya existe en servidor "{empresa_existente.servidor.nombre}"'
-                    })
-                    continue
+                # Si ya existe en el mismo servidor, solo actualizar (no crear duplicado)
+                # No omitir, solo actualizar más abajo con update_or_create
                 
                 # Si existe en el mismo servidor, actualizar; si no, crear
                 # Normalizar NIT antes de crear/actualizar

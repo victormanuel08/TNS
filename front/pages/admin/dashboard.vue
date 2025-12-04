@@ -396,6 +396,7 @@
               <tr>
                 <th>NIT</th>
                 <th>Cliente</th>
+                <th>Servidor</th>
                 <th>API Key</th>
                 <th>Empresas Asociadas</th>
                 <th>Estado</th>
@@ -409,6 +410,10 @@
               <tr v-for="key in apiKeys" :key="key.id">
                 <td><code>{{ key.nit }}</code></td>
                 <td><strong>{{ key.nombre_cliente }}</strong></td>
+                <td>
+                  <span v-if="key.servidor_nombre" class="badge">{{ key.servidor_nombre }}</span>
+                  <span v-else class="text-muted">Todos</span>
+                </td>
                 <td>
                   <div class="api-key-cell">
                     <code v-if="!key.showKey" class="api-key-masked">{{ key.api_key_masked || '••••••••' }}</code>
@@ -513,6 +518,7 @@
               <tr>
                 <th>Dominio</th>
                 <th>NIT</th>
+                <th>Servidor</th>
                 <th>Empresa</th>
                 <th>Año Fiscal</th>
                 <th>Modo</th>
@@ -524,6 +530,10 @@
               <tr v-for="dominio in dominios" :key="dominio.id">
                 <td><code>{{ dominio.dominio }}</code></td>
                 <td>{{ dominio.nit || '-' }}</td>
+                <td>
+                  <span v-if="dominio.servidor_nombre" class="badge">{{ dominio.servidor_nombre }}</span>
+                  <span v-else class="text-muted">Todos</span>
+                </td>
                 <td>{{ dominio.empresa_servidor_nombre || '-' }}</td>
                 <td>{{ dominio.anio_fiscal || '-' }}</td>
                 <td>
@@ -2568,6 +2578,19 @@
             />
           </div>
           <div class="form-group">
+            <label>Servidor (Opcional)</label>
+            <select 
+              v-model="newApiKey.servidor" 
+              class="form-input"
+            >
+              <option :value="null">Todos los servidores (sin restricción)</option>
+              <option v-for="server in servers" :key="server.id" :value="server.id">
+                {{ server.nombre }}
+              </option>
+            </select>
+            <small>Si seleccionas un servidor, la API Key solo tendrá acceso a empresas de ese servidor. Si no seleccionas, tendrá acceso a todas las empresas del NIT en todos los servidores.</small>
+          </div>
+          <div class="form-group">
             <label>Días de Validez</label>
             <input 
               v-model.number="newApiKey.dias_validez" 
@@ -2625,6 +2648,19 @@
             <small>Selecciona un NIT. El sistema buscará automáticamente la empresa con el año fiscal más reciente.</small>
           </div>
           <div class="form-group">
+            <label>Servidor (Opcional)</label>
+            <select 
+              v-model="newDominio.servidor" 
+              class="form-input"
+            >
+              <option :value="null">Todos los servidores (sin restricción)</option>
+              <option v-for="server in servers" :key="server.id" :value="server.id">
+                {{ server.nombre }}
+              </option>
+            </select>
+            <small>Si seleccionas un servidor, el dominio solo resolverá a empresas de ese servidor. Si no seleccionas, buscará en todos los servidores.</small>
+          </div>
+          <div class="form-group">
             <label>Modo *</label>
             <select v-model="newDominio.modo" required class="form-input">
               <option value="ecommerce">E-commerce público</option>
@@ -2673,6 +2709,19 @@
               placeholder="Sin puntos ni guiones"
             />
             <small>Si cambias el NIT, el sistema buscará automáticamente la empresa con el año fiscal más reciente.</small>
+          </div>
+          <div class="form-group">
+            <label>Servidor (Opcional)</label>
+            <select 
+              v-model="editingDominio.servidor" 
+              class="form-input"
+            >
+              <option :value="null">Todos los servidores (sin restricción)</option>
+              <option v-for="server in servers" :key="server.id" :value="server.id">
+                {{ server.nombre }}
+              </option>
+            </select>
+            <small>Si seleccionas un servidor, el dominio solo resolverá a empresas de ese servidor. Si no seleccionas, buscará en todos los servidores.</small>
           </div>
           <div class="form-group">
             <label>Modo *</label>
@@ -3508,6 +3557,7 @@ const editingDominio = ref<any>(null)
 const newDominio = ref({
   dominio: '',
   nit: '',
+  servidor: null,
   modo: 'ecommerce',
   activo: true
 })
@@ -5135,6 +5185,7 @@ const terminalHistoryDown = () => {
 const newApiKey = ref({
   nit: '',
   nombre_cliente: '',
+  servidor: null,
   dias_validez: 365
 })
 
@@ -5220,7 +5271,7 @@ const createApiKey = async () => {
     })
     
     showCreateApiKey.value = false
-    newApiKey.value = { nit: '', nombre_cliente: '', dias_validez: 365 }
+    newApiKey.value = { nit: '', nombre_cliente: '', servidor: null, dias_validez: 365 }
     await loadApiKeys()
   } catch (error: any) {
     console.error('Error generando API Key:', error)
@@ -5746,6 +5797,7 @@ const createDominio = async () => {
     newDominio.value = {
       dominio: '',
       nit: '',
+      servidor: null,
       modo: 'ecommerce',
       activo: true
     }
@@ -6549,9 +6601,7 @@ const downloadBackup = async (backup: any) => {
     const config = useRuntimeConfig()
     const { accessToken, apiKey } = useAuthState()
     
-    const headers: Record<string, string> = {
-      'Accept': 'application/octet-stream'
-    }
+    const headers: Record<string, string> = {}
     
     if (accessToken.value) {
       headers['Authorization'] = `Bearer ${accessToken.value}`

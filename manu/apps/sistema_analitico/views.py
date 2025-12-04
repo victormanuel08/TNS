@@ -8986,10 +8986,16 @@ def resolve_domain_view(request):
                 print(f"   🔍 Buscando empresas con NIT normalizado: '{nit_normalizado}'")
                 
                 if nit_normalizado:
-                    # Primero intentar búsqueda directa (si los NITs en BD ya están normalizados)
+                    # Buscar empresas con el mismo NIT normalizado
                     empresas_mismo_nit = EmpresaServidor.objects.filter(
                         nit_normalizado=nit_normalizado
-                    ).order_by('-anio_fiscal')
+                    )
+                    
+                    # Si el dominio tiene un servidor autorizado, filtrar solo empresas de ese servidor
+                    if empresa_dominio.servidor:
+                        empresas_mismo_nit = empresas_mismo_nit.filter(servidor=empresa_dominio.servidor)
+                    
+                    empresas_mismo_nit = empresas_mismo_nit.order_by('-anio_fiscal')
                     
                     print(f"   📊 Búsqueda directa: {empresas_mismo_nit.count()} empresas encontradas")
                     

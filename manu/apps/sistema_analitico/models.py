@@ -115,9 +115,9 @@ class EmpresaServidor(models.Model):
 
     class Meta:
         db_table = 'empresas_servidor'
-        unique_together = ['nit_normalizado', 'anio_fiscal']  # Único globalmente, sin importar servidor
+        unique_together = ['servidor', 'nit_normalizado', 'anio_fiscal']  # Único por servidor (permite duplicados en diferentes servidores)
         indexes = [
-            models.Index(fields=['nit_normalizado', 'anio_fiscal']),
+            models.Index(fields=['servidor', 'nit_normalizado', 'anio_fiscal']),
             models.Index(fields=['servidor', 'nit_normalizado']),
             models.Index(fields=['nit_normalizado']),  # Índice individual para búsquedas rápidas
         ]
@@ -1155,6 +1155,13 @@ class APIKeyCliente(models.Model):
         blank=True,
         related_name='api_keys_creadas'
     )
+    servidor = models.ForeignKey(
+        Servidor,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        help_text='Servidor específico para esta API Key. Si está definido, solo se asociarán empresas de este servidor.'
+    )
     empresas_asociadas = models.ManyToManyField('EmpresaServidor', blank=True)
     contador_peticiones = models.IntegerField(default=0)
     fecha_ultima_peticion = models.DateTimeField(null=True, blank=True)
@@ -1178,15 +1185,21 @@ class APIKeyCliente(models.Model):
     def actualizar_empresas_asociadas(self):
         """
         Actualiza automáticamente las empresas asociadas a este NIT.
-        Normaliza el NIT de la API Key y busca empresas con NIT normalizado coincidente.
-        Optimizado: intenta búsqueda directa primero, luego normaliza si es necesario.
+        Si la API Key tiene un servidor asociado, solo busca empresas de ese servidor.
+        Si no tiene servidor, busca todas las empresas con el mismo NIT (comportamiento legacy).
         """
         import re
         # Normalizar NIT de la API Key (eliminar puntos, guiones, etc.)
         nit_normalizado_api = re.sub(r"\D", "", str(self.nit))
         
-        # Buscar directamente por nit_normalizado (siempre normalizado ahora)
-        empresas_directas = EmpresaServidor.objects.filter(nit_normalizado=nit_normalizado_api)
+        # Buscar empresas por NIT normalizado
+        empresas_query = EmpresaServidor.objects.filter(nit_normalizado=nit_normalizado_api)
+        
+        # Si la API Key tiene un servidor asociado, filtrar solo empresas de ese servidor
+        if self.servidor:
+            empresas_query = empresas_query.filter(servidor=self.servidor)
+        
+        empresas_directas = empresas_query.all()
         if empresas_directas.exists():
             self.empresas_asociadas.set(empresas_directas)
             return empresas_directas.count()
@@ -1363,13 +1376,20 @@ class EmpresaDominio(models.Model):
         blank=True,
         help_text='NIT de la empresa (sin puntos ni guiones). Se usa para buscar la empresa con año fiscal más reciente.',
     )
+    servidor = models.ForeignKey(
+        Servidor,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        help_text='Servidor autorizado para este dominio. Si está definido, solo se buscarán empresas de este servidor.',
+    )
     empresa_servidor = models.ForeignKey(
         EmpresaServidor,
         on_delete=models.CASCADE,
         related_name='dominios_publicos',
         null=True,
         blank=True,
-        help_text='Empresa servidor asociada a este dominio. Se determina automáticamente en la primera búsqueda.',
+        help_text='Empresa servidor asociada a este dominio. Se determina automáticamente en la primera búsqueda, respetando el servidor autorizado.',
     )
     anio_fiscal = models.IntegerField(
         null=True,
@@ -1413,16 +1433,22 @@ class EmpresaDominio(models.Model):
         if not self.empresa_servidor_id and self.nit:
             nit_normalizado = normalize_nit(self.nit)
             if nit_normalizado:
-                # Buscar todas las empresas con el mismo NIT normalizado, ordenadas por año fiscal descendente
+                # Buscar empresas con el mismo NIT normalizado, ordenadas por año fiscal descendente
                 empresas_mismo_nit = EmpresaServidor.objects.filter(
                     nit_normalizado=nit_normalizado
-                ).order_by('-anio_fiscal')
+                )
+                
+                # Si hay un servidor autorizado, filtrar solo empresas de ese servidor
+                if self.servidor:
+                    empresas_mismo_nit = empresas_mismo_nit.filter(servidor=self.servidor)
+                
+                empresas_mismo_nit = empresas_mismo_nit.order_by('-anio_fiscal')
                 
                 if empresas_mismo_nit.exists():
                     empresa_mas_reciente = empresas_mismo_nit.first()
                     self.empresa_servidor = empresa_mas_reciente
                     self.anio_fiscal = empresa_mas_reciente.anio_fiscal
-                    print(f"[EmpresaDominio] Dominio '{self.dominio}': empresa encontrada por NIT '{nit_normalizado}': {empresa_mas_reciente.nombre} (Año: {empresa_mas_reciente.anio_fiscal})")
+                    print(f"[EmpresaDominio] Dominio '{self.dominio}': empresa encontrada por NIT '{nit_normalizado}' en servidor '{self.servidor.nombre if self.servidor else 'cualquiera'}': {empresa_mas_reciente.nombre} (Año: {empresa_mas_reciente.anio_fiscal})")
         
         # Si hay empresa_servidor, verificar si necesita actualizar el año fiscal
         if self.empresa_servidor_id:
@@ -1436,10 +1462,18 @@ class EmpresaDominio(models.Model):
                     nit_normalizado = normalize_nit(self.empresa_servidor.nit)
                 
                 if nit_normalizado:
-                    # Buscar todas las empresas con el mismo NIT normalizado
+                    # Buscar empresas con el mismo NIT normalizado
                     empresas_mismo_nit = EmpresaServidor.objects.filter(
                         nit_normalizado=nit_normalizado
-                    ).order_by('-anio_fiscal')
+                    )
+                    
+                    # Si hay un servidor autorizado, filtrar solo empresas de ese servidor
+                    # Si ya hay empresa_servidor, usar su servidor como referencia
+                    servidor_filtro = self.servidor or (self.empresa_servidor.servidor if self.empresa_servidor else None)
+                    if servidor_filtro:
+                        empresas_mismo_nit = empresas_mismo_nit.filter(servidor=servidor_filtro)
+                    
+                    empresas_mismo_nit = empresas_mismo_nit.order_by('-anio_fiscal')
                     
                     if empresas_mismo_nit.exists():
                         # Usar el año fiscal más reciente
