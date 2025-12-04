@@ -101,7 +101,7 @@ class BackupS3Service:
     def obtener_ruta_s3(self, empresa: EmpresaServidor, nombre_archivo: str) -> str:
         """
         Genera la ruta S3 para un backup según la estructura:
-        {nit_normalizado}/{anio_fiscal}/backups/{nombre_archivo}
+        {server_name}/{nit_normalizado}/{anio_fiscal}/backups/{nombre_archivo}
         
         Args:
             empresa: Empresa para la cual se genera la ruta
@@ -110,26 +110,29 @@ class BackupS3Service:
         Returns:
             Ruta completa en S3
         """
-        return f"{empresa.nit_normalizado}/{empresa.anio_fiscal}/backups/{nombre_archivo}"
+        # Normalizar nombre del servidor (sin espacios, caracteres especiales)
+        server_name = empresa.servidor.nombre.replace(' ', '_').replace('/', '_').replace('\\', '_')
+        return f"{server_name}/{empresa.nit_normalizado}/{empresa.anio_fiscal}/backups/{nombre_archivo}"
     
     def obtener_tamano_actual_gb(self, empresa: EmpresaServidor) -> float:
         """
-        Calcula el tamaño total en GB usado en S3 por una empresa (por NIT normalizado),
+        Calcula el tamaño total en GB usado en S3 por una empresa (por servidor y NIT normalizado),
         considerando TODOS los años fiscales, backups y demás carpetas/documentos.
         
         Args:
-            empresa: Cualquier EmpresaServidor de ese NIT (se usa nit_normalizado)
+            empresa: EmpresaServidor específica (se usa servidor.nombre + nit_normalizado)
             
         Returns:
             Tamaño total en GB
         """
         try:
-            # Un solo bucket global para todas las empresas.
-            # El límite es por empresa (NIT normalizado), sumando:
+            # Estructura: {server_name}/{nit_normalizado}/{anio_fiscal}/backups/{archivo}
+            # El límite es por empresa (servidor + NIT normalizado), sumando:
             # - Todos los años fiscales
             # - Todos los backups
             # - Cualquier otra carpeta/documento bajo ese prefijo.
-            prefix = f"{empresa.nit_normalizado}/"
+            server_name = empresa.servidor.nombre.replace(' ', '_').replace('/', '_').replace('\\', '_')
+            prefix = f"{server_name}/{empresa.nit_normalizado}/"
             total_bytes = 0
             
             # Para path-style, el bucket debe ir en la ruta, no en el dominio
