@@ -6561,18 +6561,29 @@ const downloadBackup = async (backup: any) => {
       headers['Api-Key'] = apiKey.value
     }
     
+    // Construir URL completa sin parámetros adicionales
+    const url = `${config.public.djangoApiUrl}/api/backups-s3/${backup.id}/descargar_backup/?formato=${encodeURIComponent(formato)}`
+    
     // Usar $fetch.raw para obtener la respuesta completa con headers
-    const response = await $fetch.raw(
-      `/api/backups-s3/${backup.id}/descargar_backup/?formato=${formato}`,
-      {
-        baseURL: config.public.djangoApiUrl,
-        method: 'GET',
-        headers
-      }
-    )
+    // NO pasar params como objeto, solo en la URL
+    const response = await $fetch.raw(url, {
+      method: 'GET',
+      headers
+    })
     
     // Obtener el contenido de la respuesta
     const responseData = response._data
+    
+    // Obtener headers de forma segura (puede ser objeto plano o Headers object)
+    const headersObj = response.headers || {}
+    const getHeader = (name: string): string => {
+      if (typeof headersObj.get === 'function') {
+        return headersObj.get(name) || ''
+      }
+      // Si es objeto plano, buscar en diferentes formatos
+      const lowerName = name.toLowerCase()
+      return headersObj[lowerName] || headersObj[name] || ''
+    }
     
     // Verificar status code primero
     if (response.status < 200 || response.status >= 300) {
@@ -6598,7 +6609,8 @@ const downloadBackup = async (backup: any) => {
     }
     
     // Verificar si la respuesta es un error JSON
-    const contentType = response.headers.get('content-type') || ''
+    const contentType = getHeader('content-type')
+    
     if (contentType.includes('application/json')) {
       // Es un error JSON, leerlo como texto y parsearlo
       let errorData: any
@@ -6638,7 +6650,7 @@ const downloadBackup = async (backup: any) => {
     link.href = url
     
     // Obtener nombre del archivo desde headers o usar el nombre del backup
-    const contentDisposition = response.headers.get('content-disposition')
+    const contentDisposition = getHeader('content-disposition')
     let filename = backup.nombre_archivo
     if (contentDisposition) {
       const filenameMatch = contentDisposition.match(/filename="?(.+)"?/i)
