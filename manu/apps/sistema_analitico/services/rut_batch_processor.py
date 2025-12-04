@@ -244,6 +244,17 @@ def procesar_zip_ruts(zip_file, task=None) -> Dict:
                     if razon_social_mejorada != rut_data.get('razon_social', ''):
                         rut.razon_social = razon_social_final
                     
+                    # Guardar campos 31-34 en informacion_adicional para persona natural
+                    if rut_data.get('tipo_contribuyente') == 'persona_natural':
+                        if not rut.informacion_adicional:
+                            rut.informacion_adicional = {}
+                        rut.informacion_adicional.update({
+                            'persona_natural_primer_apellido': rut_data.get('persona_natural_primer_apellido', ''),
+                            'persona_natural_segundo_apellido': rut_data.get('persona_natural_segundo_apellido', ''),
+                            'persona_natural_primer_nombre': rut_data.get('persona_natural_primer_nombre', ''),
+                            'persona_natural_otros_nombres': rut_data.get('persona_natural_otros_nombres', ''),
+                        })
+                    
                     # Guardar PDF
                     pdf_file.seek(0)
                     if rut.archivo_pdf:

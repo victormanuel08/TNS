@@ -680,6 +680,8 @@ class RUTSerializer(serializers.ModelSerializer):
     actividad_principal_info = serializers.SerializerMethodField()
     actividad_secundaria_info = serializers.SerializerMethodField()
     otras_actividades_info = serializers.SerializerMethodField()
+    persona_natural_nombre_completo = serializers.SerializerMethodField()
+    responsabilidades_detalladas = serializers.SerializerMethodField()
     
     class Meta:
         model = RUT
@@ -716,6 +718,7 @@ class RUTSerializer(serializers.ModelSerializer):
             'archivo_pdf', 'archivo_pdf_url', 'informacion_adicional',
             'establecimientos', 'empresas_asociadas',
             'actividad_principal_info', 'actividad_secundaria_info', 'otras_actividades_info',
+            'persona_natural_nombre_completo', 'responsabilidades_detalladas',
             'fecha_creacion', 'fecha_actualizacion', 'fecha_ultima_consulta_dian'
         ]
         read_only_fields = ['id', 'nit_normalizado', 'fecha_creacion', 'fecha_actualizacion']
@@ -777,6 +780,44 @@ class RUTSerializer(serializers.ModelSerializer):
                     actividades_info.append({'codigo': codigo, 'descripcion': 'No encontrada en BD'})
             return actividades_info
         return []
+    
+    def get_persona_natural_nombre_completo(self, obj):
+        """Obtener nombre completo para persona natural (apellidos + nombres)"""
+        if obj.tipo_contribuyente == 'persona_natural':
+            # Intentar obtener desde campos 31-34 si existen en informacion_adicional
+            info_adicional = obj.informacion_adicional or {}
+            apellido1 = info_adicional.get('persona_natural_primer_apellido', '')
+            apellido2 = info_adicional.get('persona_natural_segundo_apellido', '')
+            nombre1 = info_adicional.get('persona_natural_primer_nombre', '')
+            nombre2 = info_adicional.get('persona_natural_otros_nombres', '')
+            
+            partes = [apellido1, apellido2, nombre1, nombre2]
+            nombre_completo = ' '.join([p for p in partes if p])
+            
+            if nombre_completo:
+                return {
+                    'primer_apellido': apellido1,
+                    'segundo_apellido': apellido2,
+                    'primer_nombre': nombre1,
+                    'otros_nombres': nombre2,
+                    'nombre_completo': nombre_completo
+                }
+        return None
+    
+    def get_responsabilidades_detalladas(self, obj):
+        """Obtener responsabilidades con códigos y descripciones"""
+        codigos = obj.responsabilidades_codigos or []
+        descripciones = obj.responsabilidades_descripcion or []
+        
+        responsabilidades = []
+        for i, codigo in enumerate(codigos):
+            descripcion = descripciones[i] if i < len(descripciones) else f'Responsabilidad código {codigo}'
+            responsabilidades.append({
+                'codigo': str(codigo),
+                'descripcion': descripcion
+            })
+        
+        return responsabilidades
 
 
 class SubirRUTSerializer(serializers.Serializer):

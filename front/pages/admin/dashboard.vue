@@ -3060,6 +3060,27 @@
               <div class="detail-item">
                 <strong>Razón Social:</strong> {{ selectedRUT.razon_social }}
               </div>
+              <!-- Para Persona Natural: mostrar apellidos y nombres -->
+              <div v-if="selectedRUT.tipo_contribuyente === 'persona_natural' && selectedRUT.persona_natural_nombre_completo" class="detail-item" style="background: #f0f9ff; padding: 10px; border-radius: 5px; margin-top: 10px;">
+                <strong style="color: #0369a1;">👤 Datos Persona Natural:</strong>
+                <div style="margin-top: 8px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                  <div v-if="selectedRUT.persona_natural_nombre_completo.primer_apellido">
+                    <strong>Primer Apellido:</strong> {{ selectedRUT.persona_natural_nombre_completo.primer_apellido }}
+                  </div>
+                  <div v-if="selectedRUT.persona_natural_nombre_completo.segundo_apellido">
+                    <strong>Segundo Apellido:</strong> {{ selectedRUT.persona_natural_nombre_completo.segundo_apellido }}
+                  </div>
+                  <div v-if="selectedRUT.persona_natural_nombre_completo.primer_nombre">
+                    <strong>Primer Nombre:</strong> {{ selectedRUT.persona_natural_nombre_completo.primer_nombre }}
+                  </div>
+                  <div v-if="selectedRUT.persona_natural_nombre_completo.otros_nombres">
+                    <strong>Otros Nombres:</strong> {{ selectedRUT.persona_natural_nombre_completo.otros_nombres }}
+                  </div>
+                </div>
+                <div v-if="selectedRUT.persona_natural_nombre_completo.nombre_completo" style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #ddd;">
+                  <strong>Nombre Completo:</strong> {{ selectedRUT.persona_natural_nombre_completo.nombre_completo }}
+                </div>
+              </div>
               <div class="detail-item" v-if="selectedRUT.nombre_comercial">
                 <strong>Nombre Comercial:</strong> {{ selectedRUT.nombre_comercial }}
               </div>
@@ -3184,6 +3205,106 @@
             
             <div v-if="!selectedRUT.actividad_principal_info && !selectedRUT.actividad_secundaria_info && (!selectedRUT.otras_actividades_info || selectedRUT.otras_actividades_info.length === 0)" style="padding: 20px; text-align: center; color: #999;">
               No hay actividades económicas registradas
+            </div>
+          </div>
+          
+          <!-- Responsabilidades Tributarias -->
+          <div style="margin-top: 30px;">
+            <h3 style="margin-bottom: 15px; color: #333;">Responsabilidades Tributarias</h3>
+            <div v-if="selectedRUT.responsabilidades_detalladas && selectedRUT.responsabilidades_detalladas.length > 0" class="table-container">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Código</th>
+                    <th>Descripción</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(resp, idx) in selectedRUT.responsabilidades_detalladas" :key="idx">
+                    <td><code style="font-weight: bold; font-size: 1.1em;">{{ resp.codigo }}</code></td>
+                    <td>{{ resp.descripcion }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-else style="padding: 20px; text-align: center; color: #999;">
+              No hay responsabilidades tributarias registradas
+            </div>
+            
+            <!-- Atributos booleanos -->
+            <div style="margin-top: 20px; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px;">
+              <div v-if="selectedRUT.responsable_iva" class="badge" style="background: #4CAF50; color: white;">
+                ✅ Responsable de IVA
+              </div>
+              <div v-if="selectedRUT.autorretenedor" class="badge" style="background: #2196F3; color: white;">
+                ✅ Autorretenedor
+              </div>
+              <div v-if="selectedRUT.obligado_contabilidad" class="badge" style="background: #FF9800; color: white;">
+                ✅ Obligado a Contabilidad
+              </div>
+              <div v-if="selectedRUT.regimen_simple" class="badge" style="background: #9C27B0; color: white;">
+                ✅ Régimen Simple
+              </div>
+              <div v-if="selectedRUT.facturador_electronico" class="badge" style="background: #F44336; color: white;">
+                ✅ Facturador Electrónico
+              </div>
+              <div v-if="selectedRUT.informante_exogena" class="badge" style="background: #607D8B; color: white;">
+                ✅ Informante Exógena
+              </div>
+              <div v-if="selectedRUT.informante_beneficiarios_finales" class="badge" style="background: #795548; color: white;">
+                ✅ Informante Beneficiarios Finales
+              </div>
+            </div>
+          </div>
+          
+          <!-- Establecimientos -->
+          <div style="margin-top: 30px;">
+            <h3 style="margin-bottom: 15px; color: #333;">Establecimientos ({{ selectedRUT.establecimientos?.length || 0 }})</h3>
+            <div v-if="selectedRUT.establecimientos && selectedRUT.establecimientos.length > 0" class="table-container">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Nombre</th>
+                    <th>Tipo</th>
+                    <th>Actividad CIIU</th>
+                    <th>Ubicación</th>
+                    <th>Dirección</th>
+                    <th>Teléfono</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="est in selectedRUT.establecimientos" :key="est.id">
+                    <td><strong>{{ est.nombre || '-' }}</strong></td>
+                    <td>
+                      <span v-if="est.tipo_establecimiento_codigo" class="badge">
+                        {{ est.tipo_establecimiento_codigo }}: {{ est.tipo_establecimiento || '-' }}
+                      </span>
+                      <span v-else>{{ est.tipo_establecimiento || '-' }}</span>
+                    </td>
+                    <td>
+                      <div v-if="est.actividad_economica_ciiu">
+                        <code>{{ est.actividad_economica_ciiu }}</code>
+                        <div v-if="est.actividad_economica_descripcion" style="font-size: 0.85em; color: #666; margin-top: 4px;">
+                          {{ est.actividad_economica_descripcion }}
+                        </div>
+                      </div>
+                      <span v-else>-</span>
+                    </td>
+                    <td>
+                      <div v-if="est.ciudad_nombre">
+                        {{ est.ciudad_nombre }}<br>
+                        <small style="color: #666;">{{ est.departamento_nombre || '' }}</small>
+                      </div>
+                      <span v-else>-</span>
+                    </td>
+                    <td>{{ est.direccion || '-' }}</td>
+                    <td>{{ est.telefono || '-' }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-else style="padding: 20px; text-align: center; color: #999;">
+              No hay establecimientos registrados
             </div>
           </div>
           

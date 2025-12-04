@@ -85,17 +85,34 @@ def extract_rut_data_from_pdf(pdf_file) -> Dict:
     )
     if nit_match:
         linea_nit = nit_match.group(1).strip()
-        # Regex para separar: números (NIT + DV) - dirección - código final
+        # Regex para separar: números (NIT + DV) - dirección - código final (DV)
+        # Formato puede ser: "4 1 0 3 1 5 4 3 Impuestos de Cúcuta 7" (NIT de 8 dígitos + DV al final)
+        # O: "8 8 2 2 2 6 8 4 0 Impuestos de Cúcuta 7" (NIT de 9 dígitos con DV incluido)
         patron = re.compile(r'^([\d\s]+)([^\d]+)(\d+)$')
         partes = patron.match(linea_nit)
         
         if partes:
             # Procesar números iniciales (todos los dígitos antes de la dirección)
             numeros = partes.group(1).replace(" ", "")
-            if len(numeros) >= 9:  # NIT mínimo 9 dígitos
-                nit = numeros[:-1]  # Todos menos el último dígito
-                dv = numeros[-1]    # Último dígito
-                if 9 <= len(nit) <= 11:  # Validar longitud
+            dv_final = partes.group(3).strip()  # DV al final después de la dirección
+            
+            # Aceptar NITs de 8-11 dígitos (algunos NITs de personas naturales tienen 8 dígitos)
+            if len(numeros) >= 8:
+                if len(numeros) >= 9:
+                    # Si tiene 9+ dígitos, el último puede ser el DV o el DV está al final
+                    # Intentar primero con DV al final (más común en formato RUT)
+                    nit = numeros
+                    dv = dv_final
+                    # Si el último dígito del NIT coincide con el DV final, usar el DV final
+                    if numeros[-1] == dv_final:
+                        nit = numeros[:-1]
+                        dv = dv_final
+                else:
+                    # Si tiene exactamente 8 dígitos, usar el DV que está después de la dirección
+                    nit = numeros
+                    dv = dv_final
+                
+                if 8 <= len(nit) <= 11:  # Validar longitud
                     data['nit'] = nit
                     data['nit_normalizado'] = nit
                     data['dv'] = dv
@@ -126,10 +143,14 @@ def extract_rut_data_from_pdf(pdf_file) -> Dict:
         )
         if nit_pattern3:
             nit_raw = nit_pattern3.group(1).replace(' ', '').replace('\n', '').strip()
-            if 9 <= len(nit_raw) <= 11:
-                # Asumir que el último dígito es el DV
-                nit = nit_raw[:-1]
-                dv = nit_raw[-1]
+            if 8 <= len(nit_raw) <= 11:
+                # Si tiene 9+ dígitos, el último es el DV; si tiene 8, todos son NIT
+                if len(nit_raw) >= 9:
+                    nit = nit_raw[:-1]
+                    dv = nit_raw[-1]
+                else:
+                    nit = nit_raw
+                    dv = ''
                 data['nit'] = nit
                 data['nit_normalizado'] = nit
                 data['dv'] = dv
@@ -157,8 +178,76 @@ def extract_rut_data_from_pdf(pdf_file) -> Dict:
                     data['dv'] = nit_raw[-1]
                 nit_encontrado = True
     
+    # Patrón 5: Buscar cualquier secuencia de 8-11 dígitos cerca de "Identificación" o "Número"
     if not nit_encontrado:
-        raise ValueError("No se pudo extraer el NIT del PDF. Por favor, proporciona el NIT manualmente.")
+        # Buscar después de "Identificación Tributaria" o "Número de Identificación"
+        nit_pattern5 = re.search(
+            r'(?:Identificación\s+Tributaria|Número\s+de\s+Identificación)[^\d]*([\d\s]{8,15})',
+            texto_completo,
+            re.IGNORECASE
+        )
+        if nit_pattern5:
+            nit_raw = nit_pattern5.group(1).replace(' ', '').replace('\n', '').strip()
+            if 8 <= len(nit_raw) <= 11:
+                # Si tiene 9+ dígitos, asumir que el último es DV
+                if len(nit_raw) >= 9:
+                    data['nit'] = nit_raw[:-1]
+                    data['nit_normalizado'] = nit_raw[:-1]
+                    data['dv'] = nit_raw[-1]
+                else:
+                    data['nit'] = nit_raw
+                    data['nit_normalizado'] = nit_raw
+                    data['dv'] = ''
+                nit_encontrado = True
+    
+    # Patrón 6: Buscar en la línea que contiene "5." y números después
+    if not nit_encontrado:
+        # Buscar línea que empieza con "5." y contiene números
+        nit_pattern6 = re.search(
+            r'5\.\s*[^\n]*\n\s*([\d\s]{8,15})',
+            texto_completo,
+            re.IGNORECASE | re.MULTILINE
+        )
+        if nit_pattern6:
+            nit_raw = nit_pattern6.group(1).replace(' ', '').replace('\n', '').strip()
+            if 8 <= len(nit_raw) <= 11:
+                if len(nit_raw) >= 9:
+                    data['nit'] = nit_raw[:-1]
+                    data['nit_normalizado'] = nit_raw[:-1]
+                    data['dv'] = nit_raw[-1]
+                else:
+                    data['nit'] = nit_raw
+                    data['nit_normalizado'] = nit_raw
+                    data['dv'] = ''
+                nit_encontrado = True
+    
+    # Patrón 7: Buscar cualquier secuencia de 8-11 dígitos consecutivos en las primeras 2000 líneas
+    if not nit_encontrado:
+        # Buscar en las primeras líneas del documento (donde suele estar el NIT)
+        primeras_lineas = '\n'.join(texto_completo.split('\n')[:50])
+        todos_los_numeros = re.findall(r'\b\d{8,11}\b', primeras_lineas)
+        if todos_los_numeros:
+            # Tomar el primero que parezca un NIT (8-11 dígitos)
+            for num in todos_los_numeros:
+                if 8 <= len(num) <= 11:
+                    if len(num) >= 9:
+                        data['nit'] = num[:-1]
+                        data['nit_normalizado'] = num[:-1]
+                        data['dv'] = num[-1]
+                    else:
+                        data['nit'] = num
+                        data['nit_normalizado'] = num
+                        data['dv'] = ''
+                    nit_encontrado = True
+                    break
+    
+    if not nit_encontrado:
+        # Guardar contexto para debugging
+        contexto_nit = texto_completo[:2000] if len(texto_completo) > 2000 else texto_completo
+        raise ValueError(
+            f"No se pudo extraer el NIT del PDF. Por favor, proporciona el NIT manualmente.\n"
+            f"Contexto extraído (primeros 2000 caracteres):\n{contexto_nit[:500]}..."
+        )
     
     # Dirección seccional
     if match := re.search(r"12\.\s*Dirección seccional\s*\n([^\n]+)", texto_completo):
@@ -178,21 +267,45 @@ def extract_rut_data_from_pdf(pdf_file) -> Dict:
             data['tipo_contribuyente'] = 'persona_natural'
     
     # ========== NOMBRES PARA PERSONAS NATURALES (campos 31-34) ==========
-    # Campo 31: Primer apellido
-    if match := re.search(r"31\.\s*Primer apellido\s*\n([^\n]+)", texto_completo):
-        data['persona_natural_primer_apellido'] = match.group(1).strip()
+    # Los campos 31-34 pueden estar en una sola línea: "31. Primer apellido 32. Segundo apellido 33. Primer nombre 34. Otros nombres\nPEÑALOZA OBANDO JAVIER ALEXANDER"
+    # O en líneas separadas
     
-    # Campo 32: Segundo apellido
-    if match := re.search(r"32\.\s*Segundo apellido\s*\n([^\n]+)", texto_completo):
-        data['persona_natural_segundo_apellido'] = match.group(1).strip()
-    
-    # Campo 33: Primer nombre
-    if match := re.search(r"33\.\s*Primer nombre\s*\n([^\n]+)", texto_completo):
-        data['persona_natural_primer_nombre'] = match.group(1).strip()
-    
-    # Campo 34: Otros nombres
-    if match := re.search(r"34\.\s*Otros nombres\s*\n([^\n]+)", texto_completo):
-        data['persona_natural_otros_nombres'] = match.group(1).strip()
+    # Intentar patrón de una sola línea primero (más común)
+    nombres_linea = re.search(
+        r"31\.\s*Primer apellido\s*32\.\s*Segundo apellido\s*33\.\s*Primer nombre\s*34\.\s*Otros nombres\s*\n([^\n]+)",
+        texto_completo,
+        re.IGNORECASE
+    )
+    if nombres_linea:
+        nombres_completos = nombres_linea.group(1).strip()
+        partes = nombres_completos.split()
+        if len(partes) >= 2:
+            # Asumir: apellido1 apellido2 nombre1 nombre2...
+            if len(partes) == 2:
+                data['persona_natural_primer_apellido'] = partes[0]
+                data['persona_natural_primer_nombre'] = partes[1]
+            elif len(partes) == 3:
+                data['persona_natural_primer_apellido'] = partes[0]
+                data['persona_natural_segundo_apellido'] = partes[1]
+                data['persona_natural_primer_nombre'] = partes[2]
+            elif len(partes) >= 4:
+                data['persona_natural_primer_apellido'] = partes[0]
+                data['persona_natural_segundo_apellido'] = partes[1]
+                data['persona_natural_primer_nombre'] = partes[2]
+                data['persona_natural_otros_nombres'] = ' '.join(partes[3:])
+    else:
+        # Intentar campos separados
+        if match := re.search(r"31\.\s*Primer apellido\s*\n([^\n]+)", texto_completo):
+            data['persona_natural_primer_apellido'] = match.group(1).strip()
+        
+        if match := re.search(r"32\.\s*Segundo apellido\s*\n([^\n]+)", texto_completo):
+            data['persona_natural_segundo_apellido'] = match.group(1).strip()
+        
+        if match := re.search(r"33\.\s*Primer nombre\s*\n([^\n]+)", texto_completo):
+            data['persona_natural_primer_nombre'] = match.group(1).strip()
+        
+        if match := re.search(r"34\.\s*Otros nombres\s*\n([^\n]+)", texto_completo):
+            data['persona_natural_otros_nombres'] = match.group(1).strip()
     
     # Razón social (campo 35)
     if match := re.search(r"35\.\s*Razón social\s*\n([^\n]+)", texto_completo):
@@ -336,41 +449,74 @@ def extract_rut_data_from_pdf(pdf_file) -> Dict:
     codigos_list = []
     descripciones_list = []
     
-    # Método EXACTO de BCE: buscar sección completa y extraer códigos y descripciones
-    # En algunos RUT "Usuarios aduaneros" está en la misma línea, por eso no exigimos salto de línea antes
-    section_match = re.search(
-        r"Responsabilidades, Calidades y Atributos(.*?)(?=Usuarios aduaneros|\n\d+\.|$)", 
-        texto_completo, 
-        re.DOTALL | re.IGNORECASE
-    )
-    
-    if section_match:
-        clean_text = section_match.group(1)
-        
-        # Patrón de BCE para detectar responsabilidades válidas (debe contener al menos una letra)
-        # Captura códigos de 1 o 2 dígitos seguidos de guión/espacio y descripción
+    # Método mejorado: extraer códigos de las descripciones (más confiable que la línea "53. Código")
+    # Las descripciones tienen formato: "05- Impto...", "07- Retención...", "48 - IVA", etc.
+    # Buscar directamente códigos con formato "XX- Descripción" en todo el texto
+    # Esto es más robusto que buscar la sección primero
+    # Formato: "05- Impto...", "07- Retención...", "48 - IVA", "52 - Facturador..."
+    # Buscar solo si hay "Responsabilidades" en el texto para evitar falsos positivos
+    if 'Responsabilidades' in texto_completo or 'responsabilidades' in texto_completo.lower():
+        # Buscar todos los códigos con formato "XX- Descripción" o "XX - Descripción"
+        # Patrón mejorado: captura hasta encontrar otro código o fin de línea
+        # Formato: "05- Impto... 42- Obligado..." -> captura "05- Impto..." y "42- Obligado..." por separado
         patron = re.compile(
-            r"(\d{1,2})[-\s]+((?=.*[A-Za-zÁÉÍÓÚáéíóú])[\d\s\-A-Za-zÁÉÍÓÚáéíóú.,()]+?)(?=\s*\d{1,2}[-\s]|$|\n)",
-            re.DOTALL
+            r'(\d{1,2})\s*-\s*([A-Za-zÁÉÍÓÚáéíóúÑñ][^\n]*?)(?=\s+\d{1,2}\s*-|\n|$)',
+            re.IGNORECASE | re.MULTILINE
         )
+        matches = patron.findall(texto_completo)
         
-        # Procesar línea por línea
-        for line in clean_text.split('\n'):
-            matches = patron.findall(line)
-            for codigo, descripcion in matches:
-                # Validación adicional: Descripción no puede ser solo números
-                if re.search(r"[A-Za-zÁÉÍÓÚáéíóú]", descripcion):
-                    # Normalizar código (mantener como string, no convertir a int)
-                    codigo_str = codigo.strip()
-                    
-                    # Caso especial para código 48
-                    if codigo_str == "48":
-                        descripcion = "Impuesto sobre las ventas - IVA"
-                    
-                    # Evitar duplicados (comparar como strings)
-                    if codigo_str not in codigos_list:
-                        codigos_list.append(codigo_str)  # Mantener como string
-                        descripciones_list.append(descripcion.strip())
+        for codigo, descripcion in matches:
+            codigo_str = codigo.strip()
+            # Normalizar: "05" -> "5", "07" -> "7", "09" -> "9", pero mantener "10", "14", etc.
+            if codigo_str.startswith('0') and len(codigo_str) == 2:
+                codigo_str = codigo_str[1]  # Quitar el cero inicial
+            
+            descripcion_limpia = descripcion.strip()
+            # Limpiar descripción: quitar espacios múltiples
+            descripcion_limpia = re.sub(r'\s+', ' ', descripcion_limpia)
+            
+            # Validar que la descripción tenga sentido (al menos 3 caracteres y contenga letras)
+            if len(descripcion_limpia) >= 3 and re.search(r'[A-Za-zÁÉÍÓÚáéíóúÑñ]', descripcion_limpia):
+                # Validar que el código esté en rango válido (1-99)
+                try:
+                    codigo_int = int(codigo_str)
+                    if 1 <= codigo_int <= 99:
+                        if codigo_str not in codigos_list:
+                            codigos_list.append(codigo_str)
+                            descripciones_list.append(descripcion_limpia)
+                except ValueError:
+                    pass
+    
+    # Obtener descripciones desde la tabla ResponsabilidadTributaria si no las tenemos o están incompletas
+    # Esto asegura que siempre tengamos descripciones correctas desde la BD
+    if codigos_list:
+        from ..models import ResponsabilidadTributaria
+        # Si no tenemos descripciones o tenemos menos descripciones que códigos, completar desde BD
+        if len(descripciones_list) < len(codigos_list):
+            descripciones_list = []  # Reiniciar para alinear con códigos
+            for codigo in codigos_list:
+                try:
+                    resp = ResponsabilidadTributaria.objects.get(codigo=str(codigo))
+                    descripciones_list.append(resp.descripcion)
+                except ResponsabilidadTributaria.DoesNotExist:
+                    # Si no existe en BD, usar descripción genérica
+                    descripciones_list.append(f'Responsabilidad tributaria código {codigo}')
+    
+    # Obtener descripciones desde la tabla ResponsabilidadTributaria si no las tenemos o están incompletas
+    # Esto asegura que siempre tengamos descripciones correctas desde la BD (como en BCE)
+    if codigos_list:
+        from ..models import ResponsabilidadTributaria
+        # Si no tenemos descripciones o tenemos menos descripciones que códigos, completar desde BD
+        if len(descripciones_list) < len(codigos_list):
+            # Reiniciar descripciones para alinear con códigos
+            descripciones_list = []
+            for codigo in codigos_list:
+                try:
+                    resp = ResponsabilidadTributaria.objects.get(codigo=str(codigo))
+                    descripciones_list.append(resp.descripcion)
+                except ResponsabilidadTributaria.DoesNotExist:
+                    # Si no existe en BD, usar descripción genérica
+                    descripciones_list.append(f'Responsabilidad tributaria código {codigo}')
     
     # SIEMPRE asignar las listas (aunque estén vacías)
     data['responsabilidades_codigos'] = codigos_list
