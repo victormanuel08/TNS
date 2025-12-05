@@ -35,6 +35,8 @@ router.register('backups-s3', views.BackupS3ViewSet, basename='backups-s3')
 urlpatterns = [
     path('api/', include(router.urls)),
     path('api/resolve-domain/', views.resolve_domain_view, name='resolve-domain'),
+    path('api/companies/by-subdomain/<str:subdomain>/', views.get_company_by_subdomain_view, name='get-company-by-subdomain'),
+    path('api/companies/by-domain/<str:domain>/', views.get_company_by_domain_view, name='get-company-by-domain'),
     path('api/public-catalog/', views.public_catalog_view, name='public-catalog'),
     path('api/public-catalog/images/', views.public_images_view, name='public-images'),
     path('api/formas-pago-ecommerce/', views.formas_pago_ecommerce_view, name='formas-pago-ecommerce'),

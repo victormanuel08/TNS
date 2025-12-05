@@ -16,6 +16,7 @@ import firebirdsql
 from django.db.models import Count, Sum, Avg, Max, Min, Q, F, Value
 from django.db.models.functions import TruncMonth, TruncYear, TruncQuarter, Coalesce
 from django.utils import timezone
+from django.http import HttpRequest
 
 from rest_framework import serializers, viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
@@ -9729,6 +9730,149 @@ def resolve_domain_view(request):
         print(traceback.format_exc())
         print("=" * 80)
         logger.error(f"Error resolviendo dominio {dominio}: {e}")
+        return Response({'error': 'Error interno del servidor'}, status=500)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_company_by_subdomain_view(request, subdomain):
+    """
+    Endpoint público para resolver una empresa a partir de un subdominio.
+    Usado por el frontend para cargar la empresa sin autenticación.
+    GET /api/companies/by-subdomain/{subdomain}/
+    """
+    print("=" * 80)
+    print(f"🔍 [GET-COMPANY-BY-SUBDOMAIN] INICIO DE REQUEST para subdominio: {subdomain}")
+    
+    if not subdomain:
+        print("   ❌ ERROR: Subdominio faltante")
+        return Response({'error': 'Subdominio requerido'}, status=400)
+    
+    # Normalizar subdominio
+    subdominio_normalizado = subdomain.lower().strip()
+    print(f"   Subdominio normalizado: {subdominio_normalizado}")
+    
+    try:
+        # Buscar en EmpresaDominio por subdominio (primera parte del dominio)
+        empresa_dominio = EmpresaDominio.objects.select_related('empresa_servidor').filter(
+            activo=True
+        ).filter(
+            Q(dominio=subdominio_normalizado) | Q(dominio__startswith=f"{subdominio_normalizado}.")
+        ).first()
+        
+        if not empresa_dominio:
+            print(f"   ❌ Dominio no encontrado para subdominio: {subdominio_normalizado}")
+            return Response({'error': 'Dominio no encontrado o inactivo'}, status=404)
+        
+        # Reutilizar lógica de resolve_domain_view para obtener la empresa
+        mock_request = HttpRequest()
+        mock_request.method = 'GET'
+        mock_request.query_params = {'dominio': empresa_dominio.dominio}
+        
+        response = resolve_domain_view(mock_request)
+        
+        # Si resolve_domain_view retorna un error, pasarlo
+        if response.status_code != 200:
+            return response
+        
+        # Extraer los datos de la empresa del response
+        response_data = response.data
+        
+        # Adaptar al formato CompanyInfo esperado por el frontend
+        company_info = {
+            'id': response_data.get('empresa_servidor_id'),
+            'name': response_data.get('nombre_comercial') or response_data.get('nombre'),
+            'subdomain': subdomain,
+            'custom_domain': empresa_dominio.dominio if empresa_dominio.dominio != subdomain else None,
+            'mode': empresa_dominio.modo,
+            'imageUrl': response_data.get('logo_url'),
+            'is_active': empresa_dominio.activo,
+            'primary_color': None,
+            'secondary_color': None,
+            'font_family': None,
+            'tagline': None,
+        }
+        
+        print(f"   ✅ Empresa encontrada y adaptada: {company_info['name']}")
+        print("=" * 80)
+        return Response(company_info, status=200)
+        
+    except Exception as e:
+        logger.exception(f"Error en get_company_by_subdomain_view para subdominio {subdomain}")
+        print(f"   ❌ ERROR inesperado: {str(e)}")
+        print("=" * 80)
+        return Response({'error': 'Error interno del servidor'}, status=500)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_company_by_domain_view(request, domain):
+    """
+    Endpoint público para resolver una empresa a partir de un dominio completo.
+    Usado por el frontend para cargar la empresa sin autenticación cuando no hay subdominio.
+    GET /api/companies/by-domain/{domain}/
+    """
+    print("=" * 80)
+    print(f"🔍 [GET-COMPANY-BY-DOMAIN] INICIO DE REQUEST para dominio: {domain}")
+    
+    if not domain:
+        print("   ❌ ERROR: Dominio faltante")
+        return Response({'error': 'Dominio requerido'}, status=400)
+    
+    # Normalizar dominio
+    dominio_normalizado = domain.lower().strip()
+    if dominio_normalizado.startswith('www.'):
+        dominio_normalizado = dominio_normalizado[4:]
+    print(f"   Dominio normalizado: {dominio_normalizado}")
+    
+    try:
+        # Buscar en EmpresaDominio por dominio exacto
+        empresa_dominio = EmpresaDominio.objects.select_related('empresa_servidor').filter(
+            dominio=dominio_normalizado,
+            activo=True
+        ).first()
+        
+        if not empresa_dominio:
+            print(f"   ❌ Dominio no encontrado: {dominio_normalizado}")
+            return Response({'error': 'Dominio no encontrado o inactivo'}, status=404)
+        
+        # Reutilizar lógica de resolve_domain_view para obtener la empresa
+        mock_request = HttpRequest()
+        mock_request.method = 'GET'
+        mock_request.query_params = {'dominio': empresa_dominio.dominio}
+        
+        response = resolve_domain_view(mock_request)
+        
+        # Si resolve_domain_view retorna un error, pasarlo
+        if response.status_code != 200:
+            return response
+        
+        # Extraer los datos de la empresa del response
+        response_data = response.data
+        
+        # Adaptar al formato CompanyInfo esperado por el frontend
+        company_info = {
+            'id': response_data.get('empresa_servidor_id'),
+            'name': response_data.get('nombre_comercial') or response_data.get('nombre'),
+            'subdomain': None,  # No hay subdominio cuando se busca por dominio completo
+            'custom_domain': empresa_dominio.dominio,
+            'mode': empresa_dominio.modo,
+            'imageUrl': response_data.get('logo_url'),
+            'is_active': empresa_dominio.activo,
+            'primary_color': None,
+            'secondary_color': None,
+            'font_family': None,
+            'tagline': None,
+        }
+        
+        print(f"   ✅ Empresa encontrada y adaptada: {company_info['name']}")
+        print("=" * 80)
+        return Response(company_info, status=200)
+        
+    except Exception as e:
+        logger.exception(f"Error en get_company_by_domain_view para dominio {domain}")
+        print(f"   ❌ ERROR inesperado: {str(e)}")
+        print("=" * 80)
         return Response({'error': 'Error interno del servidor'}, status=500)
 
 
