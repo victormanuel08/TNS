@@ -16,6 +16,7 @@ urlpatterns = [
     path('', include('apps.sistema_analitico.urls')),
     path('dian/', include('apps.dian_scraper.urls')),
     path('fudo/', include('apps.fudo_scraper.urls')),
+    path('', include('apidian.urls')),  # URLs de APIDIAN
     path('api/auth/login/', views.CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/auth/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('api/auth/logout/', views.logout_view, name='logout'),

@@ -149,25 +149,44 @@ class DianScraperService:
             await asyncio.sleep(4)
 
             rows = await self.page.query_selector_all("table#tableDocuments tbody tr")
-            download_buttons = await self.page.query_selector_all("table#tableDocuments tbody tr button")
-            print(f"🔍 {len(rows)} filas encontradas, {len(download_buttons)} botones de descarga")
-
-            # Descargar en paralelo (máximo 5 simultáneas para no saturar)
+            print(f"🔍 {len(rows)} filas encontradas")
             
-            async def download_single_file(button, index):
-                """Descarga un archivo individual"""
+            # Obtener botones de descarga de cada fila individualmente para asegurar correspondencia
+            download_buttons = []
+            for row in rows:
+                button = await row.query_selector("button")
+                if button:
+                    download_buttons.append(button)
+            
+            print(f"🔍 {len(download_buttons)} botones de descarga encontrados")
+            
+            # Verificar que hay la misma cantidad de filas y botones
+            if len(rows) != len(download_buttons):
+                print(f"⚠️ ADVERTENCIA: Número de filas ({len(rows)}) no coincide con botones ({len(download_buttons)})")
+
+            # Descargar SECUENCIALMENTE para evitar que Playwright asocie descargas incorrectas
+            # Cuando se hacen clicks en paralelo, todos los expect_download pueden capturar la misma descarga
+            print(f"📥 Descargando {len(download_buttons)} archivos secuencialmente...")
+            
+            for index, button in enumerate(download_buttons):
                 try:
+                    # Esperar a que el botón sea visible y clickeable
+                    await button.wait_for_element_state("visible", timeout=5000)
+                    
+                    # Registrar el evento de descarga ANTES del click
                     async with self.page.expect_download(timeout=30_000) as download_info:
+                        # Hacer click y esperar la descarga
                         await button.click()
+                    
+                    # Obtener el objeto de descarga
                     download = await download_info.value
                     
-                    # Generar nombre único para evitar sobrescritura
+                    # Generar nombre único basado en el índice y contador
                     original_filename = download.suggested_filename
                     download_counter[0] += 1
                     unique_id = download_counter[0]
                     
-                    # Usar timestamp en microsegundos + contador para garantizar unicidad
-                    # incluso con descargas paralelas
+                    # Usar timestamp + contador para garantizar unicidad
                     timestamp_ms = int(time.time() * 1000000)  # Microsegundos
                     base_name = original_filename.replace('.zip', '')
                     # Formato: p{page}_i{index}_{timestamp}_{counter}_{original}.zip
@@ -181,43 +200,25 @@ class DianScraperService:
                         file_path = self.download_dir / unique_filename
                         counter += 1
                     
+                    # Guardar el archivo
                     await download.save_as(file_path)
                     
                     # Verificar que el archivo se guardó correctamente
                     if file_path.exists():
                         file_size = file_path.stat().st_size
                         print(f"⬇️ [{index+1}/{len(download_buttons)}] Archivo descargado: {original_filename} -> {unique_filename} ({file_size} bytes)")
+                        total_documents += 1
                     else:
                         print(f"⚠️ [{index+1}/{len(download_buttons)}] ERROR: Archivo no se guardó: {unique_filename}")
                     
-                    return True
+                    # Pequeña pausa entre descargas para asegurar que cada una se complete
+                    await asyncio.sleep(0.5)
+                    
                 except Exception as exc:
                     print(f"⚠️ [{index+1}/{len(download_buttons)}] Error descargando archivo: {exc}")
-                    return False
-            
-            # Descargar en lotes configurables en paralelo
-            # Nota: Aumentar este número consume más memoria y ancho de banda
-            # Por defecto: 10 (configurable vía DIAN_SCRAPER_DOWNLOAD_BATCH_SIZE)
-            batch_size = getattr(settings, 'DIAN_SCRAPER_DOWNLOAD_BATCH_SIZE', 10)
-            for i in range(0, len(download_buttons), batch_size):
-                batch = download_buttons[i:i+batch_size]
-                batch_indices = list(range(i, min(i+batch_size, len(download_buttons))))
-                
-                print(f"📦 Descargando lote {i//batch_size + 1} ({len(batch)} archivos en paralelo)...")
-                
-                # Crear tareas para descargar en paralelo
-                tasks = [download_single_file(btn, idx) for btn, idx in zip(batch, batch_indices)]
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                
-                # Contar descargas exitosas
-                successful = sum(1 for r in results if r is True)
-                total_documents += successful
-                
-                print(f"✅ Lote completado: {successful}/{len(batch)} descargas exitosas")
-                
-                # Pequeña pausa entre lotes para no saturar
-                if i + batch_size < len(download_buttons):
-                    await asyncio.sleep(1)
+                    import traceback
+                    traceback.print_exc()
+                    continue
 
             next_button = await self.page.query_selector("#tableDocuments_next")
             if not next_button:

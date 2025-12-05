@@ -379,19 +379,71 @@ Sistema de Scraping DIAN'''
     @action(detail=False, methods=['post'], authentication_classes=[], permission_classes=[AllowAny])
     def test_connection(self, request):
         """Prueba la conexion a DIAN (acceso sin autenticacion)"""
-        _attach_api_key(request)
-        url = request.data.get('url')
+        import traceback
+        
+        try:
+            _attach_api_key(request)
+            url = request.data.get('url')
 
-        if not url:
-            return Response({'error': 'URL requerida'}, status=400)
+            if not url:
+                return Response({
+                    'error': True,
+                    'message': 'URL requerida',
+                    'statusCode': 400
+                }, status=400)
 
-        scraper = DianScraperService(0)  # Session ID temporal
-        result = asyncio.run(scraper.test_dian_connection(url))
-
-        return Response({
-            'connected': result,
-            'message': 'Conexion exitosa' if result else 'Error de autenticacion'
-        })
+            print(f"🧪 [TEST_CONNECTION] Probando conexión a: {url}")
+            
+            scraper = DianScraperService(0)  # Session ID temporal
+            
+            try:
+                result = asyncio.run(scraper.test_dian_connection(url))
+                
+                if result:
+                    print(f"✅ [TEST_CONNECTION] Conexión exitosa")
+                    return Response({
+                        'error': False,
+                        'connected': True,
+                        'message': 'Conexión exitosa'
+                    })
+                else:
+                    print(f"❌ [TEST_CONNECTION] No se pudo conectar")
+                    return Response({
+                        'error': True,
+                        'message': 'No se pudo conectar con el servicio DIAN',
+                        'statusCode': 503,
+                        'statusMessage': 'No se pudo conectar con el servicio DIAN'
+                    }, status=503)
+                    
+            except Exception as scraper_error:
+                print(f"❌ [TEST_CONNECTION] Error en scraper: {scraper_error}")
+                print(f"❌ [TEST_CONNECTION] Tipo: {type(scraper_error).__name__}")
+                traceback.print_exc()
+                
+                # Mensaje más específico según el tipo de error
+                error_message = 'No se pudo conectar con el servicio DIAN'
+                if 'timeout' in str(scraper_error).lower():
+                    error_message = 'Timeout al conectar con DIAN. Verifica la URL y tu conexión.'
+                elif 'playwright' in str(scraper_error).lower() or 'browser' in str(scraper_error).lower():
+                    error_message = 'Error al inicializar el navegador. Verifica que Playwright esté instalado correctamente.'
+                
+                return Response({
+                    'error': True,
+                    'message': error_message,
+                    'statusCode': 503,
+                    'statusMessage': 'No se pudo conectar con el servicio DIAN',
+                    'details': str(scraper_error)
+                }, status=503)
+                
+        except Exception as e:
+            print(f"❌ [TEST_CONNECTION] Error general: {e}")
+            traceback.print_exc()
+            return Response({
+                'error': True,
+                'message': f'Error inesperado: {str(e)}',
+                'statusCode': 500,
+                'statusMessage': 'Error interno del servidor'
+            }, status=500)
 
     @action(detail=False, methods=['post'], authentication_classes=[], permission_classes=[AllowAny])
     def quick_scrape(self, request):

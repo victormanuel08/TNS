@@ -49,7 +49,8 @@ INSTALLED_APPS = [
     'django_redis',  # Para cache con Redis
     'apps.sistema_analitico',
     'apps.dian_scraper',
-    'apps.fudo_scraper'
+    'apps.fudo_scraper',
+    'apidian',  # App para integración con APIDIAN
 ]
 
 MIDDLEWARE = [
@@ -256,6 +257,13 @@ API_PUBLIC_URL = env('API_PUBLIC_URL', default='https://api.eddeso.com')  # URL 
 # Configuración API DIAN
 API_DIAN_ROUTE = env('API_DIAN_ROUTE', default='http://45.149.204.184:81')
 TOKEN_API_DIAN_BASIC = env('TOKEN_API_DIAN_BASIC', default='78b8f740085ff4bb2cb704fe887638804125024f087259b5a81010ecb11e82e6')
+
+# Configuración Base de Datos APIDIAN (MariaDB)
+APIDIAN_DB_HOST = env('APIDIAN_DB_HOST', default='45.149.204.184')
+APIDIAN_DB_PORT = env.int('APIDIAN_DB_PORT', default=3307)
+APIDIAN_DB_USER = env('APIDIAN_DB_USER', default='apidian')
+APIDIAN_DB_PASSWORD = env('APIDIAN_DB_PASSWORD', default='')
+APIDIAN_DB_NAME = env('APIDIAN_DB_NAME', default='apidian')
 
 # Configuración WireGuard VPN
 WG_SERVER_HOST = env('WG_SERVER_HOST', default='')  # IP o hostname del servidor Linux con WireGuard

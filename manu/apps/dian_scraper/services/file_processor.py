@@ -65,13 +65,17 @@ class FileProcessor:
         from concurrent.futures import ThreadPoolExecutor
         import threading
         
+        # Lock y contador global para nombres únicos (thread-safe)
+        file_naming_lock = threading.Lock()
+        file_name_counter = {'counter': 0}  # Usar dict para poder modificar desde función anidada
+        
         def process_zip_safe(zip_file):
             """Wrapper thread-safe para procesar un ZIP"""
             try:
                 # Cada thread necesita su propia conexión a la BD
                 from django.db import connection
                 connection.close()
-                documents = self._process_zip_file(zip_file, search_type, session_id)
+                documents = self._process_zip_file(zip_file, search_type, session_id, file_naming_lock, file_name_counter)
                 
                 if documents:
                     print(f"✅ [PROCESSOR] ZIP {zip_file.name}: {len(documents)} documentos extraídos")
@@ -124,7 +128,9 @@ class FileProcessor:
         result['zip_stats'] = zip_stats  # Incluir estadísticas en el resultado
         return result
 
-    def _process_zip_file(self, zip_path: Path, search_type: str, session_id: int) -> List[Dict[str, Any]]:
+    def _process_zip_file(self, zip_path: Path, search_type: str, session_id: int, 
+                         file_naming_lock: threading.Lock = None, 
+                         file_name_counter: dict = None) -> List[Dict[str, Any]]:
         """Procesa un archivo ZIP individual y guarda XMLs/PDFs en carpeta permanente"""
         documents = []
         temp_extract_dir = zip_path.parent / f"temp_{zip_path.stem}"
@@ -132,6 +138,13 @@ class FileProcessor:
         # Carpeta permanente para guardar facturas de esta sesión
         session_facturas_dir = self.facturas_dir / f"session_{session_id}"
         session_facturas_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Si no se proporcionan lock y counter, crear locales (para compatibilidad)
+        if file_naming_lock is None:
+            import threading
+            file_naming_lock = threading.Lock()
+        if file_name_counter is None:
+            file_name_counter = {'counter': 0}
         
         try:
             # Extraer ZIP
@@ -177,26 +190,41 @@ class FileProcessor:
                         print(f"⚠️ [PROCESSOR] No se pudo procesar XML, usando nombre original: {xml_file.name}")
                     
                     # Guardar el XML (con nombre descriptivo o original)
-                    xml_dest = session_facturas_dir / nombre_descriptivo
-                    
-                    # Si ya existe un archivo con ese nombre, agregar sufijo
-                    if xml_dest.exists() and nombre_descriptivo != xml_file.name:
-                        # Solo agregar sufijo si estamos usando nombre descriptivo (no si es el original)
-                        contador = 1
-                        base_name = nombre_descriptivo.replace('.xml', '')
-                        while xml_dest.exists():
-                            nombre_descriptivo = f"{base_name}_{contador}.xml"
+                    # Usar lock para evitar condiciones de carrera al verificar/crear nombres únicos
+                    with file_naming_lock:
+                        xml_dest = session_facturas_dir / nombre_descriptivo
+                        
+                        # Si ya existe un archivo con ese nombre, agregar sufijo único
+                        if xml_dest.exists() and nombre_descriptivo != xml_file.name:
+                            # Solo agregar sufijo si estamos usando nombre descriptivo (no si es el original)
+                            file_name_counter['counter'] += 1
+                            contador = file_name_counter['counter']
+                            base_name = nombre_descriptivo.replace('.xml', '')
+                            nombre_descriptivo = f"{base_name}_{contador:04d}.xml"
                             xml_dest = session_facturas_dir / nombre_descriptivo
-                            contador += 1
-                    elif xml_dest.exists() and nombre_descriptivo == xml_file.name:
-                        # Si es el nombre original y ya existe, agregar sufijo también
-                        contador = 1
-                        base_name = xml_file.stem
-                        while xml_dest.exists():
-                            nombre_descriptivo = f"{base_name}_{contador}.xml"
+                            
+                            # Verificar nuevamente (por si acaso otro thread creó el mismo nombre)
+                            while xml_dest.exists():
+                                file_name_counter['counter'] += 1
+                                contador = file_name_counter['counter']
+                                nombre_descriptivo = f"{base_name}_{contador:04d}.xml"
+                                xml_dest = session_facturas_dir / nombre_descriptivo
+                        elif xml_dest.exists() and nombre_descriptivo == xml_file.name:
+                            # Si es el nombre original y ya existe, agregar sufijo también
+                            file_name_counter['counter'] += 1
+                            contador = file_name_counter['counter']
+                            base_name = xml_file.stem
+                            nombre_descriptivo = f"{base_name}_{contador:04d}.xml"
                             xml_dest = session_facturas_dir / nombre_descriptivo
-                            contador += 1
+                            
+                            # Verificar nuevamente
+                            while xml_dest.exists():
+                                file_name_counter['counter'] += 1
+                                contador = file_name_counter['counter']
+                                nombre_descriptivo = f"{base_name}_{contador:04d}.xml"
+                                xml_dest = session_facturas_dir / nombre_descriptivo
                     
+                    # Copiar fuera del lock para no bloquear otros threads
                     shutil.copy2(xml_file, xml_dest)
                     
                     # Guardar mapeo para asociar PDFs (solo si se procesó correctamente)
@@ -209,14 +237,22 @@ class FileProcessor:
                     print(f"Error procesando {xml_file}: {e}")
                     # Intentar guardar el XML con nombre original aunque haya error
                     try:
-                        xml_dest = session_facturas_dir / xml_file.name
-                        if xml_dest.exists():
-                            contador = 1
-                            base_name = xml_file.stem
-                            while xml_dest.exists():
-                                nombre_descriptivo = f"{base_name}_{contador}.xml"
+                        with file_naming_lock:
+                            xml_dest = session_facturas_dir / xml_file.name
+                            nombre_descriptivo = xml_file.name
+                            if xml_dest.exists():
+                                file_name_counter['counter'] += 1
+                                contador = file_name_counter['counter']
+                                base_name = xml_file.stem
+                                nombre_descriptivo = f"{base_name}_{contador:04d}.xml"
                                 xml_dest = session_facturas_dir / nombre_descriptivo
-                                contador += 1
+                                
+                                # Verificar nuevamente
+                                while xml_dest.exists():
+                                    file_name_counter['counter'] += 1
+                                    contador = file_name_counter['counter']
+                                    nombre_descriptivo = f"{base_name}_{contador:04d}.xml"
+                                    xml_dest = session_facturas_dir / nombre_descriptivo
                         shutil.copy2(xml_file, xml_dest)
                         print(f"📄 XML guardado con nombre original (después de error): {xml_dest.name}")
                     except Exception as e2:
@@ -247,17 +283,26 @@ class FileProcessor:
                         # Usar nombre original del PDF
                         nombre_descriptivo = pdf_file.name
                     
-                    pdf_dest = session_facturas_dir / nombre_descriptivo
-                    
-                    # Si ya existe, agregar sufijo
-                    if pdf_dest.exists():
-                        contador = 1
-                        base_name = nombre_descriptivo.replace('.pdf', '')
-                        while pdf_dest.exists():
-                            nombre_descriptivo = f"{base_name}_{contador}.pdf"
+                    # Usar lock para evitar condiciones de carrera
+                    with file_naming_lock:
+                        pdf_dest = session_facturas_dir / nombre_descriptivo
+                        
+                        # Si ya existe, agregar sufijo único
+                        if pdf_dest.exists():
+                            file_name_counter['counter'] += 1
+                            contador = file_name_counter['counter']
+                            base_name = nombre_descriptivo.replace('.pdf', '')
+                            nombre_descriptivo = f"{base_name}_{contador:04d}.pdf"
                             pdf_dest = session_facturas_dir / nombre_descriptivo
-                            contador += 1
+                            
+                            # Verificar nuevamente
+                            while pdf_dest.exists():
+                                file_name_counter['counter'] += 1
+                                contador = file_name_counter['counter']
+                                nombre_descriptivo = f"{base_name}_{contador:04d}.pdf"
+                                pdf_dest = session_facturas_dir / nombre_descriptivo
                     
+                    # Copiar fuera del lock
                     shutil.copy2(pdf_file, pdf_dest)
                     print(f"📄 PDF guardado: {pdf_dest.name}")
                 except Exception as e:
