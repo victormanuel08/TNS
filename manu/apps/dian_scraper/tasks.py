@@ -45,13 +45,32 @@ def run_dian_scraping_task(session_id):
             processing_result = processor.process_downloaded_files(session_id, session.tipo)
             
             if 'error' not in processing_result:
-                session.documents_downloaded = result['documents_downloaded']
+                # documents_downloaded = archivos ZIP descargados
+                # documents_processed = documentos XML válidos procesados
+                zip_files_downloaded = result['documents_downloaded']
+                documents_processed = processing_result.get('documents_count', len(processing_result.get('documents', [])))
+                zip_stats = processing_result.get('zip_stats', {})
+                
+                print(f"📊 [TASK] Resumen final:")
+                print(f"   - Archivos ZIP descargados: {zip_files_downloaded}")
+                print(f"   - Documentos XML procesados: {documents_processed}")
+                if zip_stats:
+                    print(f"   - ZIPs procesados exitosamente: {zip_stats.get('zips_procesados', 0)}")
+                    print(f"   - ZIPs vacíos: {zip_stats.get('zips_vacios', 0)}")
+                    print(f"   - ZIPs con error: {zip_stats.get('zips_con_error', 0)}")
+                
+                session.documents_downloaded = zip_files_downloaded  # Mantener compatibilidad
                 session.excel_file = processing_result['excel_file']
                 session.json_file = processing_result['json_file']
                 session.status = 'completed'
                 session.completed_at = timezone.now()
                 session.ejecutado_desde = fecha_desde
                 session.ejecutado_hasta = fecha_hasta
+                
+                # Guardar estadísticas en error_message si hay discrepancia
+                if zip_files_downloaded > documents_processed:
+                    diferencia = zip_files_downloaded - documents_processed
+                    session.error_message = f"Advertencia: Se descargaron {zip_files_downloaded} archivos ZIP, pero solo se procesaron {documents_processed} documentos XML válidos. {diferencia} ZIPs pueden estar vacíos o tener errores."
                 
                 # Crear registros de documentos procesados
                 actual_nit = _extract_actual_nit(

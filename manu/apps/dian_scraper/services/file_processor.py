@@ -29,7 +29,37 @@ class FileProcessor:
         if not zip_files:
             return {"error": "No se encontraron archivos ZIP"}
 
+        print(f"📦 [PROCESSOR] Encontrados {len(zip_files)} archivos ZIP para procesar")
+        print(f"📦 [PROCESSOR] Archivos encontrados:")
+        for zip_file in zip_files:
+            file_size = zip_file.stat().st_size if zip_file.exists() else 0
+            print(f"   - {zip_file.name} ({file_size} bytes)")
+        
+        # Copiar ZIPs originales a carpeta ziporiginales/ dentro de facturas
+        session_facturas_dir = self.facturas_dir / f"session_{session_id}"
+        session_facturas_dir.mkdir(parents=True, exist_ok=True)
+        ziporiginales_dir = session_facturas_dir / "ziporiginales"
+        ziporiginales_dir.mkdir(parents=True, exist_ok=True)
+        
+        print(f"📦 [PROCESSOR] Copiando {len(zip_files)} ZIPs originales a ziporiginales/...")
+        for zip_file in zip_files:
+            try:
+                dest_zip = ziporiginales_dir / zip_file.name
+                # Si ya existe, no sobrescribir (mantener el original)
+                if not dest_zip.exists():
+                    shutil.copy2(zip_file, dest_zip)
+                    print(f"  ✅ Copiado: {zip_file.name}")
+            except Exception as e:
+                print(f"  ⚠️ Error copiando {zip_file.name}: {e}")
+        
         all_documents = []
+        zip_stats = {
+            'total_zips': len(zip_files),
+            'zips_procesados': 0,
+            'zips_vacios': 0,
+            'zips_con_error': 0,
+            'documentos_extraidos': 0
+        }
         
         # Procesar ZIPs en paralelo para acelerar
         from concurrent.futures import ThreadPoolExecutor
@@ -41,12 +71,19 @@ class FileProcessor:
                 # Cada thread necesita su propia conexión a la BD
                 from django.db import connection
                 connection.close()
-                return self._process_zip_file(zip_file, search_type, session_id)
+                documents = self._process_zip_file(zip_file, search_type, session_id)
+                
+                if documents:
+                    print(f"✅ [PROCESSOR] ZIP {zip_file.name}: {len(documents)} documentos extraídos")
+                    return {'success': True, 'zip_name': zip_file.name, 'documents': documents, 'count': len(documents)}
+                else:
+                    print(f"⚠️ [PROCESSOR] ZIP {zip_file.name}: Sin documentos XML válidos (posiblemente vacío)")
+                    return {'success': False, 'zip_name': zip_file.name, 'documents': [], 'count': 0, 'reason': 'vacio'}
             except Exception as e:
-                print(f"❌ Error procesando ZIP {zip_file.name}: {e}")
+                print(f"❌ [PROCESSOR] Error procesando ZIP {zip_file.name}: {e}")
                 import traceback
                 traceback.print_exc()
-                return []
+                return {'success': False, 'zip_name': zip_file.name, 'documents': [], 'count': 0, 'reason': 'error', 'error': str(e)}
         
         # Procesar ZIPs en paralelo (configurable)
         # Nota: Cada ZIP se extrae en memoria temporal y parsea XMLs
@@ -54,22 +91,38 @@ class FileProcessor:
         # Si hay problemas de memoria, reducir en settings.py
         max_workers_config = getattr(settings, 'DIAN_SCRAPER_ZIP_WORKERS', 10)
         max_workers = min(max_workers_config, len(zip_files))
-        print(f"🔄 Procesando {len(zip_files)} ZIPs con {max_workers} workers en paralelo...")
+        print(f"🔄 [PROCESSOR] Procesando {len(zip_files)} ZIPs con {max_workers} workers en paralelo...")
         
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             results = list(executor.map(process_zip_safe, zip_files))
         
-        # Combinar todos los documentos
-        for documents in results:
-            all_documents.extend(documents)
+        # Analizar resultados y combinar documentos
+        for result in results:
+            if result['success']:
+                all_documents.extend(result['documents'])
+                zip_stats['zips_procesados'] += 1
+                zip_stats['documentos_extraidos'] += result['count']
+            else:
+                if result.get('reason') == 'vacio':
+                    zip_stats['zips_vacios'] += 1
+                else:
+                    zip_stats['zips_con_error'] += 1
         
-        print(f"✅ Procesamiento completado: {len(all_documents)} documentos extraídos")
+        print(f"📊 [PROCESSOR] Estadísticas de procesamiento:")
+        print(f"   - ZIPs totales: {zip_stats['total_zips']}")
+        print(f"   - ZIPs procesados exitosamente: {zip_stats['zips_procesados']}")
+        print(f"   - ZIPs vacíos: {zip_stats['zips_vacios']}")
+        print(f"   - ZIPs con error: {zip_stats['zips_con_error']}")
+        print(f"   - Documentos XML extraídos: {zip_stats['documentos_extraidos']}")
 
         if not all_documents:
-            return {"error": "No se encontraron documentos XML válidos"}
+            error_msg = f"No se encontraron documentos XML válidos. ZIPs procesados: {zip_stats['zips_procesados']}, vacíos: {zip_stats['zips_vacios']}, errores: {zip_stats['zips_con_error']}"
+            return {"error": error_msg, "zip_stats": zip_stats}
 
         # Generar archivos de salida
-        return self._generate_output_files(all_documents, session_id)
+        result = self._generate_output_files(all_documents, session_id)
+        result['zip_stats'] = zip_stats  # Incluir estadísticas en el resultado
+        return result
 
     def _process_zip_file(self, zip_path: Path, search_type: str, session_id: int) -> List[Dict[str, Any]]:
         """Procesa un archivo ZIP individual y guarda XMLs/PDFs en carpeta permanente"""
@@ -95,6 +148,8 @@ class FileProcessor:
                         xml_content = f.read()
                     
                     document = self.parser.parse_xml(xml_content, search_type)
+                    nombre_descriptivo = None
+                    
                     if document:
                         documents.append(self._document_to_dict(document))
                         
@@ -102,26 +157,70 @@ class FileProcessor:
                         nit_emisor = self._normalize_nit(document.supplier.nit) if document.supplier.nit else "SIN_NIT"
                         prefijo, numero = self._extraer_prefijo_numero(document.document_number)
                         
-                        # Crear nombre descriptivo: {nit_emisor}_{prefijo}_{numero}.xml
-                        nombre_descriptivo = f"{nit_emisor}_{prefijo}_{numero}.xml"
-                        xml_dest = session_facturas_dir / nombre_descriptivo
+                        # Si no se pudo extraer información válida (sin NIT o sin número de documento), usar nombre original
+                        usar_nombre_original = False
+                        if nit_emisor == "SIN_NIT":
+                            usar_nombre_original = True
+                        elif not document.document_number or (prefijo == "DOC" and numero == "000"):
+                            usar_nombre_original = True
                         
-                        # Si ya existe un archivo con ese nombre, agregar sufijo
-                        if xml_dest.exists():
-                            contador = 1
-                            while xml_dest.exists():
-                                nombre_descriptivo = f"{nit_emisor}_{prefijo}_{numero}_{contador}.xml"
-                                xml_dest = session_facturas_dir / nombre_descriptivo
-                                contador += 1
-                        
-                        shutil.copy2(xml_file, xml_dest)
-                        
-                        # Guardar mapeo para asociar PDFs
+                        if usar_nombre_original:
+                            # No se pudo extraer info válida, usar nombre original
+                            nombre_descriptivo = xml_file.name
+                            print(f"⚠️ [PROCESSOR] Usando nombre original para XML: {xml_file.name} (no se pudo extraer NIT/prefijo/número)")
+                        else:
+                            # Crear nombre descriptivo: {nit_emisor}_{prefijo}_{numero}.xml
+                            nombre_descriptivo = f"{nit_emisor}_{prefijo}_{numero}.xml"
+                    else:
+                        # No se pudo procesar el XML, usar nombre original
+                        nombre_descriptivo = xml_file.name
+                        print(f"⚠️ [PROCESSOR] No se pudo procesar XML, usando nombre original: {xml_file.name}")
+                    
+                    # Guardar el XML (con nombre descriptivo o original)
+                    xml_dest = session_facturas_dir / nombre_descriptivo
+                    
+                    # Si ya existe un archivo con ese nombre, agregar sufijo
+                    if xml_dest.exists() and nombre_descriptivo != xml_file.name:
+                        # Solo agregar sufijo si estamos usando nombre descriptivo (no si es el original)
+                        contador = 1
+                        base_name = nombre_descriptivo.replace('.xml', '')
+                        while xml_dest.exists():
+                            nombre_descriptivo = f"{base_name}_{contador}.xml"
+                            xml_dest = session_facturas_dir / nombre_descriptivo
+                            contador += 1
+                    elif xml_dest.exists() and nombre_descriptivo == xml_file.name:
+                        # Si es el nombre original y ya existe, agregar sufijo también
+                        contador = 1
+                        base_name = xml_file.stem
+                        while xml_dest.exists():
+                            nombre_descriptivo = f"{base_name}_{contador}.xml"
+                            xml_dest = session_facturas_dir / nombre_descriptivo
+                            contador += 1
+                    
+                    shutil.copy2(xml_file, xml_dest)
+                    
+                    # Guardar mapeo para asociar PDFs (solo si se procesó correctamente)
+                    if document:
                         xml_pdf_mapping[xml_file.stem] = nombre_descriptivo.replace('.xml', '')
-                        print(f"📄 XML guardado: {xml_dest.name}")
+                    
+                    print(f"📄 XML guardado: {xml_dest.name}")
                         
                 except Exception as e:
                     print(f"Error procesando {xml_file}: {e}")
+                    # Intentar guardar el XML con nombre original aunque haya error
+                    try:
+                        xml_dest = session_facturas_dir / xml_file.name
+                        if xml_dest.exists():
+                            contador = 1
+                            base_name = xml_file.stem
+                            while xml_dest.exists():
+                                nombre_descriptivo = f"{base_name}_{contador}.xml"
+                                xml_dest = session_facturas_dir / nombre_descriptivo
+                                contador += 1
+                        shutil.copy2(xml_file, xml_dest)
+                        print(f"📄 XML guardado con nombre original (después de error): {xml_dest.name}")
+                    except Exception as e2:
+                        print(f"Error guardando XML con nombre original: {e2}")
                     import traceback
                     traceback.print_exc()
                     continue
@@ -143,10 +242,10 @@ class FileProcessor:
                                 nombre_descriptivo = f"{nombre_base}.pdf"
                                 break
                     
-                    # Si no se encontró mapeo, usar nombre original pero en carpeta descriptiva
+                    # Si no se encontró mapeo, usar nombre original
                     if not nombre_descriptivo:
-                        # Intentar extraer info del nombre original o usar nombre genérico
-                        nombre_descriptivo = f"FACTURA_{pdf_stem}.pdf"
+                        # Usar nombre original del PDF
+                        nombre_descriptivo = pdf_file.name
                     
                     pdf_dest = session_facturas_dir / nombre_descriptivo
                     

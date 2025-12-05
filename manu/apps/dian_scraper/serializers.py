@@ -30,25 +30,68 @@ class ScrapingSessionSerializer(serializers.ModelSerializer):
         )
 
     def validate(self, attrs):
+        print("=" * 80)
+        print("🔍 [SERIALIZER] Iniciando validación")
+        print(f"🔍 [SERIALIZER] attrs recibidos: {attrs}")
+        
         attrs = super().validate(attrs)
         request = self.context.get('request')
         if not request:
+            print("❌ [SERIALIZER] No hay request context")
             raise serializers.ValidationError('Request context is required.')
 
         fecha_desde = attrs.get('fecha_desde')
         fecha_hasta = attrs.get('fecha_hasta')
+        print(f"🔍 [SERIALIZER] Fechas: desde={fecha_desde}, hasta={fecha_hasta}")
+        
         if fecha_desde and fecha_hasta and fecha_desde > fecha_hasta:
+            print("❌ [SERIALIZER] fecha_desde > fecha_hasta")
             raise serializers.ValidationError('fecha_desde debe ser menor o igual a fecha_hasta')
 
-        nit = self._resolve_nit(request, attrs)
-        attrs['nit'] = nit
-        self._validate_permissions(request, nit)
+        try:
+            nit = self._resolve_nit(request, attrs)
+            print(f"🔍 [SERIALIZER] NIT resuelto: {nit}")
+            attrs['nit'] = nit
+            self._validate_permissions(request, nit)
+            print("✅ [SERIALIZER] Permisos validados")
+        except Exception as e:
+            print(f"❌ [SERIALIZER] Error en validación de permisos: {e}")
+            raise
 
-        gap = self._find_next_gap(nit, attrs.get('tipo', 'Sent'), fecha_desde, fecha_hasta)
-        if not gap:
-            raise serializers.ValidationError('El rango solicitado ya fue procesado previamente.')
+        tipo = attrs.get('tipo', 'Sent')
+        print(f"🔍 [SERIALIZER] Tipo: {tipo}")
+        
+        # Si permite_scraping_total está activo, usar el rango completo sin validar gaps
+        permite_scraping_total = False
+        if hasattr(request, 'cliente_api') and request.cliente_api:
+            permite_scraping_total = getattr(request.cliente_api, 'permite_scraping_total', False)
+            print(f"🔍 [SERIALIZER] permite_scraping_total: {permite_scraping_total}")
+        
+        if permite_scraping_total:
+            # Con scraping total, usar el rango completo solicitado sin validar gaps
+            print("✅ [SERIALIZER] Scraping total activo, usando rango completo sin validar gaps")
+            attrs['ejecutado_desde'] = fecha_desde
+            attrs['ejecutado_hasta'] = fecha_hasta
+        else:
+            # Validar gaps normalmente
+            try:
+                gap = self._find_next_gap(nit, tipo, fecha_desde, fecha_hasta)
+                print(f"🔍 [SERIALIZER] Gap encontrado: {gap}")
+                if not gap:
+                    print("❌ [SERIALIZER] No se encontró gap (rango ya procesado)")
+                    raise serializers.ValidationError('El rango solicitado ya fue procesado previamente.')
 
-        attrs['ejecutado_desde'], attrs['ejecutado_hasta'] = gap
+                attrs['ejecutado_desde'], attrs['ejecutado_hasta'] = gap
+                print(f"✅ [SERIALIZER] Validación exitosa. Ejecutado: {gap[0]} -> {gap[1]}")
+            except serializers.ValidationError:
+                raise
+            except Exception as e:
+                print(f"❌ [SERIALIZER] Error en _find_next_gap: {e}")
+                import traceback
+                traceback.print_exc()
+                raise serializers.ValidationError(f'Error al buscar gap: {str(e)}')
+        
+        print("=" * 80)
         return attrs
 
     def _normalize_nit(self, value: str) -> str:
@@ -65,24 +108,45 @@ class ScrapingSessionSerializer(serializers.ModelSerializer):
         return self._normalize_nit(nit)
 
     def _validate_permissions(self, request, nit: str):
+        print(f"🔍 [SERIALIZER] Validando permisos para NIT: {nit}")
+        
         if hasattr(request, 'cliente_api') and request.cliente_api:
+            print(f"🔍 [SERIALIZER] API Key encontrada: ID={request.cliente_api.id}, NIT={request.cliente_api.nit}")
+            print(f"🔍 [SERIALIZER] permite_scraping_total: {getattr(request.cliente_api, 'permite_scraping_total', False)}")
+            
+            # Si permite_scraping_total, no validar empresas
+            if getattr(request.cliente_api, 'permite_scraping_total', False):
+                print("✅ [SERIALIZER] API Key permite scraping total, omitiendo validación de empresas")
+                return
+            
             normalized = self._normalize_nit(nit)
             empresas = getattr(request, 'empresas_autorizadas', None)
+            print(f"🔍 [SERIALIZER] Empresas autorizadas: {empresas}")
+            
             if empresas is not None:
                 # empresas puede ser QuerySet o lista evaluada
                 # Verificar si alguna empresa autorizada tiene este NIT normalizado
                 try:
                     allowed = empresas.filter(nit_normalizado=normalized).exists()
+                    print(f"🔍 [SERIALIZER] Resultado filter().exists(): {allowed}")
                 except AttributeError:
                     # Si es una lista, verificar manualmente
                     allowed = any(getattr(emp, 'nit_normalizado', None) == normalized for emp in empresas)
+                    print(f"🔍 [SERIALIZER] Resultado verificación manual: {allowed}")
             else:
                 allowed = False
+                print("⚠️ [SERIALIZER] No hay empresas autorizadas")
+            
             if not empresas or not allowed:
                 api_nit = self._normalize_nit(request.cliente_api.nit)
                 allowed = api_nit == normalized
+                print(f"🔍 [SERIALIZER] Comparando NIT API Key ({api_nit}) con NIT solicitado ({normalized}): {allowed}")
+            
             if not allowed:
+                print("❌ [SERIALIZER] Acceso denegado")
                 raise serializers.ValidationError('La API Key no tiene acceso al NIT solicitado.')
+            
+            print("✅ [SERIALIZER] Permisos validados correctamente")
             return
 
         user = getattr(request, 'user', None)

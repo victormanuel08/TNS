@@ -1,4 +1,5 @@
 import asyncio
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -138,6 +139,8 @@ class DianScraperService:
         total_documents = 0
         has_next_page = True
         current_page = 1
+        # Contador global para nombres únicos (persiste a través de todas las páginas)
+        download_counter = [0]  # Usar lista para poder modificar desde función anidada
 
         while has_next_page:
             print(f"📄 Página {current_page}")
@@ -150,15 +153,43 @@ class DianScraperService:
             print(f"🔍 {len(rows)} filas encontradas, {len(download_buttons)} botones de descarga")
 
             # Descargar en paralelo (máximo 5 simultáneas para no saturar)
+            
             async def download_single_file(button, index):
                 """Descarga un archivo individual"""
                 try:
                     async with self.page.expect_download(timeout=30_000) as download_info:
                         await button.click()
                     download = await download_info.value
-                    file_path = self.download_dir / download.suggested_filename
+                    
+                    # Generar nombre único para evitar sobrescritura
+                    original_filename = download.suggested_filename
+                    download_counter[0] += 1
+                    unique_id = download_counter[0]
+                    
+                    # Usar timestamp en microsegundos + contador para garantizar unicidad
+                    # incluso con descargas paralelas
+                    timestamp_ms = int(time.time() * 1000000)  # Microsegundos
+                    base_name = original_filename.replace('.zip', '')
+                    # Formato: p{page}_i{index}_{timestamp}_{counter}_{original}.zip
+                    unique_filename = f"p{current_page:02d}_i{index:03d}_{timestamp_ms}_{unique_id:04d}_{base_name}.zip"
+                    file_path = self.download_dir / unique_filename
+                    
+                    # Verificar si ya existe (muy improbable pero por seguridad)
+                    counter = 1
+                    while file_path.exists():
+                        unique_filename = f"p{current_page:02d}_i{index:03d}_{timestamp_ms}_{unique_id:04d}_{counter}_{base_name}.zip"
+                        file_path = self.download_dir / unique_filename
+                        counter += 1
+                    
                     await download.save_as(file_path)
-                    print(f"⬇️ [{index+1}/{len(download_buttons)}] Archivo descargado: {download.suggested_filename}")
+                    
+                    # Verificar que el archivo se guardó correctamente
+                    if file_path.exists():
+                        file_size = file_path.stat().st_size
+                        print(f"⬇️ [{index+1}/{len(download_buttons)}] Archivo descargado: {original_filename} -> {unique_filename} ({file_size} bytes)")
+                    else:
+                        print(f"⚠️ [{index+1}/{len(download_buttons)}] ERROR: Archivo no se guardó: {unique_filename}")
+                    
                     return True
                 except Exception as exc:
                     print(f"⚠️ [{index+1}/{len(download_buttons)}] Error descargando archivo: {exc}")

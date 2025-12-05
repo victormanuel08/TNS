@@ -237,7 +237,7 @@ class ScrapingSessionViewSet(viewsets.ModelViewSet):
                 
                 if facturas_dir.exists():
                     print(f"✅ [SEND_EMAIL] Directorio de facturas existe")
-                    # Agregar todos los XMLs (ya tienen nombres descriptivos)
+                    # Agregar todos los XMLs (ya tienen nombres descriptivos o originales)
                     xml_files = list(facturas_dir.glob('*.xml'))
                     print(f"📄 [SEND_EMAIL] Encontrados {len(xml_files)} archivos XML")
                     for xml_file in xml_files:
@@ -245,7 +245,7 @@ class ScrapingSessionViewSet(viewsets.ModelViewSet):
                         archivos_agregados.append(f'facturas/{xml_file.name}')
                         print(f"  ✅ Agregado: {xml_file.name} ({xml_file.stat().st_size} bytes)")
                     
-                    # Agregar todos los PDFs (ya tienen nombres descriptivos)
+                    # Agregar todos los PDFs (ya tienen nombres descriptivos o originales)
                     pdf_files = list(facturas_dir.glob('*.pdf'))
                     print(f"📄 [SEND_EMAIL] Encontrados {len(pdf_files)} archivos PDF")
                     for pdf_file in pdf_files:
@@ -254,6 +254,21 @@ class ScrapingSessionViewSet(viewsets.ModelViewSet):
                         print(f"  ✅ Agregado: {pdf_file.name} ({pdf_file.stat().st_size} bytes)")
                 else:
                     print(f"⚠️ [SEND_EMAIL] Directorio de facturas no existe: {facturas_dir}")
+                
+                # Agregar carpeta "ziporiginales" con los ZIPs descargados originales
+                ziporiginales_dir = facturas_dir / 'ziporiginales'
+                print(f"📦 [SEND_EMAIL] Buscando ZIPs originales en: {ziporiginales_dir}")
+                
+                if ziporiginales_dir.exists():
+                    print(f"✅ [SEND_EMAIL] Directorio de ZIPs originales existe")
+                    zip_originales = list(ziporiginales_dir.glob('*.zip'))
+                    print(f"📦 [SEND_EMAIL] Encontrados {len(zip_originales)} archivos ZIP originales")
+                    for zip_original in zip_originales:
+                        zip_file.write(zip_original, f'ziporiginales/{zip_original.name}')
+                        archivos_agregados.append(f'ziporiginales/{zip_original.name}')
+                        print(f"  ✅ Agregado: {zip_original.name} ({zip_original.stat().st_size} bytes)")
+                else:
+                    print(f"⚠️ [SEND_EMAIL] Directorio de ZIPs originales no existe: {ziporiginales_dir}")
             
             zip_size = zip_buffer.tell()
             zip_buffer.seek(0)
@@ -262,6 +277,27 @@ class ScrapingSessionViewSet(viewsets.ModelViewSet):
             
             # Preparar email
             print("📧 [SEND_EMAIL] Preparando email...")
+            
+            # Obtener número real de documentos procesados del JSON/Excel
+            documentos_procesados = 0
+            if session.json_file:
+                try:
+                    import json
+                    with open(session.json_file.path, 'r', encoding='utf-8') as f:
+                        json_data = json.load(f)
+                        if isinstance(json_data, list):
+                            documentos_procesados = len(json_data)
+                        elif isinstance(json_data, dict) and 'documents' in json_data:
+                            documentos_procesados = len(json_data['documents'])
+                except Exception as e:
+                    print(f"⚠️ [SEND_EMAIL] No se pudo leer JSON para contar documentos: {e}")
+            
+            # Mensaje más claro sobre la diferencia
+            diferencia = session.documents_downloaded - documentos_procesados
+            mensaje_diferencia = ""
+            if diferencia > 0:
+                mensaje_diferencia = f"\n\n⚠️ Nota: Se descargaron {session.documents_downloaded} archivos ZIP de la DIAN, pero solo {documentos_procesados} contenían documentos XML válidos. Los otros {diferencia} ZIPs pueden estar vacíos o no contener facturas válidas."
+            
             subject = f'Exportación DIAN - Sesión #{session.id}'
             message = f'''Hola,
 
@@ -272,12 +308,14 @@ Detalles de la sesión:
 - Tipo: {session.tipo}
 - Fecha desde: {session.fecha_desde}
 - Fecha hasta: {session.fecha_hasta}
-- Documentos descargados: {session.documents_downloaded}
+- Archivos ZIP descargados: {session.documents_downloaded}
+- Documentos XML procesados: {documentos_procesados}{mensaje_diferencia}
 
 El archivo ZIP contiene:
-- resultado.json: Datos estructurados en JSON
-- resultado.xlsx: Datos en formato Excel (2 hojas)
-- facturas/: Carpeta con los archivos XML y PDF de las facturas
+- resultado.json: Datos estructurados en JSON ({documentos_procesados} documentos)
+- resultado.xlsx: Datos en formato Excel (2 hojas, {documentos_procesados} documentos)
+- facturas/: Carpeta con los archivos XML y PDF de las facturas procesadas
+- ziporiginales/: Carpeta con los archivos ZIP originales descargados de la DIAN ({session.documents_downloaded} archivos)
 
 Saludos,
 Sistema de Scraping DIAN'''
@@ -358,12 +396,26 @@ Sistema de Scraping DIAN'''
     @action(detail=False, methods=['post'], authentication_classes=[], permission_classes=[AllowAny])
     def quick_scrape(self, request):
         """Endpoint rapido para iniciar scraping (acceso sin autenticacion)"""
+        print("=" * 80)
+        print("🔍 [QUICK_SCRAPE] Iniciando quick_scrape")
+        print(f"🔍 [QUICK_SCRAPE] Request data: {request.data}")
+        
         _attach_api_key(request)
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
+        
+        serializer = self.get_serializer(data=request.data, context={'request': request})
+        
+        print(f"🔍 [QUICK_SCRAPE] Validando serializer...")
+        if not serializer.is_valid():
+            print(f"❌ [QUICK_SCRAPE] Errores de validación: {serializer.errors}")
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        print(f"✅ [QUICK_SCRAPE] Serializer válido, guardando sesión...")
         session = serializer.save()
+        print(f"✅ [QUICK_SCRAPE] Sesión creada: ID={session.id}")
+        
         run_dian_scraping_task.delay(session.id)
+        print(f"✅ [QUICK_SCRAPE] Tarea Celery iniciada")
+        print("=" * 80)
 
         return Response({
             'message': 'Scraping iniciado',
