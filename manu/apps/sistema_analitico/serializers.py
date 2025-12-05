@@ -455,7 +455,8 @@ class APIKeyClienteSerializer(serializers.ModelSerializer):
             'id', 'nit', 'nombre_cliente', 'api_key', 'activa', 'servidor', 'servidor_nombre',
             'fecha_creacion', 'fecha_actualizacion', 'fecha_caducidad',
             'contador_peticiones', 'fecha_ultima_peticion',
-            'empresas_asociadas', 'empresas_asociadas_count', 'expirada'
+            'empresas_asociadas', 'empresas_asociadas_count', 'expirada',
+            'permite_scraping_total'
         ]
         read_only_fields = ['id', 'fecha_creacion', 'fecha_actualizacion', 'servidor_nombre']
     

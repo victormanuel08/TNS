@@ -192,6 +192,9 @@ FIELD_ENCRYPTION_KEY = env('FIELD_ENCRYPTION_KEY', default='change-me')
 DEEPSEEK_API_KEY = env('DEEPSEEK_API_KEY', default='')
 
 DIAN_SCRAPER_HEADLESS = env.bool('DIAN_SCRAPER_HEADLESS', default=True)
+# Configuración de paralelismo para scraping DIAN
+DIAN_SCRAPER_DOWNLOAD_BATCH_SIZE = env.int('DIAN_SCRAPER_DOWNLOAD_BATCH_SIZE', default=10)  # Descargas simultáneas
+DIAN_SCRAPER_ZIP_WORKERS = env.int('DIAN_SCRAPER_ZIP_WORKERS', default=10)  # ZIPs procesados en paralelo
 
 REDIS_URL = env('REDIS_URL', default='redis://localhost:6380/0')
 CELERY_BROKER_URL = REDIS_URL

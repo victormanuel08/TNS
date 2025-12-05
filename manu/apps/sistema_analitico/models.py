@@ -1165,6 +1165,10 @@ class APIKeyCliente(models.Model):
     empresas_asociadas = models.ManyToManyField('EmpresaServidor', blank=True)
     contador_peticiones = models.IntegerField(default=0)
     fecha_ultima_peticion = models.DateTimeField(null=True, blank=True)
+    permite_scraping_total = models.BooleanField(
+        default=False,
+        help_text='Si está activo, permite scraping sin validar empresas ni autorizaciones. Usar solo para API Keys administrativas.'
+    )
     
     class Meta:
         db_table = 'api_keys_clientes'

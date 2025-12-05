@@ -149,17 +149,44 @@ class DianScraperService:
             download_buttons = await self.page.query_selector_all("table#tableDocuments tbody tr button")
             print(f"🔍 {len(rows)} filas encontradas, {len(download_buttons)} botones de descarga")
 
-            for button in download_buttons:
+            # Descargar en paralelo (máximo 5 simultáneas para no saturar)
+            async def download_single_file(button, index):
+                """Descarga un archivo individual"""
                 try:
                     async with self.page.expect_download(timeout=30_000) as download_info:
                         await button.click()
                     download = await download_info.value
-                    await download.save_as(self.download_dir / download.suggested_filename)
-                    total_documents += 1
-                    print(f"⬇️ Archivo descargado: {download.suggested_filename}")
-                    await asyncio.sleep(2)
+                    file_path = self.download_dir / download.suggested_filename
+                    await download.save_as(file_path)
+                    print(f"⬇️ [{index+1}/{len(download_buttons)}] Archivo descargado: {download.suggested_filename}")
+                    return True
                 except Exception as exc:
-                    print(f"⚠️ Error descargando archivo: {exc}")
+                    print(f"⚠️ [{index+1}/{len(download_buttons)}] Error descargando archivo: {exc}")
+                    return False
+            
+            # Descargar en lotes configurables en paralelo
+            # Nota: Aumentar este número consume más memoria y ancho de banda
+            # Por defecto: 10 (configurable vía DIAN_SCRAPER_DOWNLOAD_BATCH_SIZE)
+            batch_size = getattr(settings, 'DIAN_SCRAPER_DOWNLOAD_BATCH_SIZE', 10)
+            for i in range(0, len(download_buttons), batch_size):
+                batch = download_buttons[i:i+batch_size]
+                batch_indices = list(range(i, min(i+batch_size, len(download_buttons))))
+                
+                print(f"📦 Descargando lote {i//batch_size + 1} ({len(batch)} archivos en paralelo)...")
+                
+                # Crear tareas para descargar en paralelo
+                tasks = [download_single_file(btn, idx) for btn, idx in zip(batch, batch_indices)]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # Contar descargas exitosas
+                successful = sum(1 for r in results if r is True)
+                total_documents += successful
+                
+                print(f"✅ Lote completado: {successful}/{len(batch)} descargas exitosas")
+                
+                # Pequeña pausa entre lotes para no saturar
+                if i + batch_size < len(download_buttons):
+                    await asyncio.sleep(1)
 
             next_button = await self.page.query_selector("#tableDocuments_next")
             if not next_button:

@@ -19,16 +19,36 @@ from .services.dian_scraper import DianScraperService
 
 def _attach_api_key(request):
     api_key = request.META.get('HTTP_API_KEY')
+    print(f"🔍 [DEBUG] HTTP_API_KEY: {api_key}")
+    
     if not api_key:
         auth_header = request.META.get('HTTP_AUTHORIZATION', '')
+        print(f"🔍 [DEBUG] HTTP_AUTHORIZATION: {auth_header}")
         if auth_header.startswith('Api-Key '):
             api_key = auth_header.replace('Api-Key ', '')
+            print(f"🔍 [DEBUG] API Key extraída de Authorization: {api_key[:20]}...")
+    
     if not api_key:
+        print("❌ [DEBUG] No se encontró API Key en los headers")
         return False
+    
+    print(f"🔍 [DEBUG] Buscando API Key: {api_key[:20]}...")
     try:
         api_key_obj = APIKeyCliente.objects.get(api_key__iexact=api_key.strip(), activa=True)
+        print(f"✅ [DEBUG] API Key encontrada: ID={api_key_obj.id}, NIT={api_key_obj.nit}")
         if api_key_obj.esta_expirada():
+            print(f"❌ [DEBUG] API Key expirada: {api_key_obj.fecha_caducidad}")
             return False
+        
+        # Si permite_scraping_total está activo, no validar empresas
+        if api_key_obj.permite_scraping_total:
+            api_key_obj.incrementar_contador()
+            request.cliente_api = api_key_obj
+            request.empresas_autorizadas = []  # Lista vacía = sin restricciones
+            request.scraping_sin_restricciones = True  # Flag para identificar acceso total
+            return True
+        
+        # Validación normal: verificar empresas asociadas
         empresas = api_key_obj.empresas_asociadas.all()
         if not empresas.exists():
             api_key_obj.actualizar_empresas_asociadas()
@@ -36,19 +56,35 @@ def _attach_api_key(request):
         api_key_obj.incrementar_contador()
         request.cliente_api = api_key_obj
         request.empresas_autorizadas = empresas
+        request.scraping_sin_restricciones = False
         return True
     except APIKeyCliente.DoesNotExist:
+        print(f"❌ [DEBUG] API Key no encontrada en la base de datos")
         return False
-    except Exception:
+    except Exception as e:
+        print(f"❌ [DEBUG] Error al validar API Key: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 
 class AllowAuthenticatedOrAPIKey(BasePermission):
     def has_permission(self, request, view):
+        print(f"🔍 [DEBUG] Verificando permisos para {request.method} {request.path}")
+        
+        # Intentar autenticar con API Key
         if _attach_api_key(request):
+            print("✅ [DEBUG] Autenticado con API Key")
             return True
+        
+        # Intentar autenticar con usuario
         user = getattr(request, 'user', None)
-        return bool(user and user.is_authenticated)
+        if user and user.is_authenticated:
+            print(f"✅ [DEBUG] Autenticado con usuario: {user.username}")
+            return True
+        
+        print("❌ [DEBUG] No se pudo autenticar ni con API Key ni con usuario")
+        return False
 
 class ScrapingSessionViewSet(viewsets.ModelViewSet):
     queryset = ScrapingSession.objects.all()
@@ -110,6 +146,197 @@ class ScrapingSessionViewSet(viewsets.ModelViewSet):
             filename=f"dian_export_{session.id}.json"
         )
         return response
+
+    @action(detail=True, methods=['post'])
+    def send_by_email(self, request, pk=None):
+        """
+        Envía por email un ZIP con JSON, Excel y carpeta de facturas (XMLs y PDFs)
+        
+        Body:
+            email: Email del destinatario
+        """
+        print("=" * 80)
+        print("📧 [SEND_EMAIL] Iniciando envío por email")
+        print(f"📧 [SEND_EMAIL] Session ID: {pk}")
+        print(f"📧 [SEND_EMAIL] Request data: {request.data}")
+        
+        from django.core.mail import EmailMessage
+        from django.conf import settings
+        import zipfile
+        import io
+        from pathlib import Path
+        
+        session = self.get_object()
+        print(f"📧 [SEND_EMAIL] Sesión obtenida: ID={session.id}, Status={session.status}")
+        
+        if session.status != 'completed':
+            print(f"❌ [SEND_EMAIL] Sesión no completada: {session.status}")
+            return Response(
+                {'error': 'La sesión debe estar completada para enviar por email'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        email = request.data.get('email')
+        print(f"📧 [SEND_EMAIL] Email recibido: {email}")
+        
+        if not email:
+            print("❌ [SEND_EMAIL] No se recibió email")
+            return Response(
+                {'error': 'Se requiere un email'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Validar formato de email
+        import re
+        if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email):
+            print(f"❌ [SEND_EMAIL] Email inválido: {email}")
+            return Response(
+                {'error': 'Email inválido'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        print(f"✅ [SEND_EMAIL] Email válido: {email}")
+        
+        try:
+            # Crear ZIP en memoria
+            print("📦 [SEND_EMAIL] Creando ZIP en memoria...")
+            zip_buffer = io.BytesIO()
+            
+            archivos_agregados = []
+            
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                # Agregar JSON
+                if session.json_file:
+                    json_path = session.json_file.path
+                    print(f"📄 [SEND_EMAIL] Agregando JSON: {json_path}")
+                    if Path(json_path).exists():
+                        zip_file.write(json_path, 'resultado.json')
+                        archivos_agregados.append('resultado.json')
+                        print(f"✅ [SEND_EMAIL] JSON agregado: {Path(json_path).stat().st_size} bytes")
+                    else:
+                        print(f"⚠️ [SEND_EMAIL] JSON no existe: {json_path}")
+                else:
+                    print("⚠️ [SEND_EMAIL] No hay archivo JSON en la sesión")
+                
+                # Agregar Excel
+                if session.excel_file:
+                    excel_path = session.excel_file.path
+                    print(f"📊 [SEND_EMAIL] Agregando Excel: {excel_path}")
+                    if Path(excel_path).exists():
+                        zip_file.write(excel_path, 'resultado.xlsx')
+                        archivos_agregados.append('resultado.xlsx')
+                        print(f"✅ [SEND_EMAIL] Excel agregado: {Path(excel_path).stat().st_size} bytes")
+                    else:
+                        print(f"⚠️ [SEND_EMAIL] Excel no existe: {excel_path}")
+                else:
+                    print("⚠️ [SEND_EMAIL] No hay archivo Excel en la sesión")
+                
+                # Agregar carpeta "facturas" con XMLs y PDFs
+                facturas_dir = Path(settings.MEDIA_ROOT) / 'dian_facturas' / f'session_{session.id}'
+                print(f"📁 [SEND_EMAIL] Buscando facturas en: {facturas_dir}")
+                
+                if facturas_dir.exists():
+                    print(f"✅ [SEND_EMAIL] Directorio de facturas existe")
+                    # Agregar todos los XMLs (ya tienen nombres descriptivos)
+                    xml_files = list(facturas_dir.glob('*.xml'))
+                    print(f"📄 [SEND_EMAIL] Encontrados {len(xml_files)} archivos XML")
+                    for xml_file in xml_files:
+                        zip_file.write(xml_file, f'facturas/{xml_file.name}')
+                        archivos_agregados.append(f'facturas/{xml_file.name}')
+                        print(f"  ✅ Agregado: {xml_file.name} ({xml_file.stat().st_size} bytes)")
+                    
+                    # Agregar todos los PDFs (ya tienen nombres descriptivos)
+                    pdf_files = list(facturas_dir.glob('*.pdf'))
+                    print(f"📄 [SEND_EMAIL] Encontrados {len(pdf_files)} archivos PDF")
+                    for pdf_file in pdf_files:
+                        zip_file.write(pdf_file, f'facturas/{pdf_file.name}')
+                        archivos_agregados.append(f'facturas/{pdf_file.name}')
+                        print(f"  ✅ Agregado: {pdf_file.name} ({pdf_file.stat().st_size} bytes)")
+                else:
+                    print(f"⚠️ [SEND_EMAIL] Directorio de facturas no existe: {facturas_dir}")
+            
+            zip_size = zip_buffer.tell()
+            zip_buffer.seek(0)
+            print(f"📦 [SEND_EMAIL] ZIP creado: {zip_size} bytes, {len(archivos_agregados)} archivos")
+            print(f"📦 [SEND_EMAIL] Archivos en ZIP: {archivos_agregados}")
+            
+            # Preparar email
+            print("📧 [SEND_EMAIL] Preparando email...")
+            subject = f'Exportación DIAN - Sesión #{session.id}'
+            message = f'''Hola,
+
+Se adjunta el archivo comprimido con los resultados del scraping de DIAN.
+
+Detalles de la sesión:
+- ID: {session.id}
+- Tipo: {session.tipo}
+- Fecha desde: {session.fecha_desde}
+- Fecha hasta: {session.fecha_hasta}
+- Documentos descargados: {session.documents_downloaded}
+
+El archivo ZIP contiene:
+- resultado.json: Datos estructurados en JSON
+- resultado.xlsx: Datos en formato Excel (2 hojas)
+- facturas/: Carpeta con los archivos XML y PDF de las facturas
+
+Saludos,
+Sistema de Scraping DIAN'''
+            
+            from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@eddeso.com')
+            print(f"📧 [SEND_EMAIL] From: {from_email}")
+            print(f"📧 [SEND_EMAIL] To: {email}")
+            print(f"📧 [SEND_EMAIL] Subject: {subject}")
+            
+            # Verificar configuración de email
+            print(f"📧 [SEND_EMAIL] EMAIL_HOST: {getattr(settings, 'EMAIL_HOST', 'NO CONFIGURADO')}")
+            print(f"📧 [SEND_EMAIL] EMAIL_PORT: {getattr(settings, 'EMAIL_PORT', 'NO CONFIGURADO')}")
+            print(f"📧 [SEND_EMAIL] EMAIL_HOST_USER: {getattr(settings, 'EMAIL_HOST_USER', 'NO CONFIGURADO')}")
+            print(f"📧 [SEND_EMAIL] EMAIL_USE_TLS: {getattr(settings, 'EMAIL_USE_TLS', 'NO CONFIGURADO')}")
+            
+            # Crear mensaje de email con adjunto
+            email_msg = EmailMessage(
+                subject=subject,
+                body=message,
+                from_email=from_email,
+                to=[email],
+            )
+            
+            # Adjuntar ZIP
+            zip_filename = f'dian_export_session_{session.id}.zip'
+            zip_content = zip_buffer.read()
+            print(f"📎 [SEND_EMAIL] Adjuntando ZIP: {zip_filename} ({len(zip_content)} bytes)")
+            
+            email_msg.attach(
+                zip_filename,
+                zip_content,
+                'application/zip'
+            )
+            
+            print(f"📧 [SEND_EMAIL] Enviando email...")
+            # Enviar email
+            resultado = email_msg.send(fail_silently=False)
+            print(f"✅ [SEND_EMAIL] Email enviado. Resultado: {resultado}")
+            print(f"✅ [SEND_EMAIL] Si resultado=1, el email se envió correctamente")
+            
+            return Response({
+                'message': f'Email enviado exitosamente a {email}',
+                'email': email,
+                'filename': zip_filename,
+                'zip_size': zip_size,
+                'archivos_incluidos': len(archivos_agregados)
+            })
+            
+        except Exception as e:
+            import traceback
+            print(f"❌ [SEND_EMAIL] ERROR: {e}")
+            print(f"❌ [SEND_EMAIL] Tipo de error: {type(e).__name__}")
+            print("❌ [SEND_EMAIL] Traceback completo:")
+            traceback.print_exc()
+            print("=" * 80)
+            return Response(
+                {'error': f'Error al enviar email: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
     @action(detail=False, methods=['post'], authentication_classes=[], permission_classes=[AllowAny])
     def test_connection(self, request):
