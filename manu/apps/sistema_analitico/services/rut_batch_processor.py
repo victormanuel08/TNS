@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from django.core.files.uploadedfile import InMemoryUploadedFile
 from django.db import connection
 from .rut_extractor import extract_rut_data_from_pdf
+from ..models import RUT, EmpresaServidor
 
 
 def normalize_nit(nit: str) -> str:
@@ -115,8 +116,6 @@ def procesar_zip_ruts(zip_file, task=None) -> Dict:
         - reporte_txt: str - Reporte en formato TXT
         - pdf_files: List[str] - Lista de archivos PDF encontrados
     """
-    from ..models import RUT, EmpresaServidor
-    
     resultados = {
         'exitosos': [],
         'fallidos': [],
@@ -210,35 +209,61 @@ def procesar_zip_ruts(zip_file, task=None) -> Dict:
                     # Buscar o crear RUT (ahora se crea aunque no tenga empresas)
                     razon_social_final, _ = truncar_campo(razon_social_mejorada, 255, 'razon_social')
                     
-                    rut, created = RUT.objects.get_or_create(
-                        nit_normalizado=nit_normalizado,
-                        defaults={
-                            'nit': rut_data.get('nit', nit_normalizado),
-                            'dv': rut_data.get('dv', ''),
-                            'razon_social': razon_social_final,
-                        }
-                    )
-                    
-                    # Actualizar campos desde PDF con truncamiento automático
+                    # Truncar TODOS los campos antes de crear/actualizar el RUT
                     campos_truncados = []
+                    rut_data_truncado = {}
+                    
+                    # Obtener todos los campos del modelo RUT para verificar max_length
+                    rut_model_fields = {f.name: f for f in RUT._meta.get_fields() 
+                                       if hasattr(f, 'max_length') and f.max_length}
+                    
+                    # Truncar todos los campos de rut_data antes de asignarlos
                     for key, value in rut_data.items():
-                        if key not in ['_texto_completo', '_codigos_ciiu_encontrados', '_establecimientos'] and hasattr(rut, key):
-                            if value is None:
-                                setattr(rut, key, None)
-                            elif value:
-                                # Obtener max_length del campo
-                                field = rut._meta.get_field(key)
-                                max_length = getattr(field, 'max_length', None)
+                        if key in ['_texto_completo', '_codigos_ciiu_encontrados', '_establecimientos']:
+                            rut_data_truncado[key] = value
+                            continue
+                        
+                        if value is None:
+                            rut_data_truncado[key] = None
+                        elif isinstance(value, str) and value:
+                            # Verificar si el campo existe en el modelo y tiene max_length
+                            if key in rut_model_fields:
+                                field = rut_model_fields[key]
+                                max_length = field.max_length
                                 
-                                if max_length and isinstance(value, str) and len(value) > max_length:
+                                if len(value) > max_length:
                                     valor_truncado, fue_truncado = truncar_campo(value, max_length, key)
-                                    setattr(rut, key, valor_truncado)
+                                    rut_data_truncado[key] = valor_truncado
                                     if fue_truncado:
                                         campos_truncados.append(f"{key} (truncado a {max_length} caracteres)")
                                         logger.warning(f"[RUT {pdf_name}] Campo '{key}' truncado: {len(value)} → {max_length} chars. "
                                                     f"Original: '{value[:100]}...' → Truncado: '{valor_truncado}'")
                                 else:
-                                    setattr(rut, key, value)
+                                    rut_data_truncado[key] = value
+                            else:
+                                # Si no está en el modelo, dejarlo como está
+                                rut_data_truncado[key] = value
+                        else:
+                            rut_data_truncado[key] = value
+                    
+                    # Crear o actualizar RUT con datos ya truncados
+                    rut, created = RUT.objects.get_or_create(
+                        nit_normalizado=nit_normalizado,
+                        defaults={
+                            'nit': rut_data_truncado.get('nit', nit_normalizado),
+                            'dv': rut_data_truncado.get('dv', ''),
+                            'razon_social': razon_social_final,
+                        }
+                    )
+                    
+                    # Actualizar campos desde PDF (ya truncados)
+                    for key, value in rut_data_truncado.items():
+                        if key not in ['_texto_completo', '_codigos_ciiu_encontrados', '_establecimientos'] and hasattr(rut, key):
+                            try:
+                                setattr(rut, key, value)
+                            except Exception as e:
+                                logger.error(f"[RUT {pdf_name}] Error asignando campo '{key}': {str(e)}")
+                                # Continuar con el siguiente campo
                     
                     # Actualizar razón social si fue mejorada
                     if razon_social_mejorada != rut_data.get('razon_social', ''):
