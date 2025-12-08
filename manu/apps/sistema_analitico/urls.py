@@ -31,6 +31,8 @@ router.register('entidades', views.EntidadViewSet, basename='entidades')
 router.register('contrasenas-entidades', views.ContrasenaEntidadViewSet, basename='contrasenas-entidades')
 router.register('configuraciones-s3', views.ConfiguracionS3ViewSet, basename='configuraciones-s3')
 router.register('backups-s3', views.BackupS3ViewSet, basename='backups-s3')
+router.register('comunicacion', views.ComunicacionViewSet, basename='comunicacion')
+router.register('clasificacion-contable', views.ClasificacionContableViewSet, basename='clasificacion-contable')
 
 urlpatterns = [
     path('api/', include(router.urls)),

@@ -386,6 +386,7 @@ class FileProcessor:
             'NIT del Receptor': document.customer.nit,
             'Razon Social del Receptor': document.customer.name,
             'Metodo de Pago': document.payment_method,
+            'Metodo de Pago Descripcion': document.payment_method_description,
             'Sub Total': float(document.line_extension_amount),
             'Impuestos Cabecera': float(document.total_header_taxes),
             'Retenciones': float(document.withholdings),

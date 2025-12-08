@@ -8,8 +8,118 @@ from .models import (
     VpnConfig, EmpresaEcommerceConfig, APIKeyCliente, EmpresaDominio, UserTenantProfile,
     RUT, EstablecimientoRUT, ActividadEconomica, ResponsabilidadTributaria,
     TipoTercero, TipoRegimen, Impuesto, VigenciaTributaria,
-    Entidad, ContrasenaEntidad, ConfiguracionS3, BackupS3
+    Entidad, ContrasenaEntidad, ConfiguracionS3, BackupS3, ClasificacionContable
 )
+
+
+# ==================== Serializers para Comunicación (SMS y Llamadas) ====================
+
+class EnviarSMSSerializer(serializers.Serializer):
+    """Serializer para validar datos al enviar SMS"""
+    telefono = serializers.CharField(
+        max_length=15,
+        help_text='Número de teléfono (10 dígitos, sin indicativo)'
+    )
+    mensaje = serializers.CharField(
+        max_length=160,
+        help_text='Mensaje a enviar (máximo 160 caracteres)'
+    )
+    flash = serializers.BooleanField(
+        required=False,
+        default=False,
+        help_text='Si es True, el SMS aparece directamente en pantalla'
+    )
+    prioridad = serializers.BooleanField(
+        required=False,
+        default=True,
+        help_text='Si es True, envía con prioridad alta'
+    )
+    
+    def validate_telefono(self, value):
+        """Validar formato del teléfono"""
+        # Limpiar caracteres no numéricos
+        telefono_limpio = ''.join(filter(str.isdigit, value))
+        
+        # Debe tener 10 dígitos o más (con código de país)
+        if len(telefono_limpio) < 10:
+            raise serializers.ValidationError("El teléfono debe tener al menos 10 dígitos")
+        
+        return value
+    
+    def validate_mensaje(self, value):
+        """Validar longitud del mensaje"""
+        if len(value) > 160:
+            raise serializers.ValidationError("El mensaje no puede exceder 160 caracteres")
+        if not value.strip():
+            raise serializers.ValidationError("El mensaje no puede estar vacío")
+        return value
+
+
+class EnviarLlamadaSerializer(serializers.Serializer):
+    """Serializer para validar datos al enviar llamada"""
+    telefono = serializers.CharField(
+        max_length=15,
+        help_text='Número de teléfono (10 dígitos, sin indicativo)'
+    )
+    mensaje = serializers.CharField(
+        max_length=500,
+        help_text='Mensaje a convertir a voz (máximo 500 caracteres)'
+    )
+    duplicar_mensaje = serializers.BooleanField(
+        required=False,
+        default=True,
+        help_text='Si es True, duplica el mensaje para mejor comprensión'
+    )
+    
+    def validate_telefono(self, value):
+        """Validar formato del teléfono"""
+        telefono_limpio = ''.join(filter(str.isdigit, value))
+        if len(telefono_limpio) < 10:
+            raise serializers.ValidationError("El teléfono debe tener al menos 10 dígitos")
+        return value
+    
+    def validate_mensaje(self, value):
+        """Validar longitud del mensaje"""
+        if len(value) > 500:
+            raise serializers.ValidationError("El mensaje no puede exceder 500 caracteres")
+        if not value.strip():
+            raise serializers.ValidationError("El mensaje no puede estar vacío")
+        return value
+
+
+class EnviarMixtoSerializer(serializers.Serializer):
+    """Serializer para validar datos al enviar comunicación mixta (llamada + SMS)"""
+    telefono = serializers.CharField(
+        max_length=15,
+        help_text='Número de teléfono (10 dígitos, sin indicativo)'
+    )
+    mensaje = serializers.CharField(
+        max_length=160,
+        help_text='Mensaje a enviar (máximo 160 caracteres para SMS)'
+    )
+    
+    def validate_telefono(self, value):
+        """Validar formato del teléfono"""
+        telefono_limpio = ''.join(filter(str.isdigit, value))
+        if len(telefono_limpio) < 10:
+            raise serializers.ValidationError("El teléfono debe tener al menos 10 dígitos")
+        return value
+    
+    def validate_mensaje(self, value):
+        """Validar longitud del mensaje"""
+        if len(value) > 160:
+            raise serializers.ValidationError("El mensaje no puede exceder 160 caracteres")
+        if not value.strip():
+            raise serializers.ValidationError("El mensaje no puede estar vacío")
+        return value
+
+
+class VerificarEstadoSerializer(serializers.Serializer):
+    """Serializer para validar ID al verificar estado"""
+    id = serializers.CharField(
+        max_length=100,
+        help_text='ID del SMS o llamada a verificar'
+    )
 
 
 class ServidorSerializer(serializers.ModelSerializer):
@@ -848,6 +958,99 @@ class SubirRUTSerializer(serializers.Serializer):
                 'Solo puedes proporcionar un archivo PDF o un ZIP, no ambos'
             )
         return data
+
+# ==================== Serializers para Clasificación Contable ====================
+
+class ArticuloFacturaSerializer(serializers.Serializer):
+    """Serializer para artículos de factura"""
+    nombre = serializers.CharField(help_text='Nombre del artículo')
+    cantidad = serializers.IntegerField(min_value=1)
+    valor_unitario = serializers.DecimalField(max_digits=15, decimal_places=2)
+    valor_total = serializers.DecimalField(max_digits=15, decimal_places=2)
+    ref = serializers.CharField(help_text='Referencia de factura')
+    impuestos = serializers.ListField(
+        child=serializers.DictField(),
+        required=False,
+        default=list,
+        help_text='Lista de impuestos aplicados'
+    )
+
+
+class FacturaSerializer(serializers.Serializer):
+    """Serializer para factura individual"""
+    numero_factura = serializers.CharField(help_text='Número de factura')
+    fecha = serializers.CharField(help_text='Fecha de factura')
+    modalidad_pago = serializers.ChoiceField(
+        choices=['credito', 'contado'],
+        default='credito'
+    )
+    forma_pago = serializers.CharField(
+        default='efectivo',
+        help_text='Forma de pago (efectivo, transferencia, tarjeta, cheque)'
+    )
+    articulos = ArticuloFacturaSerializer(many=True)
+
+
+class ClasificarFacturaSerializer(serializers.Serializer):
+    """Serializer para clasificar una factura directamente"""
+    factura = FacturaSerializer(required=False, help_text='Factura a clasificar (si no se usa session_id o document_id)')
+    session_id = serializers.IntegerField(required=False, help_text='ID de sesión DIAN para cargar todas las facturas')
+    document_id = serializers.IntegerField(required=False, help_text='ID de documento específico para clasificar')
+    document_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False,
+        help_text='Lista de IDs de documentos para clasificación masiva'
+    )
+    empresa_nit = serializers.CharField(required=False, help_text='NIT de la empresa (se obtiene de sesión si no se proporciona)')
+    empresa_ciuu_principal = serializers.CharField(required=False, help_text='CIUU principal de la empresa (se busca en RUT si no se proporciona)')
+    empresa_ciuu_secundarios = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+        default=list,
+        help_text='CIUUs secundarios de la empresa (se buscan en RUT si no se proporcionan)'
+    )
+    proveedor_nit = serializers.CharField(required=False, help_text='NIT del proveedor (se obtiene de documento si no se proporciona)')
+    proveedor_ciuu = serializers.CharField(required=False, allow_null=True, help_text='CIUU del proveedor (se busca en RUT si no se proporciona)')
+    aplica_retencion = serializers.BooleanField(default=False)
+    porcentaje_retencion = serializers.FloatField(default=0, min_value=0, max_value=100)
+    tipo_operacion = serializers.ChoiceField(
+        choices=['compra', 'venta'],
+        default='compra'
+    )
+    procesar_asincrono = serializers.BooleanField(
+        default=False,
+        help_text='Si True, procesa de forma asíncrona con Celery'
+    )
+    
+    def validate(self, attrs):
+        """Validar que se proporcione factura, session_id, document_id o document_ids"""
+        factura = attrs.get('factura')
+        session_id = attrs.get('session_id')
+        document_id = attrs.get('document_id')
+        document_ids = attrs.get('document_ids')
+        
+        opciones = sum([bool(factura), bool(session_id), bool(document_id), bool(document_ids)])
+        
+        if opciones == 0:
+            raise serializers.ValidationError(
+                "Debe proporcionar 'factura', 'session_id', 'document_id' o 'document_ids'"
+            )
+        
+        if opciones > 1:
+            raise serializers.ValidationError(
+                "Proporcione solo una opción: 'factura', 'session_id', 'document_id' o 'document_ids'"
+            )
+        
+        return attrs
+
+
+class ClasificacionContableSerializer(serializers.ModelSerializer):
+    """Serializer para modelo ClasificacionContable"""
+    class Meta:
+        model = ClasificacionContable
+        fields = '__all__'
+        read_only_fields = ['created_at', 'updated_at', 'procesado_at']
+
 
 class ExtraerDatosSerializer(serializers.Serializer):
     """Serializer para extraer datos de una empresa"""

@@ -13,6 +13,7 @@ from decimal import Decimal
 import firebirdsql
 
 # 🔹 Django y DRF
+from django.conf import settings
 from django.db.models import Count, Sum, Avg, Max, Min, Q, F, Value
 from django.db.models.functions import TruncMonth, TruncYear, TruncQuarter, Coalesce
 from django.utils import timezone
@@ -318,27 +319,66 @@ def _fetch_user_permissions(cursor, username):
 
 
 def _attach_api_key(request):
+    # Intentar obtener API Key de diferentes headers
     api_key = request.META.get('HTTP_API_KEY')
     if not api_key:
+        # Intentar desde Authorization header
         auth_header = request.META.get('HTTP_AUTHORIZATION', '')
         if auth_header.startswith('Api-Key '):
             api_key = auth_header.replace('Api-Key ', '')
+        elif auth_header.startswith('Bearer '):
+            # Algunos clientes pueden enviar como Bearer
+            api_key = auth_header.replace('Bearer ', '')
+    
+    # Debug: mostrar todos los headers relacionados
+    if not api_key:
+        print(f"🔍 [API_KEY] No se encontró API Key en headers estándar")
+        print(f"🔍 [API_KEY] HTTP_API_KEY: {request.META.get('HTTP_API_KEY')}")
+        print(f"🔍 [API_KEY] HTTP_AUTHORIZATION: {request.META.get('HTTP_AUTHORIZATION')}")
+        print(f"🔍 [API_KEY] Headers disponibles (HTTP_*):")
+        for key in sorted(request.META.keys()):
+            if key.startswith('HTTP_'):
+                print(f"   {key}: {request.META[key][:50] if len(str(request.META[key])) > 50 else request.META[key]}")
+    
     if not api_key:
         return False
+    
     try:
         from apps.sistema_analitico.models import APIKeyCliente
         key = APIKeyCliente.objects.get(api_key__iexact=api_key.strip(), activa=True)
+        
         if key.esta_expirada():
+            print(f"❌ [API_KEY] API Key expirada: {key.fecha_caducidad}")
             return False
+        
+        # Si permite_scraping_total está activo, no validar empresas
+        if key.permite_scraping_total:
+            print(f"✅ [API_KEY] API Key permite_scraping_total=True, omitiendo validación de empresas")
+            key.incrementar_contador()
+            request.cliente_api = key
+            request.empresas_autorizadas = []  # Lista vacía = sin restricciones
+            request.scraping_sin_restricciones = True
+            return True
+        
+        # Validación normal: verificar empresas asociadas
         empresas = key.empresas_asociadas.all()
         if not empresas.exists():
             key.actualizar_empresas_asociadas()
             empresas = key.empresas_asociadas.all()
+        
         key.incrementar_contador()
         request.cliente_api = key
         request.empresas_autorizadas = empresas
+        request.scraping_sin_restricciones = False
+        print(f"✅ [API_KEY] API Key autenticada: ID={key.id}, NIT={key.nit}, Empresas={empresas.count()}")
         return True
-    except Exception:
+    except APIKeyCliente.DoesNotExist:
+        print(f"❌ [API_KEY] API Key no encontrada en BD: {api_key[:20]}...")
+        return False
+    except Exception as e:
+        print(f"❌ [API_KEY] Error autenticando API Key: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 
@@ -11356,4 +11396,1171 @@ def descargar_backup_por_token(request, token):
             {'error': 'Error al descargar el archivo'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+# ==================== ViewSet para Comunicación (SMS y Llamadas) ====================
+
+class ComunicacionViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
+    """
+    ViewSet organizado para gestión de comunicación telefónica.
+    Proporciona endpoints para SMS, llamadas y comunicación mixta.
+    
+    Endpoints disponibles:
+    - POST /api/comunicacion/enviar-sms/ - Enviar SMS
+    - POST /api/comunicacion/enviar-llamada/ - Enviar llamada TTS
+    - POST /api/comunicacion/enviar-mixto/ - Enviar llamada + SMS de respaldo
+    - GET /api/comunicacion/verificar-sms/<sms_id>/ - Verificar estado de SMS
+    - GET /api/comunicacion/verificar-llamada/<call_id>/ - Verificar estado de llamada
+    """
+    
+    def get_queryset(self):
+        """ViewSet no usa modelos, retorna queryset vacío"""
+        from django.contrib.auth.models import User
+        return User.objects.none()
+    
+    @action(detail=False, methods=['post'], url_path='enviar-sms')
+    def enviar_sms(self, request):
+        """
+        Envía un SMS a través de la API de Hablame.
+        
+        Body:
+            telefono: Número de teléfono (10 dígitos, sin indicativo)
+            mensaje: Mensaje a enviar (máximo 160 caracteres)
+            flash: (opcional) Si es True, el SMS aparece directamente en pantalla
+            prioridad: (opcional) Si es True, envía con prioridad alta (default: True)
+        
+        Returns:
+            {
+                "success": bool,
+                "sms_id": str,
+                "costo": int,
+                "estado": str,
+                "telefono": str,
+                "mensaje": str
+            }
+        """
+        from .serializers import EnviarSMSSerializer
+        from .services.hablame_service import hablame_service
+        
+        serializer = EnviarSMSSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        datos = serializer.validated_data
+        telefono = datos['telefono']
+        mensaje = datos['mensaje']
+        flash = datos.get('flash', False)
+        prioridad = datos.get('prioridad', True)
+        
+        logger.info(f"📱 [SMS] Solicitud de envío a {telefono}")
+        
+        resultado = hablame_service.enviar_sms(
+            telefono=telefono,
+            mensaje=mensaje,
+            flash=flash,
+            prioridad=prioridad
+        )
+        
+        if resultado.get('success'):
+            return Response(resultado, status=status.HTTP_200_OK)
+        else:
+            return Response(
+                resultado,
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    
+    @action(detail=False, methods=['post'], url_path='enviar-llamada')
+    def enviar_llamada(self, request):
+        """
+        Envía una llamada TTS (Text-to-Speech) a través de la API de Hablame.
+        
+        Body:
+            telefono: Número de teléfono (10 dígitos, sin indicativo)
+            mensaje: Mensaje a convertir a voz (máximo 500 caracteres)
+            duplicar_mensaje: (opcional) Si es True, duplica el mensaje para mejor comprensión (default: True)
+        
+        Returns:
+            {
+                "success": bool,
+                "call_id": str,
+                "costo": int,
+                "estado": str ("contestada" | "no_contestada"),
+                "duracion": str,
+                "telefono": str,
+                "mensaje": str
+            }
+        """
+        from .serializers import EnviarLlamadaSerializer
+        from .services.hablame_service import hablame_service
+        
+        serializer = EnviarLlamadaSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        datos = serializer.validated_data
+        telefono = datos['telefono']
+        mensaje = datos['mensaje']
+        duplicar_mensaje = datos.get('duplicar_mensaje', True)
+        
+        logger.info(f"📞 [LLAMADA] Solicitud de envío a {telefono}")
+        
+        resultado = hablame_service.enviar_llamada(
+            telefono=telefono,
+            mensaje=mensaje,
+            duplicar_mensaje=duplicar_mensaje
+        )
+        
+        if resultado.get('success'):
+            return Response(resultado, status=status.HTTP_200_OK)
+        else:
+            return Response(
+                resultado,
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    
+    @action(detail=False, methods=['post'], url_path='enviar-mixto')
+    def enviar_mixto(self, request):
+        """
+        Envía primero una llamada y si no contesta, envía un SMS de respaldo.
+        Estrategia de comunicación mixta para mayor efectividad.
+        
+        Body:
+            telefono: Número de teléfono (10 dígitos, sin indicativo)
+            mensaje: Mensaje a enviar (máximo 160 caracteres para SMS)
+        
+        Returns:
+            {
+                "success": bool,
+                "tipo": "mixto",
+                "metodo_efectivo": str ("llamada" | "sms"),
+                "llamada": dict,
+                "sms": dict,
+                "costo_total": int
+            }
+        """
+        from .serializers import EnviarMixtoSerializer
+        from .services.hablame_service import hablame_service
+        
+        serializer = EnviarMixtoSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        datos = serializer.validated_data
+        telefono = datos['telefono']
+        mensaje = datos['mensaje']
+        
+        logger.info(f"📞📱 [MIXTO] Solicitud de envío mixto a {telefono}")
+        
+        resultado = hablame_service.enviar_mixto(
+            telefono=telefono,
+            mensaje=mensaje
+        )
+        
+        if resultado.get('success'):
+            return Response(resultado, status=status.HTTP_200_OK)
+        else:
+            return Response(
+                resultado,
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    
+    @action(detail=False, methods=['get'], url_path='verificar-sms/(?P<sms_id>[^/.]+)')
+    def verificar_sms(self, request, sms_id=None):
+        """
+        Verifica el estado de un SMS enviado.
+        
+        URL: /api/comunicacion/verificar-sms/<sms_id>/
+        
+        Returns:
+            {
+                "sms_id": str,
+                "estado": dict,
+                "precio": int,
+                "data": dict
+            }
+        """
+        from .services.hablame_service import hablame_service
+        
+        if not sms_id:
+            return Response(
+                {'error': 'sms_id es requerido'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        logger.info(f"🔍 [SMS] Verificando estado de SMS: {sms_id}")
+        
+        estado = hablame_service.verificar_estado_sms(sms_id)
+        
+        return Response({
+            'sms_id': sms_id,
+            'estado': estado
+        }, status=status.HTTP_200_OK)
+    
+    @action(detail=False, methods=['get'], url_path='verificar-llamada/(?P<call_id>[^/.]+)')
+    def verificar_llamada(self, request, call_id=None):
+        """
+        Verifica el estado de una llamada TTS.
+        
+        URL: /api/comunicacion/verificar-llamada/<call_id>/
+        
+        Returns:
+            {
+                "call_id": str,
+                "estado": dict,
+                "data": dict
+            }
+        """
+        from .services.hablame_service import hablame_service
+        
+        if not call_id:
+            return Response(
+                {'error': 'call_id es requerido'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        logger.info(f"🔍 [LLAMADA] Verificando estado de llamada: {call_id}")
+        
+        estado = hablame_service.verificar_estado_llamada(call_id)
+        
+        if estado:
+            return Response({
+                'call_id': call_id,
+                'estado': estado
+            }, status=status.HTTP_200_OK)
+        else:
+            return Response(
+                {'error': 'No se pudo obtener el estado de la llamada'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+
+# ==================== ViewSet para Clasificación Contable ====================
+
+class ClasificacionContableViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
+    """
+    ViewSet para clasificación contable de facturas usando Deepseek.
+    Acepta factura directa o session_id para cargar desde sesión DIAN.
+    """
+    permission_classes = [AllowAny]  # Permitir acceso con API Key o usuario autenticado
+    
+    def get_queryset(self):
+        """ViewSet no usa modelos directamente"""
+        from django.contrib.auth.models import User
+        return User.objects.none()
+    
+    def initial(self, request, *args, **kwargs):
+        """Sobrescribir initial para autenticar con API Key antes de procesar"""
+        # Intentar autenticar con API Key
+        if not _attach_api_key(request):
+            # Si no hay API Key, verificar si hay usuario autenticado
+            if not (hasattr(request, 'user') and request.user.is_authenticated):
+                return Response(
+                    {'error': 'Se requiere API Key o autenticación de usuario'},
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+        return super().initial(request, *args, **kwargs)
+    
+    @action(detail=False, methods=['post'], url_path='clasificar-factura')
+    def clasificar_factura(self, request):
+        """
+        Clasificar factura(s) contable usando Deepseek.
+        
+        Acepta 4 modos:
+        1. Factura directa: Enviar 'factura' en el body
+        2. Sesión DIAN: Enviar 'session_id' para cargar todas las facturas
+        3. Documento individual: Enviar 'document_id' para clasificar un documento específico
+        4. Documentos masivos: Enviar 'document_ids' para clasificar múltiples documentos
+        
+        IMPORTANTE:
+        - Si session_id: Se determina empresa/proveedor según tipo de sesión (Received/Sent)
+        - Si document_id/document_ids: Se determina empresa/proveedor desde el documento
+        - CIUU se busca automáticamente desde RUT (cacheado)
+        
+        Body:
+            factura: (opcional) Dict con factura individual
+            session_id: (opcional) ID de sesión DIAN
+            document_id: (opcional) ID de documento específico
+            document_ids: (opcional) Lista de IDs de documentos
+            empresa_nit: (opcional) Se obtiene de sesión/documento si no se proporciona
+            empresa_ciuu_principal: (opcional) Se busca en RUT si no se proporciona
+            proveedor_nit: (opcional) Se obtiene de documento si no se proporciona
+            aplica_retencion: (opcional) Si aplica retención
+            porcentaje_retencion: (opcional) Porcentaje de retención
+            tipo_operacion: (opcional) compra/venta
+            procesar_asincrono: (opcional) Si True, usa Celery
+        
+        Returns:
+            Resultado de clasificación o task_id si es asíncrono
+        """
+        from .serializers import ClasificarFacturaSerializer
+        from .services.clasificador_contable_service import ClasificadorContableService
+        from .tasks import clasificar_factura_contable_task
+        from celery import group
+        import time
+        
+        serializer = ClasificarFacturaSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        datos = serializer.validated_data
+        servicio = ClasificadorContableService()
+        
+        # Determinar facturas a procesar según modo
+        facturas = []
+        session_dian_id = None
+        empresa_nit = None
+        empresa_ciuu_principal = None
+        empresa_ciuu_secundarios = []
+        
+        if datos.get('session_id'):
+            # Modo sesión DIAN: cargar todas las facturas
+            session_dian_id = datos['session_id']
+            facturas_list, empresa_nit, empresa_ciuu_info = servicio.leer_facturas_desde_excel_sesion(session_dian_id)
+            
+            if not facturas_list:
+                return Response(
+                    {'error': f'No se encontraron facturas en la sesión {session_dian_id}'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            facturas = facturas_list
+            empresa_ciuu_principal = empresa_ciuu_info.get('ciuu_principal')
+            empresa_ciuu_secundarios = empresa_ciuu_info.get('ciuu_secundarios', [])
+            
+            logger.info(f"📂 {len(facturas)} facturas cargadas desde sesión DIAN {session_dian_id}")
+            
+        elif datos.get('document_id'):
+            # Modo documento individual
+            doc_info = servicio.leer_documento_por_id(datos['document_id'])
+            
+            if not doc_info:
+                return Response(
+                    {'error': f'Documento {datos["document_id"]} no encontrado'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            facturas = [doc_info['factura']]
+            empresa_nit = doc_info['empresa_nit']
+            empresa_ciuu_principal = doc_info['empresa_ciuu_info'].get('ciuu_principal')
+            empresa_ciuu_secundarios = doc_info['empresa_ciuu_info'].get('ciuu_secundarios', [])
+            session_dian_id = doc_info['session_id']
+            
+            logger.info(f"📄 Documento {datos['document_id']} cargado")
+            
+        elif datos.get('document_ids'):
+            # Modo documentos masivos
+            facturas = []
+            empresa_nit = None
+            empresa_ciuu_principal = None
+            empresa_ciuu_secundarios = []
+            
+            for doc_id in datos['document_ids']:
+                doc_info = servicio.leer_documento_por_id(doc_id)
+                if doc_info:
+                    facturas.append(doc_info['factura'])
+                    # Usar datos del primer documento para empresa (deben ser iguales)
+                    if not empresa_nit:
+                        empresa_nit = doc_info['empresa_nit']
+                        empresa_ciuu_principal = doc_info['empresa_ciuu_info'].get('ciuu_principal')
+                        empresa_ciuu_secundarios = doc_info['empresa_ciuu_info'].get('ciuu_secundarios', [])
+                        session_dian_id = doc_info['session_id']
+            
+            if not facturas:
+                return Response(
+                    {'error': 'No se encontraron documentos válidos'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            logger.info(f"📄 {len(facturas)} documentos cargados")
+            
+        else:
+            # Modo factura directa
+            facturas = [datos['factura']]
+            empresa_nit = datos.get('empresa_nit')
+        
+        # Usar valores proporcionados o buscar desde RUT
+        empresa_nit = datos.get('empresa_nit') or empresa_nit
+        if not empresa_nit:
+            return Response(
+                {'error': 'empresa_nit es requerido'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Buscar CIUU de empresa si no se tiene
+        if not empresa_ciuu_principal:
+            empresa_ciuu_principal = datos.get('empresa_ciuu_principal')
+            empresa_ciuu_secundarios = datos.get('empresa_ciuu_secundarios', [])
+            
+            if not empresa_ciuu_principal:
+                rut_empresa = servicio.buscar_rut_por_nit(empresa_nit)
+                if rut_empresa:
+                    empresa_ciuu_principal = rut_empresa.get('ciuu_principal')
+                    empresa_ciuu_secundarios = rut_empresa.get('ciuu_secundarios', [])
+        
+        # Validar límites
+        es_valido, mensaje_error = servicio.validar_limites(facturas)
+        if not es_valido:
+            return Response(
+                {'error': mensaje_error},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Procesar facturas (cada una puede tener proveedor diferente)
+        resultados = []
+        
+        # Configuración de procesamiento paralelo con rate limiting
+        # Deepseek API: límite de 60 llamadas por minuto (RPM)
+        # Estrategia segura: lotes de 10, máximo 50 por minuto, pausa de 60 segundos
+        from celery import group
+        from celery.result import allow_join_result
+        import time
+        
+        # Tamaño de lote configurable (recomendado: 10 según DeepSeek)
+        lote_size = getattr(settings, 'CLASIFICACION_LOTE_PARALELO', 10)
+        
+        # Preparar todas las facturas para procesamiento
+        tareas_preparadas = []
+        facturas_para_procesar = []
+        
+        for factura in facturas:
+            proveedor_nit = datos.get('proveedor_nit') or factura.get('proveedor_nit')
+            
+            if not proveedor_nit:
+                resultados.append({
+                    'factura_numero': factura.get('numero_factura'),
+                    'error': 'proveedor_nit no encontrado en factura',
+                    'estado': 'FALLIDO'
+                })
+                continue
+            
+            # Buscar CIUU del proveedor (cacheado)
+            proveedor_ciuu = datos.get('proveedor_ciuu')
+            if not proveedor_ciuu:
+                rut_proveedor = servicio.buscar_rut_por_nit(proveedor_nit)
+                if rut_proveedor:
+                    proveedor_ciuu = rut_proveedor.get('ciuu_principal')
+            
+            facturas_para_procesar.append({
+                'factura': factura,
+                'proveedor_nit': proveedor_nit,
+                'proveedor_ciuu': proveedor_ciuu
+            })
+        
+        if datos.get('procesar_asincrono'):
+            # Procesar en lotes paralelos con rate limiting seguro
+            # Estrategia basada en recomendaciones de DeepSeek:
+            # - DeepSeek acepta hasta 60 llamadas por minuto (RPM)
+            # - Cada factura toma ~20 segundos en procesarse
+            # - Estrategia: Enviar 50 facturas primero (en lotes de 10), esperar 60s, enviar las restantes
+            max_facturas_por_minuto = getattr(settings, 'CLASIFICACION_MAX_FACTURAS_POR_MINUTO', 50)
+            pausa_entre_grupos = getattr(settings, 'CLASIFICACION_PAUSA_ENTRE_GRUPOS', 60)
+            
+            logger.info(f"🔄 [CLASIFICACION] Procesando {len(facturas_para_procesar)} facturas con rate limiting seguro")
+            logger.info(f"   - Tamaño de lote: {lote_size} facturas (recomendado: 10)")
+            logger.info(f"   - Máximo por minuto: {max_facturas_por_minuto} facturas (límite DeepSeek: 60 RPM)")
+            logger.info(f"   - Pausa entre grupos: {pausa_entre_grupos} segundos (para resetear contador)")
+            
+            # Dividir en lotes de tamaño configurado
+            lotes = [facturas_para_procesar[i:i + lote_size] for i in range(0, len(facturas_para_procesar), lote_size)]
+            
+            facturas_enviadas_en_grupo = 0
+            grupo_actual = 1
+            total_lotes_enviados = 0
+            
+            # Procesar lotes respetando rate limit de DeepSeek
+            for idx_lote, lote in enumerate(lotes):
+                # Verificar si necesitamos pausar (hemos enviado el máximo por minuto)
+                if facturas_enviadas_en_grupo >= max_facturas_por_minuto:
+                    logger.info(f"⏸️ [CLASIFICACION] Límite de {max_facturas_por_minuto} facturas/min alcanzado")
+                    logger.info(f"⏳ [CLASIFICACION] Esperando {pausa_entre_grupos} segundos antes del siguiente grupo...")
+                    logger.info(f"   - Grupo {grupo_actual} completado: {facturas_enviadas_en_grupo} facturas enviadas")
+                    time.sleep(pausa_entre_grupos)
+                    facturas_enviadas_en_grupo = 0
+                    grupo_actual += 1
+                    logger.info(f"✅ [CLASIFICACION] Iniciando Grupo {grupo_actual}")
+                
+                logger.info(f"📦 [CLASIFICACION] Grupo {grupo_actual} - Lote {idx_lote + 1}/{len(lotes)} ({len(lote)} facturas)")
+                logger.info(f"   - Facturas enviadas en este grupo: {facturas_enviadas_en_grupo}/{max_facturas_por_minuto}")
+                logger.info(f"   - Total lotes enviados: {total_lotes_enviados}")
+                
+                # Crear grupo de tareas Celery para este lote
+                tareas_lote = []
+                for item in lote:
+                    task = clasificar_factura_contable_task.s(
+                        factura_data=item['factura'],
+                        empresa_nit=empresa_nit,
+                        empresa_ciuu_principal=empresa_ciuu_principal,
+                        empresa_ciuu_secundarios=empresa_ciuu_secundarios,
+                        proveedor_nit=item['proveedor_nit'],
+                        proveedor_ciuu=item['proveedor_ciuu'],
+                        aplica_retencion=datos.get('aplica_retencion', False),
+                        porcentaje_retencion=datos.get('porcentaje_retencion', 0),
+                        tipo_operacion=datos.get('tipo_operacion', 'compra'),
+                        session_dian_id=session_dian_id
+                    )
+                    tareas_lote.append(task)
+                
+                # Ejecutar lote en paralelo (Celery group)
+                job = group(tareas_lote)
+                result = job.apply_async()
+                
+                # Actualizar contadores
+                facturas_enviadas_en_grupo += len(lote)
+                total_lotes_enviados += 1
+                
+                # Agregar resultados inmediatamente (las tareas se ejecutan en background)
+                for i, item in enumerate(lote):
+                    resultados.append({
+                        'factura_numero': item['factura'].get('numero_factura'),
+                        'proveedor_nit': item['proveedor_nit'],
+                        'procesamiento_asincrono': True,
+                        'task_id': result.results[i].id if i < len(result.results) else None,
+                        'lote': idx_lote + 1,
+                        'grupo': grupo_actual,
+                        'estado': 'PENDIENTE'
+                    })
+                
+                # Pausa entre lotes del mismo grupo para distribuir las peticiones
+                # Esto ayuda a evitar saturar DeepSeek y distribuir las 50 facturas a lo largo del minuto
+                # Pausa fija de 2 segundos entre lotes (seguro y predecible)
+                if idx_lote < len(lotes) - 1 and facturas_enviadas_en_grupo < max_facturas_por_minuto:
+                    time.sleep(2)  # 2 segundos entre lotes del mismo grupo
+            
+            logger.info(f"✅ [CLASIFICACION] Todas las tareas lanzadas:")
+            logger.info(f"   - Total facturas: {len(facturas_para_procesar)}")
+            logger.info(f"   - Total lotes: {len(lotes)} (tamaño: {lote_size} facturas/lote)")
+            logger.info(f"   - Total grupos: {grupo_actual}")
+            logger.info(f"   - Tiempo estimado: ~{grupo_actual * pausa_entre_grupos + len(facturas_para_procesar) * 20 / 60} minutos")
+        else:
+            # Procesar sincrónicamente (una por una)
+            for item in facturas_para_procesar:
+                resultado = servicio.clasificar_factura(
+                    factura=item['factura'],
+                    empresa_nit=empresa_nit,
+                    empresa_ciuu_principal=empresa_ciuu_principal,
+                    empresa_ciuu_secundarios=empresa_ciuu_secundarios,
+                    proveedor_nit=item['proveedor_nit'],
+                    proveedor_ciuu=item['proveedor_ciuu'],
+                    aplica_retencion=datos.get('aplica_retencion', False),
+                    porcentaje_retencion=datos.get('porcentaje_retencion', 0),
+                    tipo_operacion=datos.get('tipo_operacion', 'compra')
+                )
+                
+                if resultado.get('success'):
+                    # Guardar en BD
+                    clasificacion = servicio.guardar_clasificacion(
+                        factura_numero=item['factura'].get('numero_factura'),
+                        proveedor_nit=item['proveedor_nit'],
+                        empresa_nit=empresa_nit,
+                        empresa_ciuu_principal=empresa_ciuu_principal,
+                        proveedor_ciuu=item['proveedor_ciuu'],
+                        resultado=resultado,
+                        session_dian_id=session_dian_id
+                    )
+                    
+                    resultados.append({
+                        'factura_numero': item['factura'].get('numero_factura'),
+                        'proveedor_nit': item['proveedor_nit'],
+                        'clasificacion_id': clasificacion.id,
+                        'procesamiento_asincrono': False,
+                        'costo_usd': float(resultado.get('costo', {}).get('costo_usd', 0)),
+                        'tiempo_segundos': resultado.get('tiempo_procesamiento', 0),
+                        'estado': 'COMPLETADO'
+                    })
+                else:
+                    resultados.append({
+                        'factura_numero': item['factura'].get('numero_factura'),
+                        'proveedor_nit': item['proveedor_nit'],
+                        'procesamiento_asincrono': False,
+                        'error': resultado.get('error'),
+                        'estado': 'FALLIDO'
+                    })
+        
+        return Response({
+            'success': True,
+            'total_facturas': len(facturas),
+            'resultados': resultados
+        }, status=status.HTTP_200_OK)
+    
+    @action(detail=False, methods=['get'], url_path='documentos-sesion/(?P<session_id>[^/.]+)')
+    def listar_documentos_sesion(self, request, session_id=None):
+        """
+        Listar documentos de una sesión DIAN para selección en frontend.
+        
+        URL: /api/clasificacion-contable/documentos-sesion/<session_id>/
+        
+        Returns:
+            Lista de documentos con información básica para mostrar en modal
+        """
+        # Verificar autenticación (API Key o usuario)
+        if not hasattr(request, 'cliente_api') and not (hasattr(request, 'user') and request.user.is_authenticated):
+            print(f"❌ [CLASIFICACION] No hay API Key ni usuario autenticado")
+            return Response(
+                {'error': 'Se requiere API Key o autenticación de usuario'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        
+        print(f"✅ [CLASIFICACION] Autenticado: API Key={hasattr(request, 'cliente_api')}, User={hasattr(request, 'user') and request.user.is_authenticated}")
+        if hasattr(request, 'cliente_api'):
+            print(f"✅ [CLASIFICACION] API Key: ID={request.cliente_api.id}, permite_scraping_total={getattr(request.cliente_api, 'permite_scraping_total', False)}")
+        
+        try:
+            from apps.dian_scraper.models import ScrapingSession, DocumentProcessed
+            
+            session = ScrapingSession.objects.get(id=session_id)
+            
+            # Paginación
+            page_size = int(request.query_params.get('page_size', 5))
+            page = int(request.query_params.get('page', 1))
+            
+            print(f"📄 [BACKEND PAGINACION] Parámetros recibidos: page={page}, page_size={page_size}")
+            print(f"📄 [BACKEND PAGINACION] Query params completos: {dict(request.query_params)}")
+            
+            # Obtener total de documentos
+            total_documentos = DocumentProcessed.objects.filter(session=session).count()
+            
+            # Calcular offset y limit
+            offset = (page - 1) * page_size
+            print(f"📄 [BACKEND PAGINACION] Offset: {offset}, Limit: {page_size}, Total docs: {total_documentos}")
+            # Ordenar por ID para garantizar orden consistente (no por fecha que puede ser igual)
+            documentos = DocumentProcessed.objects.filter(session=session).order_by('-id')[offset:offset + page_size]
+            
+            # Obtener NIT y nombre del receptor desde el primer documento
+            receptor_nit = None
+            receptor_nombre = None
+            primer_doc = DocumentProcessed.objects.filter(session=session).first()
+            if primer_doc:
+                if session.tipo == 'Received':
+                    # Para recibidos, el receptor es el customer
+                    receptor_nit = primer_doc.customer_nit or ''
+                    receptor_nombre = primer_doc.customer_name or ''
+                else:  # Sent
+                    # Para enviados, el receptor es el supplier
+                    receptor_nit = primer_doc.supplier_nit or ''
+                    receptor_nombre = primer_doc.supplier_name or ''
+            
+            documentos_data = []
+            for doc in documentos:
+                # Determinar proveedor según tipo de sesión
+                if session.tipo == 'Received':
+                    proveedor_nit = doc.supplier_nit or ''
+                    proveedor_nombre = doc.supplier_name or ''
+                else:  # Sent
+                    proveedor_nit = doc.customer_nit or ''
+                    proveedor_nombre = doc.customer_name or ''
+                
+                documentos_data.append({
+                    'id': doc.id,
+                    'document_number': doc.document_number,
+                    'cufe': doc.cufe,
+                    'issue_date': str(doc.issue_date) if doc.issue_date else None,
+                    'proveedor_nit': proveedor_nit,
+                    'proveedor_nombre': proveedor_nombre,
+                    'total_amount': float(doc.total_amount or 0),
+                    'tiene_clasificacion': ClasificacionContable.objects.filter(
+                        factura_numero=doc.document_number,
+                        session_dian_id=session_id
+                    ).exists()
+                })
+            
+            return Response({
+                'session_id': session_id,
+                'session_tipo': session.tipo,
+                'receptor_nit': receptor_nit or '',
+                'receptor_nombre': receptor_nombre or '',
+                'total_documentos': total_documentos,
+                'documentos': documentos_data,
+                'paginacion': {
+                    'page': page,
+                    'page_size': page_size,
+                    'total_pages': (total_documentos + page_size - 1) // page_size if total_documentos > 0 else 1,
+                    'has_next': offset + page_size < total_documentos,
+                    'has_previous': page > 1
+                }
+            })
+            
+        except ScrapingSession.DoesNotExist:
+            return Response(
+                {'error': f'Sesión {session_id} no encontrada'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            logger.error(f"Error listando documentos: {e}", exc_info=True)
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=False, methods=['get'], url_path='clasificaciones')
+    def listar_clasificaciones(self, request):
+        """
+        Listar clasificaciones contables guardadas.
+        
+        Query params:
+            session_id: Filtrar por sesión DIAN
+            factura_numero: Filtrar por número de factura
+            proveedor_nit: Filtrar por NIT proveedor
+            empresa_nit: Filtrar por NIT empresa
+            estado: Filtrar por estado
+        """
+        from .serializers import ClasificacionContableSerializer
+        from .models import ClasificacionContable
+        from django.db.models import Q
+        
+        print(f"\n{'='*80}")
+        print(f"🔍 [LISTAR_CLASIFICACIONES] Iniciando búsqueda de clasificaciones")
+        print(f"{'='*80}")
+        
+        queryset = ClasificacionContable.objects.all()
+        
+        # Filtros
+        session_id = request.query_params.get('session_id')
+        if session_id:
+            print(f"📋 [LISTAR_CLASIFICACIONES] Filtro session_id: {session_id}")
+            queryset = queryset.filter(session_dian_id=session_id)
+        
+        factura_numero = request.query_params.get('factura_numero')
+        if factura_numero:
+            print(f"📋 [LISTAR_CLASIFICACIONES] Filtro factura_numero: {factura_numero}")
+            queryset = queryset.filter(factura_numero=factura_numero)
+        
+        proveedor_nit = request.query_params.get('proveedor_nit')
+        if proveedor_nit:
+            nit_normalizado, _, _ = normalize_nit_and_extract_dv(proveedor_nit)
+            print(f"📋 [LISTAR_CLASIFICACIONES] Filtro proveedor_nit: {proveedor_nit} (normalizado: {nit_normalizado})")
+            queryset = queryset.filter(proveedor_nit_normalizado=nit_normalizado)
+        
+        empresa_nit = request.query_params.get('empresa_nit')
+        if empresa_nit:
+            print(f"📋 [LISTAR_CLASIFICACIONES] Filtro empresa_nit: {empresa_nit}")
+            queryset = queryset.filter(empresa_nit=empresa_nit)
+        
+        estado = request.query_params.get('estado')
+        if estado:
+            print(f"📋 [LISTAR_CLASIFICACIONES] Filtro estado: {estado}")
+            queryset = queryset.filter(estado=estado)
+        
+        # Ordenar por fecha de creación descendente
+        queryset = queryset.order_by('-created_at')
+        
+        count = queryset.count()
+        print(f"📊 [LISTAR_CLASIFICACIONES] Total clasificaciones encontradas: {count}")
+        
+        serializer = ClasificacionContableSerializer(queryset, many=True)
+        
+        # Debug: Verificar qué se está retornando
+        if count > 0:
+            primera = queryset.first()
+            print(f"📄 [LISTAR_CLASIFICACIONES] Primera clasificación:")
+            print(f"   - ID: {primera.id}")
+            print(f"   - Factura: {primera.factura_numero}")
+            print(f"   - factura_json_enviada existe: {bool(primera.factura_json_enviada)}")
+            if primera.factura_json_enviada:
+                articulos = primera.factura_json_enviada.get('articulos', [])
+                print(f"   - Artículos en factura_json_enviada: {len(articulos)}")
+                if len(articulos) > 0:
+                    print(f"   - Primer artículo: {articulos[0]}")
+                else:
+                    print(f"   - ⚠️ factura_json_enviada.articulos está VACÍO")
+                    print(f"   - factura_json_enviada completo: {primera.factura_json_enviada}")
+            else:
+                print(f"   - ⚠️ factura_json_enviada es None o vacío")
+        
+        print(f"{'='*80}\n")
+        
+        return Response({
+            'count': count,
+            'results': serializer.data
+        })
+    
+    @action(detail=False, methods=['post'], url_path='reclasificar-factura')
+    def reclasificar_factura(self, request):
+        """
+        Reclasificar una factura existente, releyendo los artículos del Excel.
+        
+        Body:
+            clasificacion_id: ID de la clasificación a reclasificar (opcional)
+            factura_numero: Número de factura (opcional, si no se proporciona clasificacion_id)
+            session_id: ID de sesión DIAN (opcional, si no se proporciona clasificacion_id)
+            document_id: ID de documento específico (opcional, preferido)
+        
+        Returns:
+            Resultado de la nueva clasificación
+        """
+        from .models import ClasificacionContable
+        from .services.clasificador_contable_service import ClasificadorContableService
+        from apps.dian_scraper.models import DocumentProcessed
+        
+        print(f"\n{'='*80}")
+        print(f"🔄 [RECLASIFICAR_FACTURA] Iniciando reclasificación")
+        print(f"{'='*80}")
+        
+        clasificacion_id = request.data.get('clasificacion_id')
+        factura_numero = request.data.get('factura_numero')
+        session_id = request.data.get('session_id')
+        document_id = request.data.get('document_id')
+        
+        # Buscar clasificación existente
+        clasificacion_existente = None
+        if clasificacion_id:
+            try:
+                clasificacion_existente = ClasificacionContable.objects.get(id=clasificacion_id)
+                print(f"📋 [RECLASIFICAR_FACTURA] Clasificación encontrada: ID={clasificacion_id}, Factura={clasificacion_existente.factura_numero}")
+            except ClasificacionContable.DoesNotExist:
+                return Response(
+                    {'error': f'Clasificación {clasificacion_id} no encontrada'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        elif factura_numero and session_id:
+            clasificacion_existente = ClasificacionContable.objects.filter(
+                factura_numero=factura_numero,
+                session_dian_id=session_id
+            ).order_by('-created_at').first()
+            
+            if clasificacion_existente:
+                print(f"📋 [RECLASIFICAR_FACTURA] Clasificación encontrada por factura_numero: {factura_numero}, session_id: {session_id}")
+            else:
+                return Response(
+                    {'error': f'No se encontró clasificación para factura {factura_numero} en sesión {session_id}'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        elif document_id:
+            # Buscar clasificación por document_id
+            try:
+                doc = DocumentProcessed.objects.get(id=document_id)
+                clasificacion_existente = ClasificacionContable.objects.filter(
+                    factura_numero=doc.document_number,
+                    session_dian_id=doc.session_id
+                ).order_by('-created_at').first()
+                
+                if clasificacion_existente:
+                    print(f"📋 [RECLASIFICAR_FACTURA] Clasificación encontrada por document_id: {document_id}")
+                else:
+                    # Si no hay clasificación, usar document_id directamente
+                    print(f"📋 [RECLASIFICAR_FACTURA] No hay clasificación previa, usando document_id: {document_id}")
+            except DocumentProcessed.DoesNotExist:
+                return Response(
+                    {'error': f'Documento {document_id} no encontrado'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        else:
+            return Response(
+                {'error': 'Se requiere clasificacion_id, o (factura_numero + session_id), o document_id'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Obtener información de la clasificación existente
+        if clasificacion_existente:
+            factura_numero = clasificacion_existente.factura_numero
+            session_id = clasificacion_existente.session_dian_id
+            empresa_nit = clasificacion_existente.empresa_nit
+            proveedor_nit = clasificacion_existente.proveedor_nit
+            
+            print(f"📄 [RECLASIFICAR_FACTURA] Datos de clasificación existente:")
+            print(f"   - Factura: {factura_numero}")
+            print(f"   - Sesión: {session_id}")
+            print(f"   - Empresa NIT: {empresa_nit}")
+            print(f"   - Proveedor NIT: {proveedor_nit}")
+        
+        # Buscar document_id si no se proporcionó
+        if not document_id and session_id and factura_numero:
+            try:
+                doc = DocumentProcessed.objects.filter(
+                    session_id=session_id,
+                    document_number=factura_numero
+                ).first()
+                if doc:
+                    document_id = doc.id
+                    print(f"📄 [RECLASIFICAR_FACTURA] Documento encontrado: ID={document_id}")
+            except Exception as e:
+                print(f"⚠️ [RECLASIFICAR_FACTURA] Error buscando documento: {e}")
+        
+        if not document_id:
+            return Response(
+                {'error': 'No se pudo determinar document_id para reclasificar'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Leer documento desde raw_data (BD) - debería ser idéntico al Excel
+        servicio = ClasificadorContableService()
+        print(f"🔄 [RECLASIFICAR_FACTURA] Leyendo documento desde raw_data (BD)...")
+        doc_info = servicio.leer_documento_por_id(document_id)
+        
+        if not doc_info:
+            return Response(
+                {'error': f'No se pudo leer documento {document_id}'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        print(f"✅ [RECLASIFICAR_FACTURA] Documento leído desde raw_data:")
+        print(f"   - Factura: {doc_info['factura'].get('numero_factura')}")
+        print(f"   - Artículos REALES: {len(doc_info['factura'].get('articulos', []))}")
+        if len(doc_info['factura'].get('articulos', [])) > 0:
+            primer_articulo = doc_info['factura']['articulos'][0]
+            print(f"   - Primer artículo: {primer_articulo.get('nombre')}")
+            print(f"     * Cantidad: {primer_articulo.get('cantidad')}")
+            print(f"     * Valor unitario: ${primer_articulo.get('valor_unitario')}")
+            print(f"     * Valor total: ${primer_articulo.get('valor_total')}")
+            print(f"     * Impuestos: {len(primer_articulo.get('impuestos', []))}")
+            if len(primer_articulo.get('impuestos', [])) > 0:
+                print(f"       - {primer_articulo['impuestos'][0].get('nombre')} ({primer_articulo['impuestos'][0].get('porcentaje')}%)")
+        
+        # Obtener información de empresa y proveedor
+        empresa_nit = doc_info['empresa_nit']
+        empresa_ciuu_info = doc_info['empresa_ciuu_info']
+        proveedor_nit = doc_info['factura'].get('proveedor_nit')
+        
+        # Buscar CIUU del proveedor
+        rut_proveedor = servicio.buscar_rut_por_nit(proveedor_nit)
+        proveedor_ciuu = rut_proveedor.get('ciuu_principal') if rut_proveedor else None
+        
+        # Clasificar nuevamente
+        print(f"🔄 [RECLASIFICAR_FACTURA] Iniciando clasificación con Deepseek...")
+        resultado = servicio.clasificar_factura(
+            factura=doc_info['factura'],
+            empresa_nit=empresa_nit,
+            empresa_ciuu_principal=empresa_ciuu_info.get('ciuu_principal'),
+            empresa_ciuu_secundarios=empresa_ciuu_info.get('ciuu_secundarios', []),
+            proveedor_nit=proveedor_nit,
+            proveedor_ciuu=proveedor_ciuu,
+            aplica_retencion=False,  # Se puede obtener de la clasificación anterior si es necesario
+            porcentaje_retencion=0,
+            tipo_operacion='compra'
+        )
+        
+        if not resultado.get('success'):
+            return Response(
+                {'error': resultado.get('error', 'Error al reclasificar factura')},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+        # Eliminar clasificación anterior si existe
+        if clasificacion_existente:
+            print(f"🗑️ [RECLASIFICAR_FACTURA] Eliminando clasificación anterior: ID={clasificacion_existente.id}")
+            clasificacion_existente.delete()
+        
+        # Guardar nueva clasificación
+        nueva_clasificacion = servicio.guardar_clasificacion(
+            factura_numero=doc_info['factura'].get('numero_factura'),
+            proveedor_nit=proveedor_nit,
+            empresa_nit=empresa_nit,
+            empresa_ciuu_principal=empresa_ciuu_info.get('ciuu_principal'),
+            proveedor_ciuu=proveedor_ciuu,
+            resultado=resultado,
+            session_dian_id=doc_info['session_id']
+        )
+        
+        print(f"✅ [RECLASIFICAR_FACTURA] Nueva clasificación guardada: ID={nueva_clasificacion.id}")
+        print(f"{'='*80}\n")
+        
+        from .serializers import ClasificacionContableSerializer
+        serializer = ClasificacionContableSerializer(nueva_clasificacion)
+        
+        return Response({
+            'success': True,
+            'mensaje': 'Factura reclasificada exitosamente',
+            'clasificacion': serializer.data,
+            'costo_usd': float(resultado.get('costo', {}).get('costo_usd', 0)),
+            'tiempo_segundos': resultado.get('tiempo_procesamiento', 0)
+        })
+    
+    @action(detail=True, methods=['get'], url_path='analisis-ciuu')
+    def obtener_analisis_ciuu(self, request, pk=None):
+        """
+        Obtiene análisis completo de CIUU para emisor y receptor de una clasificación.
+        Incluye información de incluye/excluye para cada CIUU.
+        
+        Returns:
+            {
+                'empresa': {
+                    'nit': '...',
+                    'razon_social': '...',
+                    'ciuu_principal': {...},
+                    'ciuu_secundarios': [...]
+                },
+                'proveedor': {
+                    'nit': '...',
+                    'razon_social': '...',
+                    'ciuu_principal': {...},
+                    'ciuu_secundarios': [...]
+                },
+                'perspectiva_auditor': '...'
+            }
+        """
+        from .models import ClasificacionContable
+        from .services.clasificador_contable_service import ClasificadorContableService, obtener_contexto_ciuu_inteligente
+        from .services.camara_comercio_service import consultar_camara_comercio_por_nit
+        
+        try:
+            clasificacion = ClasificacionContable.objects.get(id=pk)
+            servicio = ClasificadorContableService()
+            
+            empresa_nit = clasificacion.empresa_nit
+            proveedor_nit = clasificacion.proveedor_nit
+            
+            # Obtener información de empresa
+            empresa_info = {
+                'nit': empresa_nit,
+                'razon_social': None,
+                'ciuu_principal': None,
+                'ciuu_secundarios': []
+            }
+            
+            # Buscar RUT de empresa
+            rut_empresa = servicio.buscar_rut_por_nit(empresa_nit)
+            if rut_empresa:
+                empresa_info['razon_social'] = rut_empresa.get('razon_social')
+                empresa_info['ciuu_principal'] = rut_empresa.get('ciuu_principal')
+                empresa_info['ciuu_secundarios'] = rut_empresa.get('ciuu_secundarios', [])
+            else:
+                # Intentar Cámara de Comercio
+                camara_info = consultar_camara_comercio_por_nit(empresa_nit)
+                if camara_info:
+                    empresa_info['razon_social'] = camara_info.get('razon_social')
+                    empresa_info['ciuu_principal'] = camara_info.get('ciuu_principal')
+                    empresa_info['ciuu_secundarios'] = camara_info.get('ciuu_secundarios', [])
+            
+            # Obtener detalles de CIUU de empresa
+            if empresa_info['ciuu_principal']:
+                empresa_info['ciuu_principal'] = obtener_contexto_ciuu_inteligente(empresa_info['ciuu_principal'])
+            
+            empresa_info['ciuu_secundarios'] = [
+                obtener_contexto_ciuu_inteligente(ciuu) 
+                for ciuu in empresa_info['ciuu_secundarios'] 
+                if ciuu
+            ]
+            
+            # Obtener información de proveedor
+            proveedor_info = {
+                'nit': proveedor_nit,
+                'razon_social': None,
+                'ciuu_principal': None,
+                'ciuu_secundarios': []
+            }
+            
+            # Buscar RUT de proveedor
+            rut_proveedor = servicio.buscar_rut_por_nit(proveedor_nit)
+            if rut_proveedor:
+                proveedor_info['razon_social'] = rut_proveedor.get('razon_social')
+                proveedor_info['ciuu_principal'] = rut_proveedor.get('ciuu_principal')
+                proveedor_info['ciuu_secundarios'] = rut_proveedor.get('ciuu_secundarios', [])
+            else:
+                # Intentar Cámara de Comercio
+                camara_info = consultar_camara_comercio_por_nit(proveedor_nit)
+                if camara_info:
+                    proveedor_info['razon_social'] = camara_info.get('razon_social')
+                    proveedor_info['ciuu_principal'] = camara_info.get('ciuu_principal')
+                    proveedor_info['ciuu_secundarios'] = camara_info.get('ciuu_secundarios', [])
+            
+            # Obtener detalles de CIUU de proveedor
+            if proveedor_info['ciuu_principal']:
+                proveedor_info['ciuu_principal'] = obtener_contexto_ciuu_inteligente(proveedor_info['ciuu_principal'])
+            
+            proveedor_info['ciuu_secundarios'] = [
+                obtener_contexto_ciuu_inteligente(ciuu) 
+                for ciuu in proveedor_info['ciuu_secundarios'] 
+                if ciuu
+            ]
+            
+            # Generar perspectiva para auditor
+            perspectiva = []
+            if not empresa_info['ciuu_principal']:
+                perspectiva.append("⚠️ La empresa no tiene CIUU principal registrado. Se recomienda verificar el RUT.")
+            if not proveedor_info['ciuu_principal']:
+                perspectiva.append("⚠️ El proveedor no tiene CIUU principal registrado. Se recomienda verificar el RUT del proveedor.")
+            
+            if empresa_info['ciuu_principal'] and proveedor_info['ciuu_principal']:
+                perspectiva.append(f"✅ Empresa (CIUU {empresa_info['ciuu_principal'].get('codigo', 'N/A')}) y Proveedor (CIUU {proveedor_info['ciuu_principal'].get('codigo', 'N/A')}) tienen actividades económicas definidas.")
+            
+            # Verificar si la clasificación es coherente con los CIUU
+            factura_json = clasificacion.factura_json_enviada or {}
+            articulos = factura_json.get('articulos', [])
+            
+            if articulos:
+                perspectiva.append(f"📊 La factura contiene {len(articulos)} artículo(s).")
+                
+                # Detectar inconsistencias: verificar si los artículos son consistentes con el CIUU del proveedor
+                if proveedor_info.get('ciuu_principal'):
+                    proveedor_ciuu = proveedor_info['ciuu_principal']
+                    proveedor_incluye = proveedor_ciuu.get('incluye_raw', [])
+                    proveedor_excluye = proveedor_ciuu.get('excluye_raw', [])
+                    
+                    articulos_inconsistentes = []
+                    for articulo in articulos:
+                        nombre_articulo = articulo.get('nombre', '').lower()
+                        ref_articulo = articulo.get('ref', '').lower()
+                        
+                        # Verificar si el artículo está en las actividades excluidas del proveedor
+                        es_inconsistente = False
+                        motivo = []
+                        
+                        # Buscar en excluye
+                        for excluido in proveedor_excluye:
+                            if isinstance(excluido, dict):
+                                desc_excluido = excluido.get('actDescripcion', '').lower()
+                                if desc_excluido and (nombre_articulo in desc_excluido or desc_excluido in nombre_articulo):
+                                    es_inconsistente = True
+                                    motivo.append(f"El artículo '{articulo.get('nombre', 'N/A')}' está en las actividades EXCLUIDAS del CIUU del proveedor")
+                                    break
+                        
+                        # Verificar si el artículo NO está en las actividades incluidas
+                        if not es_inconsistente and proveedor_incluye:
+                            encontrado_en_incluye = False
+                            for incluido in proveedor_incluye:
+                                if isinstance(incluido, dict):
+                                    desc_incluido = incluido.get('actDescripcion', '').lower()
+                                    if desc_incluido and (nombre_articulo in desc_incluido or desc_incluido in nombre_articulo):
+                                        encontrado_en_incluye = True
+                                        break
+                            
+                            # Si no se encontró en incluye y hay artículos específicos, puede ser inconsistente
+                            if not encontrado_en_incluye and len(proveedor_incluye) > 0:
+                                # Solo marcar como inconsistente si el nombre del artículo es muy específico
+                                palabras_clave = ['computador', 'telefono', 'celular', 'equipo', 'software', 'servicio']
+                                if any(palabra in nombre_articulo for palabra in palabras_clave):
+                                    es_inconsistente = True
+                                    motivo.append(f"El artículo '{articulo.get('nombre', 'N/A')}' no parece estar relacionado con el CIUU principal del proveedor ({proveedor_ciuu.get('codigo', 'N/A')})")
+                        
+                        if es_inconsistente:
+                            articulos_inconsistentes.append({
+                                'nombre': articulo.get('nombre', 'N/A'),
+                                'motivo': '; '.join(motivo)
+                            })
+                    
+                    if articulos_inconsistentes:
+                        perspectiva.append(f"⚠️ INCONSISTENCIA DETECTADA: {len(articulos_inconsistentes)} artículo(s) no son consistentes con la actividad comercial del proveedor:")
+                        for art_inc in articulos_inconsistentes:
+                            perspectiva.append(f"  • {art_inc['nombre']}: {art_inc['motivo']}")
+                    else:
+                        perspectiva.append(f"✅ Los artículos son consistentes con el CIUU del proveedor ({proveedor_ciuu.get('codigo', 'N/A')}).")
+            
+            return Response({
+                'empresa': empresa_info,
+                'proveedor': proveedor_info,
+                'perspectiva_auditor': '\n'.join(perspectiva) if perspectiva else 'No hay observaciones adicionales.'
+            })
+            
+        except ClasificacionContable.DoesNotExist:
+            return Response(
+                {'error': 'Clasificación no encontrada'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            logger.error(f"Error obteniendo análisis CIUU: {e}", exc_info=True)
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 

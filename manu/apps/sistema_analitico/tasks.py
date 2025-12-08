@@ -11,6 +11,101 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+@shared_task(bind=True, name='sistema_analitico.clasificar_factura_contable')
+def clasificar_factura_contable_task(
+    self,
+    factura_data: dict,
+    empresa_nit: str,
+    empresa_ciuu_principal: str,
+    empresa_ciuu_secundarios: list,
+    proveedor_nit: str,
+    proveedor_ciuu: str = None,
+    aplica_retencion: bool = False,
+    porcentaje_retencion: float = 0,
+    tipo_operacion: str = "compra",
+    session_dian_id: int = None
+):
+    """
+    Tarea Celery para clasificar factura contable usando Deepseek.
+    
+    Args:
+        factura_data: Dict con datos de la factura
+        empresa_nit: NIT de la empresa compradora
+        empresa_ciuu_principal: CIUU principal de la empresa
+        empresa_ciuu_secundarios: Lista de CIUUs secundarios
+        proveedor_nit: NIT del proveedor
+        proveedor_ciuu: CIUU del proveedor (opcional, se busca si no se proporciona)
+        aplica_retencion: Si aplica retención
+        porcentaje_retencion: Porcentaje de retención
+        tipo_operacion: Tipo de operación (compra/venta)
+        session_dian_id: ID de sesión DIAN (opcional)
+    
+    Returns:
+        dict con resultado de la clasificación
+    """
+    from .services.clasificador_contable_service import ClasificadorContableService
+    
+    try:
+        logger.info(f"📊 Iniciando clasificación contable: Factura {factura_data.get('numero_factura')}")
+        
+        self.update_state(
+            state='PROCESSING',
+            meta={
+                'factura': factura_data.get('numero_factura'),
+                'status': 'Clasificando factura...'
+            }
+        )
+        
+        servicio = ClasificadorContableService()
+        resultado = servicio.clasificar_factura(
+            factura=factura_data,
+            empresa_nit=empresa_nit,
+            empresa_ciuu_principal=empresa_ciuu_principal,
+            empresa_ciuu_secundarios=empresa_ciuu_secundarios,
+            proveedor_nit=proveedor_nit,
+            proveedor_ciuu=proveedor_ciuu,
+            aplica_retencion=aplica_retencion,
+            porcentaje_retencion=porcentaje_retencion,
+            tipo_operacion=tipo_operacion
+        )
+        
+        if resultado.get('success'):
+            # Guardar en BD
+            clasificacion = servicio.guardar_clasificacion(
+                factura_numero=factura_data.get('numero_factura'),
+                proveedor_nit=proveedor_nit,
+                empresa_nit=empresa_nit,
+                empresa_ciuu_principal=empresa_ciuu_principal,
+                proveedor_ciuu=proveedor_ciuu,
+                resultado=resultado,
+                session_dian_id=session_dian_id
+            )
+            
+            logger.info(f"✅ Clasificación completada: ID {clasificacion.id}")
+            return {
+                'status': 'SUCCESS',
+                'clasificacion_id': clasificacion.id,
+                'factura_numero': factura_data.get('numero_factura'),
+                'costo_usd': float(resultado.get('costo', {}).get('costo_usd', 0)),
+                'tiempo_segundos': resultado.get('tiempo_procesamiento', 0)
+            }
+        else:
+            logger.error(f"❌ Error en clasificación: {resultado.get('error')}")
+            return {
+                'status': 'FAILED',
+                'error': resultado.get('error'),
+                'factura_numero': factura_data.get('numero_factura')
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Error inesperado en clasificación: {e}", exc_info=True)
+        return {
+            'status': 'FAILED',
+            'error': str(e),
+            'factura_numero': factura_data.get('numero_factura', 'DESCONOCIDA')
+        }
+
+
 @shared_task(bind=True, name='sistema_analitico.procesar_factura_dian')
 def procesar_factura_dian_task(self, nit_normalizado, kardex_id, empresa_servidor_id=None):
     """

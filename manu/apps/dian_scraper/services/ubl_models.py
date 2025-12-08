@@ -42,6 +42,7 @@ class UBLDocument:
     supplier: PartyInfo = None
     customer: PartyInfo = None
     payment_method: Optional[str] = None
+    payment_method_description: Optional[str] = None
     line_extension_amount: Decimal = Decimal('0')
     total_header_taxes: Decimal = Decimal('0')
     withholdings: Decimal = Decimal('0')

@@ -2498,6 +2498,242 @@ class DescargaTemporalBackup(models.Model):
         return self.estado == 'listo' and not self.esta_expirado()
 
 
+# ==================== Modelo para Clasificación Contable ====================
+
+class Proveedor(models.Model):
+    """
+    Modelo para almacenar información de proveedores obtenida de Cámara de Comercio.
+    Sirve como alternativa al modelo RUT para obtener códigos CIUU cuando el RUT no está disponible.
+    """
+    nit_normalizado = models.CharField(
+        max_length=20,
+        unique=True,
+        db_index=True,
+        help_text='NIT normalizado (sin puntos ni guiones) - Identificador único'
+    )
+    nit = models.CharField(
+        max_length=20,
+        help_text='NIT con formato original'
+    )
+    razon_social = models.CharField(
+        max_length=500,
+        null=True,
+        blank=True,
+        help_text='Razón social o nombre comercial'
+    )
+    actividad_principal_ciiu = models.CharField(
+        max_length=10,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text='Código CIIU de actividad económica principal'
+    )
+    actividad_secundaria_ciiu = models.CharField(
+        max_length=10,
+        null=True,
+        blank=True,
+        help_text='Código CIIU de actividad económica secundaria'
+    )
+    otras_actividades_ciiu = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='Lista de otros códigos CIIU adicionales'
+    )
+    fuente = models.CharField(
+        max_length=50,
+        default='camara_comercio',
+        help_text='Fuente de la información (camara_comercio, rut, etc.)'
+    )
+    fecha_consulta = models.DateTimeField(
+        auto_now_add=True,
+        help_text='Fecha de la última consulta'
+    )
+    fecha_actualizacion = models.DateTimeField(
+        auto_now=True,
+        help_text='Fecha de última actualización'
+    )
+    datos_completos = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='Datos completos obtenidos de la fuente original'
+    )
+    
+    class Meta:
+        db_table = 'proveedores'
+        verbose_name = 'Proveedor'
+        verbose_name_plural = 'Proveedores'
+        indexes = [
+            models.Index(fields=['nit_normalizado']),
+            models.Index(fields=['actividad_principal_ciiu']),
+        ]
+    
+    def __str__(self):
+        return f"{self.razon_social or 'N/A'} ({self.nit_normalizado})"
+    
+    def get_ciuu_secundarios(self) -> list:
+        """Obtener lista de CIUUs secundarios"""
+        secundarios = []
+        if self.actividad_secundaria_ciiu:
+            secundarios.append(self.actividad_secundaria_ciiu)
+        if self.otras_actividades_ciiu:
+            if isinstance(self.otras_actividades_ciiu, list):
+                secundarios.extend(self.otras_actividades_ciiu)
+            else:
+                secundarios.append(self.otras_actividades_ciiu)
+        return list(set([c for c in secundarios if c]))
+
+
+class ClasificacionContable(models.Model):
+    """
+    Modelo para almacenar resultados de clasificación contable de facturas usando Deepseek.
+    Guarda toda la información relevante para consultas posteriores y análisis.
+    """
+    ESTADO_CHOICES = [
+        ('pendiente', 'Pendiente'),
+        ('procesando', 'Procesando'),
+        ('completado', 'Completado'),
+        ('fallido', 'Fallido'),
+    ]
+    
+    # ========== IDENTIFICACIÓN ==========
+    session_dian = models.ForeignKey(
+        'dian_scraper.ScrapingSession',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='clasificaciones_contables',
+        help_text='Sesión de scraping DIAN de la cual se extrajeron las facturas'
+    )
+    factura_numero = models.CharField(
+        max_length=100,
+        db_index=True,
+        help_text='Número de factura'
+    )
+    proveedor_nit = models.CharField(
+        max_length=20,
+        db_index=True,
+        help_text='NIT del proveedor'
+    )
+    proveedor_nit_normalizado = models.CharField(
+        max_length=20,
+        db_index=True,
+        help_text='NIT normalizado del proveedor'
+    )
+    empresa_nit = models.CharField(
+        max_length=20,
+        db_index=True,
+        help_text='NIT de la empresa compradora'
+    )
+    
+    # ========== CIUU ==========
+    empresa_ciuu_principal = models.CharField(
+        max_length=10,
+        null=True,
+        blank=True,
+        help_text='CIUU principal de la empresa compradora'
+    )
+    proveedor_ciuu = models.CharField(
+        max_length=10,
+        null=True,
+        blank=True,
+        help_text='CIUU del proveedor'
+    )
+    
+    # ========== COSTOS Y TIEMPO ==========
+    costo_total_factura = models.DecimalField(
+        max_digits=10,
+        decimal_places=6,
+        default=0,
+        help_text='Costo total en USD de procesar esta factura'
+    )
+    costo_total_cop = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        help_text='Costo total en COP de procesar esta factura'
+    )
+    costo_por_articulo = models.DecimalField(
+        max_digits=10,
+        decimal_places=6,
+        default=0,
+        help_text='Costo promedio por artículo en USD'
+    )
+    tiempo_procesamiento_segundos = models.FloatField(
+        default=0,
+        help_text='Tiempo de procesamiento en segundos'
+    )
+    tokens_input = models.IntegerField(
+        default=0,
+        help_text='Tokens de entrada consumidos'
+    )
+    tokens_output = models.IntegerField(
+        default=0,
+        help_text='Tokens de salida generados'
+    )
+    
+    # ========== DATOS ENVIADOS Y RESPUESTA ==========
+    factura_json_enviada = models.JSONField(
+        default=dict,
+        help_text='JSON de la factura enviada a Deepseek (sin prompt, solo factura)'
+    )
+    respuesta_json_completa = models.JSONField(
+        default=dict,
+        help_text='JSON completo de respuesta de Deepseek (con prompt y todo)'
+    )
+    respuesta_json_factura = models.JSONField(
+        default=dict,
+        help_text='JSON de respuesta solo de la factura (sin prompt ni metadata)'
+    )
+    
+    # ========== ESTADO Y METADATOS ==========
+    estado = models.CharField(
+        max_length=20,
+        choices=ESTADO_CHOICES,
+        default='pendiente',
+        help_text='Estado del procesamiento'
+    )
+    error_message = models.TextField(
+        blank=True,
+        null=True,
+        help_text='Mensaje de error si falló el procesamiento'
+    )
+    confianza_promedio = models.CharField(
+        max_length=20,
+        null=True,
+        blank=True,
+        help_text='Confianza promedio de la clasificación (ALTA/MEDIA/BAJA)'
+    )
+    total_articulos = models.IntegerField(
+        default=0,
+        help_text='Total de artículos en la factura'
+    )
+    
+    # ========== AUDITORÍA ==========
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    procesado_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text='Fecha y hora en que se completó el procesamiento'
+    )
+    
+    class Meta:
+        db_table = 'clasificaciones_contables'
+        verbose_name = 'Clasificación Contable'
+        verbose_name_plural = 'Clasificaciones Contables'
+        indexes = [
+            models.Index(fields=['session_dian', 'factura_numero']),
+            models.Index(fields=['proveedor_nit_normalizado']),
+            models.Index(fields=['empresa_nit']),
+            models.Index(fields=['estado']),
+            models.Index(fields=['created_at']),
+        ]
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"Factura {self.factura_numero} - {self.proveedor_nit} ({self.estado})"
+
+
 # Extender el modelo User
 User.add_to_class('puede_gestionar_api_keys', user_puede_gestionar_api_keys)
 User.add_to_class('has_empresa_permission', user_has_empresa_permission)

@@ -8,4 +8,5 @@ router.register(r'documents', views.DocumentProcessedViewSet, basename='document
 
 urlpatterns = [
     path('api/', include(router.urls)),
+    path('api/download/<str:token>/', views.descargar_zip_por_token, name='descargar-zip-dian'),
 ]

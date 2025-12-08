@@ -1,5 +1,6 @@
 import re
-from datetime import timedelta
+from datetime import timedelta, date
+from dateutil.relativedelta import relativedelta
 
 from rest_framework import serializers
 
@@ -8,11 +9,13 @@ from .models import (
     ScrapingSession,
     DocumentProcessed,
     ScrapingRange,
+    EventoApidianEnviado,
 )
 
 
 class ScrapingSessionSerializer(serializers.ModelSerializer):
     nit = serializers.CharField(required=False, allow_blank=True)
+    eventos_fallidos_count = serializers.SerializerMethodField()
 
     class Meta:
         model = ScrapingSession
@@ -28,6 +31,13 @@ class ScrapingSessionSerializer(serializers.ModelSerializer):
             'ejecutado_desde',
             'ejecutado_hasta',
         )
+    
+    def get_eventos_fallidos_count(self, obj):
+        """Retorna el número de eventos fallidos para esta sesión"""
+        return EventoApidianEnviado.objects.filter(
+            session=obj,
+            estado='fallido'
+        ).count()
 
     def validate(self, attrs):
         print("=" * 80)
@@ -47,6 +57,24 @@ class ScrapingSessionSerializer(serializers.ModelSerializer):
         if fecha_desde and fecha_hasta and fecha_desde > fecha_hasta:
             print("❌ [SERIALIZER] fecha_desde > fecha_hasta")
             raise serializers.ValidationError('fecha_desde debe ser menor o igual a fecha_hasta')
+        
+        # Validar que el rango no exceda 1 mes
+        if fecha_desde and fecha_hasta:
+            # Calcular el último día del mes de fecha_desde
+            ultimo_dia_mes_desde = (fecha_desde.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+            
+            # Si es el mes actual, el máximo es el día anterior
+            hoy = date.today()
+            if fecha_desde.year == hoy.year and fecha_desde.month == hoy.month:
+                fecha_maxima = hoy - timedelta(days=1)
+            else:
+                fecha_maxima = ultimo_dia_mes_desde
+            
+            if fecha_hasta > fecha_maxima:
+                raise serializers.ValidationError(
+                    f'El rango de fechas no puede exceder 1 mes. '
+                    f'Fecha máxima permitida: {fecha_maxima.strftime("%Y-%m-%d")}'
+                )
 
         try:
             nit = self._resolve_nit(request, attrs)
@@ -185,6 +213,75 @@ class ScrapingSessionSerializer(serializers.ModelSerializer):
 
 
 class DocumentProcessedSerializer(serializers.ModelSerializer):
+    # Campos calculados para facilitar el frontend
+    fecha = serializers.DateField(source='issue_date', read_only=True)
+    fecha_emision = serializers.DateField(source='issue_date', read_only=True)
+    numero = serializers.CharField(source='document_number', read_only=True)
+    numero_factura = serializers.CharField(source='document_number', read_only=True)
+    valor_total = serializers.DecimalField(source='total_amount', max_digits=15, decimal_places=2, read_only=True)
+    
+    # Campos para emisor/receptor según el tipo
+    nit_emisor = serializers.CharField(source='supplier_nit', read_only=True)
+    razon_social_emisor = serializers.CharField(source='supplier_name', read_only=True)
+    nit_receptor = serializers.CharField(source='customer_nit', read_only=True)
+    razon_social_receptor = serializers.CharField(source='customer_name', read_only=True)
+    
+    # Campo tipo desde la sesión
+    tipo = serializers.CharField(source='session.tipo', read_only=True)
+    
     class Meta:
         model = DocumentProcessed
         fields = '__all__'
+
+
+class GenerarAcusesSerializer(serializers.Serializer):
+    """Serializer para validar datos al generar acuses automáticos.
+    Ahora solo requiere eventos, el resto se obtiene automáticamente desde la sesión."""
+    eventos = serializers.ListField(
+        child=serializers.IntegerField(min_value=1, max_value=7),
+        min_length=1,
+        help_text='Lista de IDs de eventos a aplicar (1-7)'
+    )
+    # Campos opcionales para override manual
+    cedula = serializers.CharField(
+        max_length=20,
+        required=False,
+        allow_blank=True,
+        help_text='Número de identificación del emisor (opcional, se obtiene del NIT si no se proporciona)'
+    )
+    primer_nombre = serializers.CharField(
+        max_length=100,
+        required=False,
+        allow_blank=True,
+        help_text='Primer nombre del emisor (opcional, default: "Pasante")'
+    )
+    segundo_nombre = serializers.CharField(
+        max_length=100,
+        required=False,
+        allow_blank=True,
+        help_text='Segundo nombre del emisor (opcional)'
+    )
+    departamento = serializers.CharField(
+        max_length=100,
+        required=False,
+        allow_blank=True,
+        default='CONTABILIDAD',
+        help_text='Departamento del emisor (opcional, default: "CONTABILIDAD")'
+    )
+    cargo = serializers.CharField(
+        max_length=100,
+        required=False,
+        allow_blank=True,
+        default='Aux Contable',
+        help_text='Cargo del emisor (opcional, default: "Aux Contable")'
+    )
+    
+    def validate_eventos(self, value):
+        """Validar que los eventos sean válidos"""
+        eventos_validos = [1, 2, 3, 4, 5, 6, 7]
+        eventos_invalidos = [e for e in value if e not in eventos_validos]
+        if eventos_invalidos:
+            raise serializers.ValidationError(
+                f'Eventos inválidos: {eventos_invalidos}. Eventos válidos: {eventos_validos}'
+            )
+        return value

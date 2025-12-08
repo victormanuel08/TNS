@@ -47,8 +47,10 @@ class UBLXMLParser:
         doc.supplier = self._parse_party_info(root, 'cac:AccountingSupplierParty')
         doc.customer = self._parse_party_info(root, 'cac:AccountingCustomerParty')
         
-        # Método de pago
-        doc.payment_method = self._get_payment_method(root)
+        # Método de pago (código y descripción)
+        payment_info = self._get_payment_method_with_description(root)
+        doc.payment_method = payment_info.get('code')
+        doc.payment_method_description = payment_info.get('description')
         
         # Totales
         doc.line_extension_amount = self._parse_amount(root, 'cac:LegalMonetaryTotal/cbc:LineExtensionAmount')
@@ -118,11 +120,44 @@ class UBLXMLParser:
         return party_info
     
     def _get_payment_method(self, root) -> Optional[str]:
+        """
+        Extrae el código del método de pago del XML.
+        NOTA: La descripción se extrae en otro lugar si está disponible.
+        Retorna solo el código (ej: "10", "20", "30").
+        """
         payment_means = root.find('.//{urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2}PaymentMeans')
         if payment_means is not None:
             method_code = payment_means.find('{urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2}PaymentMeansCode')
             return method_code.text if method_code is not None else None
         return None
+    
+    def _get_payment_method_with_description(self, root) -> dict:
+        """
+        Extrae código Y descripción del método de pago del XML.
+        Retorna: {'code': '10', 'description': 'Pago en efectivo'} o {'code': None, 'description': None}
+        """
+        payment_means = root.find('.//{urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2}PaymentMeans')
+        if payment_means is not None:
+            method_code_elem = payment_means.find('{urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2}PaymentMeansCode')
+            code = method_code_elem.text if method_code_elem is not None else None
+            
+            # Intentar extraer descripción/nombre del método de pago
+            description = None
+            # Buscar PaymentMeansName
+            name_elem = payment_means.find('{urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2}PaymentMeansName')
+            if name_elem is not None and name_elem.text:
+                description = name_elem.text.strip()
+            else:
+                # Buscar en PaymentID o Note si existe
+                payment_id_elem = payment_means.find('{urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2}PaymentID')
+                if payment_id_elem is not None and payment_id_elem.text:
+                    description = payment_id_elem.text.strip()
+            
+            return {
+                'code': code,
+                'description': description
+            }
+        return {'code': None, 'description': None}
     
     def _parse_taxes(self, root) -> tuple[List[TaxDetail], Decimal]:
         tax_totals = root.findall('.//{urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2}TaxTotal')

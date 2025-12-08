@@ -191,6 +191,56 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 FIELD_ENCRYPTION_KEY = env('FIELD_ENCRYPTION_KEY', default='change-me')
 
 DEEPSEEK_API_KEY = env('DEEPSEEK_API_KEY', default='')
+DEEPSEEK_API_URL = env('DEEPSEEK_API_URL', default='https://api.deepseek.com/v1/chat/completions')
+
+# Configuración de clasificación contable con procesamiento paralelo
+CLASIFICACION_MAX_FACTURAS = env.int('CLASIFICACION_MAX_FACTURAS', default=0)  # 0 = ilimitado
+CLASIFICACION_MAX_ARTICULOS = env.int('CLASIFICACION_MAX_ARTICULOS', default=0)  # 0 = ilimitado
+CLASIFICACION_MAX_ARTICULOS_POR_FACTURA = env.int('CLASIFICACION_MAX_ARTICULOS_POR_FACTURA', default=50)
+CLASIFICACION_TIMEOUT_SEGUNDOS = env.int('CLASIFICACION_TIMEOUT_SEGUNDOS', default=90)
+CLASIFICACION_MAX_TOKENS = env.int('CLASIFICACION_MAX_TOKENS', default=8000)
+CLASIFICACION_TEMPERATURE = env.float('CLASIFICACION_TEMPERATURE', default=0.1)
+CLASIFICACION_DEBUG = env.bool('CLASIFICACION_DEBUG', default=False)
+
+# Procesamiento paralelo con rate limiting (configuración antigua, ver más abajo)
+# NOTA: Esta configuración está duplicada más abajo con valores actualizados
+
+# ==================== Configuración Clasificación Contable ====================
+# Límites configurables (0 = ilimitado)
+# Valores originales de BCE: sin límites explícitos, procesa factura por factura
+CLASIFICACION_MAX_FACTURAS = env.int('CLASIFICACION_MAX_FACTURAS', default=0)  # 0 = ilimitado (BCE original: sin límite)
+CLASIFICACION_MAX_ARTICULOS = env.int('CLASIFICACION_MAX_ARTICULOS', default=0)  # 0 = ilimitado (BCE original: sin límite)
+CLASIFICACION_MAX_ARTICULOS_POR_FACTURA = env.int('CLASIFICACION_MAX_ARTICULOS_POR_FACTURA', default=0)  # 0 = ilimitado (BCE original: sin límite)
+CLASIFICACION_TIMEOUT_SEGUNDOS = env.int('CLASIFICACION_TIMEOUT_SEGUNDOS', default=90)  # BCE original: 90 segundos
+CLASIFICACION_MAX_TOKENS = env.int('CLASIFICACION_MAX_TOKENS', default=8000)  # BCE original: 8000
+CLASIFICACION_TEMPERATURE = env.float('CLASIFICACION_TEMPERATURE', default=0.1)  # BCE original: 0.1
+CLASIFICACION_DEBUG = env.bool('CLASIFICACION_DEBUG', default=False)  # Activar prints de debug
+
+# ==================== Rate Limiting para DeepSeek ====================
+# DeepSeek acepta hasta 60 llamadas por minuto (rate limit estándar)
+# 
+# Estrategia recomendada para 100 facturas:
+#   - Grupo 1: Enviar 50 facturas primero (en lotes de 10) = 5 lotes
+#   - Esperar 60 segundos (para resetear el contador del minuto)
+#   - Grupo 2: Enviar las 50 restantes (en lotes de 10)
+#   - Tiempo total estimado: ~2-3 minutos para 100 facturas
+#
+# Consideraciones:
+#   - Cada factura toma ~20 segundos en procesarse
+#   - En paralelo (lotes de 10), podemos procesar más rápido
+#   - Pero debemos respetar el límite de 60 RPM para evitar errores 429
+#
+# Tamaño de lote: cuántas facturas se procesan en paralelo a la vez
+# Recomendado: 10 (según recomendaciones de DeepSeek)
+CLASIFICACION_LOTE_PARALELO = env.int('CLASIFICACION_LOTE_PARALELO', default=10)
+
+# Máximo de facturas por minuto antes de hacer pausa
+# Recomendado: 50 (para estar seguro del límite de 60 RPM, dejar margen de seguridad)
+CLASIFICACION_MAX_FACTURAS_POR_MINUTO = env.int('CLASIFICACION_MAX_FACTURAS_POR_MINUTO', default=50)
+
+# Pausa entre grupos de facturas (en segundos)
+# Recomendado: 60 segundos (para resetear el contador del minuto de DeepSeek)
+CLASIFICACION_PAUSA_ENTRE_GRUPOS = env.int('CLASIFICACION_PAUSA_ENTRE_GRUPOS', default=60)
 
 DIAN_SCRAPER_HEADLESS = env.bool('DIAN_SCRAPER_HEADLESS', default=True)
 # Configuración de paralelismo para scraping DIAN
@@ -258,12 +308,28 @@ API_PUBLIC_URL = env('API_PUBLIC_URL', default='https://api.eddeso.com')  # URL 
 API_DIAN_ROUTE = env('API_DIAN_ROUTE', default='http://45.149.204.184:81')
 TOKEN_API_DIAN_BASIC = env('TOKEN_API_DIAN_BASIC', default='78b8f740085ff4bb2cb704fe887638804125024f087259b5a81010ecb11e82e6')
 
+# URL del backend BCE para obtener credenciales
+BCE_API_URL = env('BCE_API_URL', default='http://localhost:8000')
+
 # Configuración Base de Datos APIDIAN (MariaDB)
 APIDIAN_DB_HOST = env('APIDIAN_DB_HOST', default='45.149.204.184')
 APIDIAN_DB_PORT = env.int('APIDIAN_DB_PORT', default=3307)
 APIDIAN_DB_USER = env('APIDIAN_DB_USER', default='apidian')
-APIDIAN_DB_PASSWORD = env('APIDIAN_DB_PASSWORD', default='')
+APIDIAN_DB_PASSWORD = env('APIDIAN_DB_PASSWORD', default='Bce.2024*/')
 APIDIAN_DB_NAME = env('APIDIAN_DB_NAME', default='apidian')
+
+# Configuración Hablame (SMS y Llamadas)
+HABLAME_ACCOUNT = env('HABLAME_ACCOUNT', default='')
+HABLAME_APIKEY = env('HABLAME_APIKEY', default='')
+HABLAME_TOKEN = env('HABLAME_TOKEN', default='')
+HABLAME_SMS_URL = env('HABLAME_SMS_URL', default='https://api103.hablame.co/api/sms/v3/send/priority')
+HABLAME_SMS_REPORT_URL = env('HABLAME_SMS_REPORT_URL', default='https://api103.hablame.co/api/sms/v3/report/')
+HABLAME_TTS_URL = env('HABLAME_TTS_URL', default='https://api103.hablame.co/api/callblasting/v1/callblasting/tts_text')
+HABLAME_TTS_STATUS_URL = env('HABLAME_TTS_STATUS_URL', default='https://api103.hablame.co/api/callblasting/v1/callblasting/status/')
+HABLAME_SMS_SERVICE_CODE = env('HABLAME_SMS_SERVICE_CODE', default='890202')
+HABLAME_TTS_VOICE = env('HABLAME_TTS_VOICE', default='es-US-natural-3')
+HABLAME_MAX_INTENTOS = env.int('HABLAME_MAX_INTENTOS', default=3)
+HABLAME_TIEMPO_ESPERA = env.int('HABLAME_TIEMPO_ESPERA', default=5)
 
 # Configuración WireGuard VPN
 WG_SERVER_HOST = env('WG_SERVER_HOST', default='')  # IP o hostname del servidor Linux con WireGuard
