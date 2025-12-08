@@ -1,0 +1,153 @@
+{
+  "projects": {
+    "backregisters": {
+      "enabled": false,
+      "service_name": "backregisters.service",
+      "min_workers": 1,
+      "max_workers": 3,
+      "current_workers": 3,
+      "cpu_thresholds": {
+        "scale_up_2": 70,
+        "scale_up_3": 80,
+        "scale_down_2": 40,
+        "scale_down_1": 35
+      },
+      "cpu_duration_minutes": {
+        "scale_up": 3,
+        "scale_down": 15
+      },
+      "memory_threshold_mb": 1000,
+      "socket_path": "/home/victus/projects/register/backend/backregisters.socket",
+      "working_dir": "/home/victus/projects/register/backend",
+      "venv_path": "/home/victus/projects/register/backend/env/bin",
+      "wsgi_module": "registers.wsgi"
+    },
+    "backdipro": {
+      "enabled": false,
+      "service_name": "backdipro.service",
+      "min_workers": 1,
+      "max_workers": 3,
+      "current_workers": 2,
+      "cpu_thresholds": {
+        "scale_up_2": 70,
+        "scale_up_3": 80,
+        "scale_down_2": 40,
+        "scale_down_1": 35
+      },
+      "cpu_duration_minutes": {
+        "scale_up": 3,
+        "scale_down": 15
+      },
+      "memory_threshold_mb": 1000,
+      "socket_path": "/home/victus/projects/dipromedicos_back/backend/backdipro.socket",
+      "working_dir": "/home/victus/projects/dipromedicos_back/backend",
+      "venv_path": "/home/victus/projects/dipromedicos_back/backend/env/bin",
+      "wsgi_module": "dipromedicos.wsgi",
+      "extra_args": "-t 300"
+    },
+    "backglobal": {
+      "enabled": false,
+      "service_name": "backglobal.service",
+      "min_workers": 1,
+      "max_workers": 4,
+      "current_workers": 3,
+      "cpu_thresholds": {
+        "scale_up_2": 65,
+        "scale_up_3": 75,
+        "scale_up_4": 85,
+        "scale_down_2": 45,
+        "scale_down_1": 35
+      },
+      "cpu_duration_minutes": {
+        "scale_up": 2,
+        "scale_down": 10
+      },
+      "memory_threshold_mb": 1000,
+      "socket_path": "/home/victus/projects/global/backend/backglobal.socket",
+      "working_dir": "/home/victus/projects/global/backend",
+      "venv_path": "/home/victus/projects/global/backend/env/bin",
+      "wsgi_module": "backend.wsgi:application"
+    },
+    "backbce": {
+      "enabled": false,
+      "service_name": "backbce.service",
+      "min_workers": 1,
+      "max_workers": 4,
+      "current_workers": 3,
+      "cpu_thresholds": {
+        "scale_up_2": 65,
+        "scale_up_3": 75,
+        "scale_up_4": 85,
+        "scale_down_2": 45,
+        "scale_down_1": 35
+      },
+      "cpu_duration_minutes": {
+        "scale_up": 2,
+        "scale_down": 10
+      },
+      "memory_threshold_mb": 1000,
+      "socket_path": "/home/victus/projects/BCE/backend/backbce.socket",
+      "working_dir": "/home/victus/projects/BCE/backend",
+      "venv_path": "/home/victus/projects/BCE/backend/env/bin",
+      "wsgi_module": "bcemanager.wsgi:application"
+    },
+    "backcore": {
+      "enabled": false,
+      "service_name": "backcore.service",
+      "min_workers": 1,
+      "max_workers": 10,
+      "current_workers": 3,
+      "cpu_thresholds": {
+        "scale_up_2": 60,
+        "scale_up_3": 70,
+        "scale_up_4": 75,
+        "scale_up_5": 80,
+        "scale_up_6": 82,
+        "scale_up_7": 84,
+        "scale_up_8": 86,
+        "scale_up_9": 88,
+        "scale_up_10": 90,
+        "scale_down_2": 40,
+        "scale_down_1": 30
+      },
+      "cpu_duration_minutes": {
+        "scale_up": 2,
+        "scale_down": 10
+      },
+      "memory_threshold_mb": 1000,
+      "socket_path": "/home/victus/projects/CORE/manu/backcore.socket",
+      "working_dir": "/home/victus/projects/CORE/manu",
+      "venv_path": "/home/victus/projects/CORE/manu/env/bin",
+      "wsgi_module": "config.wsgi:application"
+    },
+    "celerycore": {
+      "enabled": false,
+      "service_name": "celerycore.service",
+      "min_workers": 2,
+      "max_workers": 12,
+      "current_workers": 4,
+      "queue_thresholds": {
+        "scale_up_4": 10,
+        "scale_up_6": 20,
+        "scale_up_8": 30,
+        "scale_up_10": 40,
+        "scale_up_12": 50,
+        "scale_down_4": 5,
+        "scale_down_2": 2
+      },
+      "queue_duration_minutes": {
+        "scale_up": 2,
+        "scale_down": 10
+      },
+      "redis_url": "redis://localhost:6379/0",
+      "working_dir": "/home/victus/projects/CORE/manu",
+      "venv_path": "/home/victus/projects/CORE/manu/env/bin"
+    }
+  },
+  "global": {
+    "check_interval_seconds": 120,
+    "log_file": "/var/log/autoscaler.log",
+    "state_file": "/tmp/autoscaler_state.json"
+  }
+}
+

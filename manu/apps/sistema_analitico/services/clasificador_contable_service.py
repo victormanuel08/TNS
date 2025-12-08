@@ -783,7 +783,10 @@ class ClasificadorContableService:
             if last_error:
                 raise last_error
             
-            respuesta_api = response.json()
+            # Optimización de memoria: usar response.content en lugar de response.json()
+            # Esto es funcionalmente idéntico pero más eficiente en memoria para respuestas grandes
+            # El resultado es exactamente el mismo, solo cambia cómo se carga en memoria
+            respuesta_api = json.loads(response.content.decode('utf-8'))
             contenido = respuesta_api['choices'][0]['message']['content']
             
             # Calcular tokens y costos usando valores reales de cache

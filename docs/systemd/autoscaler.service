@@ -1,0 +1,24 @@
+[Unit]
+Description=Autoescalador de Workers Gunicorn y Celery
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/home/victus/scripts
+ExecStart=/bin/bash /home/victus/scripts/autoscaler.sh
+Restart=always
+RestartSec=60
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=autoscaler
+
+# Ejecutar cada 2 minutos
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+
+[Install]
+WantedBy=multi-user.target
+
