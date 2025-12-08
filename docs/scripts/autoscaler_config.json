@@ -1,7 +1,7 @@
 {
   "projects": {
     "backregisters": {
-      "enabled": false,
+      "enabled": true,
       "service_name": "backregisters.service",
       "min_workers": 1,
       "max_workers": 3,
@@ -23,15 +23,18 @@
       "wsgi_module": "registers.wsgi"
     },
     "backdipro": {
-      "enabled": false,
+      "enabled": true,
       "service_name": "backdipro.service",
       "min_workers": 1,
-      "max_workers": 3,
+      "max_workers": 6,
       "current_workers": 2,
       "cpu_thresholds": {
-        "scale_up_2": 70,
-        "scale_up_3": 80,
-        "scale_down_2": 40,
+        "scale_up_2": 65,
+        "scale_up_3": 75,
+        "scale_up_4": 80,
+        "scale_up_5": 85,
+        "scale_up_6": 90,
+        "scale_down_2": 45,
         "scale_down_1": 35
       },
       "cpu_duration_minutes": {
@@ -46,7 +49,7 @@
       "extra_args": "-t 300"
     },
     "backglobal": {
-      "enabled": false,
+      "enabled": true,
       "service_name": "backglobal.service",
       "min_workers": 1,
       "max_workers": 4,
@@ -69,7 +72,7 @@
       "wsgi_module": "backend.wsgi:application"
     },
     "backbce": {
-      "enabled": false,
+      "enabled": true,
       "service_name": "backbce.service",
       "min_workers": 1,
       "max_workers": 4,
@@ -92,7 +95,7 @@
       "wsgi_module": "bcemanager.wsgi:application"
     },
     "backcore": {
-      "enabled": false,
+      "enabled": true,
       "service_name": "backcore.service",
       "min_workers": 1,
       "max_workers": 10,
@@ -121,7 +124,7 @@
       "wsgi_module": "config.wsgi:application"
     },
     "celerycore": {
-      "enabled": false,
+      "enabled": true,
       "service_name": "celerycore.service",
       "min_workers": 2,
       "max_workers": 12,
