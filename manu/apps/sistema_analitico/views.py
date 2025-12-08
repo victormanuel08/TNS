@@ -11701,205 +11701,267 @@ class ClasificacionContableViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
         Returns:
             Resultado de clasificación o task_id si es asíncrono
         """
-        from .serializers import ClasificarFacturaSerializer
-        from .services.clasificador_contable_service import ClasificadorContableService
-        from .tasks import clasificar_factura_contable_task
-        from celery import group
-        import time
+        import traceback
         
-        serializer = ClasificarFacturaSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(
-                serializer.errors,
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        datos = serializer.validated_data
-        servicio = ClasificadorContableService()
-        
-        # Determinar facturas a procesar según modo
-        facturas = []
-        session_dian_id = None
-        empresa_nit = None
-        empresa_ciuu_principal = None
-        empresa_ciuu_secundarios = []
-        
-        if datos.get('session_id'):
-            # Modo sesión DIAN: cargar todas las facturas
-            session_dian_id = datos['session_id']
-            facturas_list, empresa_nit, empresa_ciuu_info = servicio.leer_facturas_desde_excel_sesion(session_dian_id)
+        try:
+            print(f"🔍 [CLASIFICACION] ========== INICIO ==========")
+            print(f"🔍 [CLASIFICACION] Payload recibido: {request.data}")
+            print(f"🔍 [CLASIFICACION] Headers: {dict(request.headers)}")
             
-            if not facturas_list:
+            from .serializers import ClasificarFacturaSerializer
+            from .services.clasificador_contable_service import ClasificadorContableService
+            from .tasks import clasificar_factura_contable_task
+            from celery import group
+            import time
+            
+            print(f"🔍 [CLASIFICACION] Imports completados")
+            serializer = ClasificarFacturaSerializer(data=request.data)
+            if not serializer.is_valid():
+                print(f"❌ [CLASIFICACION] Errores de validación: {serializer.errors}")
                 return Response(
-                    {'error': f'No se encontraron facturas en la sesión {session_dian_id}'},
-                    status=status.HTTP_404_NOT_FOUND
+                    serializer.errors,
+                    status=status.HTTP_400_BAD_REQUEST
                 )
+            print(f"✅ [CLASIFICACION] Serializer válido")
             
-            facturas = facturas_list
-            empresa_ciuu_principal = empresa_ciuu_info.get('ciuu_principal')
-            empresa_ciuu_secundarios = empresa_ciuu_info.get('ciuu_secundarios', [])
+            datos = serializer.validated_data
+            servicio = ClasificadorContableService()
             
-            logger.info(f"📂 {len(facturas)} facturas cargadas desde sesión DIAN {session_dian_id}")
-            
-        elif datos.get('document_id'):
-            # Modo documento individual
-            doc_info = servicio.leer_documento_por_id(datos['document_id'])
-            
-            if not doc_info:
-                return Response(
-                    {'error': f'Documento {datos["document_id"]} no encontrado'},
-                    status=status.HTTP_404_NOT_FOUND
-                )
-            
-            facturas = [doc_info['factura']]
-            empresa_nit = doc_info['empresa_nit']
-            empresa_ciuu_principal = doc_info['empresa_ciuu_info'].get('ciuu_principal')
-            empresa_ciuu_secundarios = doc_info['empresa_ciuu_info'].get('ciuu_secundarios', [])
-            session_dian_id = doc_info['session_id']
-            
-            logger.info(f"📄 Documento {datos['document_id']} cargado")
-            
-        elif datos.get('document_ids'):
-            # Modo documentos masivos
+            # Determinar facturas a procesar según modo
             facturas = []
+            session_dian_id = None
             empresa_nit = None
             empresa_ciuu_principal = None
             empresa_ciuu_secundarios = []
             
-            for doc_id in datos['document_ids']:
-                doc_info = servicio.leer_documento_por_id(doc_id)
-                if doc_info:
-                    facturas.append(doc_info['factura'])
-                    # Usar datos del primer documento para empresa (deben ser iguales)
-                    if not empresa_nit:
-                        empresa_nit = doc_info['empresa_nit']
-                        empresa_ciuu_principal = doc_info['empresa_ciuu_info'].get('ciuu_principal')
-                        empresa_ciuu_secundarios = doc_info['empresa_ciuu_info'].get('ciuu_secundarios', [])
-                        session_dian_id = doc_info['session_id']
+            if datos.get('session_id'):
+            # Modo sesión DIAN: cargar todas las facturas
+                session_dian_id = datos['session_id']
+                facturas_list, empresa_nit, empresa_ciuu_info = servicio.leer_facturas_desde_excel_sesion(session_dian_id)
+                
+                if not facturas_list:
+                    return Response(
+                        {'error': f'No se encontraron facturas en la sesión {session_dian_id}'},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+                
+                facturas = facturas_list
+                empresa_ciuu_principal = empresa_ciuu_info.get('ciuu_principal')
+                empresa_ciuu_secundarios = empresa_ciuu_info.get('ciuu_secundarios', [])
+                
+                logger.info(f"📂 {len(facturas)} facturas cargadas desde sesión DIAN {session_dian_id}")
+                
+            elif datos.get('document_id'):
+                # Modo documento individual
+                print(f"🔍 [CLASIFICACION] Leyendo documento ID: {datos['document_id']}")
+                doc_info = servicio.leer_documento_por_id(datos['document_id'])
+                print(f"🔍 [CLASIFICACION] doc_info obtenido: {doc_info is not None}")
+                
+                if not doc_info:
+                    print(f"❌ [CLASIFICACION] Documento {datos['document_id']} no encontrado")
+                    return Response(
+                        {'error': f'Documento {datos["document_id"]} no encontrado'},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+                
+                facturas = [doc_info['factura']]
+                empresa_nit = doc_info['empresa_nit']
+                empresa_ciuu_principal = doc_info['empresa_ciuu_info'].get('ciuu_principal')
+                empresa_ciuu_secundarios = doc_info['empresa_ciuu_info'].get('ciuu_secundarios', [])
+                session_dian_id = doc_info['session_id']
+                
+                print(f"✅ [CLASIFICACION] Documento {datos['document_id']} cargado - empresa_nit: {empresa_nit}")
+                logger.info(f"📄 Documento {datos['document_id']} cargado")
+                
+            elif datos.get('document_ids'):
+                # Modo documentos masivos
+                facturas = []
+                empresa_nit = None
+                empresa_ciuu_principal = None
+                empresa_ciuu_secundarios = []
+                
+                for doc_id in datos['document_ids']:
+                    doc_info = servicio.leer_documento_por_id(doc_id)
+                    if doc_info:
+                        facturas.append(doc_info['factura'])
+                        # Usar datos del primer documento para empresa (deben ser iguales)
+                        if not empresa_nit:
+                            empresa_nit = doc_info['empresa_nit']
+                            empresa_ciuu_principal = doc_info['empresa_ciuu_info'].get('ciuu_principal')
+                            empresa_ciuu_secundarios = doc_info['empresa_ciuu_info'].get('ciuu_secundarios', [])
+                            session_dian_id = doc_info['session_id']
+                
+                if not facturas:
+                    return Response(
+                        {'error': 'No se encontraron documentos válidos'},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+                
+                logger.info(f"📄 {len(facturas)} documentos cargados")
+                
+            else:
+                # Modo factura directa
+                facturas = [datos['factura']]
+                empresa_nit = datos.get('empresa_nit')
             
-            if not facturas:
+            # Usar valores proporcionados o buscar desde RUT
+            empresa_nit = datos.get('empresa_nit') or empresa_nit
+            if not empresa_nit:
                 return Response(
-                    {'error': 'No se encontraron documentos válidos'},
-                    status=status.HTTP_404_NOT_FOUND
+                    {'error': 'empresa_nit es requerido'},
+                    status=status.HTTP_400_BAD_REQUEST
                 )
             
-            logger.info(f"📄 {len(facturas)} documentos cargados")
-            
-        else:
-            # Modo factura directa
-            facturas = [datos['factura']]
-            empresa_nit = datos.get('empresa_nit')
-        
-        # Usar valores proporcionados o buscar desde RUT
-        empresa_nit = datos.get('empresa_nit') or empresa_nit
-        if not empresa_nit:
-            return Response(
-                {'error': 'empresa_nit es requerido'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Buscar CIUU de empresa si no se tiene
-        if not empresa_ciuu_principal:
-            empresa_ciuu_principal = datos.get('empresa_ciuu_principal')
-            empresa_ciuu_secundarios = datos.get('empresa_ciuu_secundarios', [])
-            
+            # Buscar CIUU de empresa si no se tiene
             if not empresa_ciuu_principal:
-                rut_empresa = servicio.buscar_rut_por_nit(empresa_nit)
-                if rut_empresa:
-                    empresa_ciuu_principal = rut_empresa.get('ciuu_principal')
-                    empresa_ciuu_secundarios = rut_empresa.get('ciuu_secundarios', [])
-        
-        # Validar límites
-        es_valido, mensaje_error = servicio.validar_limites(facturas)
-        if not es_valido:
-            return Response(
-                {'error': mensaje_error},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Procesar facturas (cada una puede tener proveedor diferente)
-        resultados = []
-        
-        # Configuración de procesamiento paralelo con rate limiting
-        # Deepseek API: límite de 60 llamadas por minuto (RPM)
-        # Estrategia segura: lotes de 10, máximo 50 por minuto, pausa de 60 segundos
-        from celery import group
-        from celery.result import allow_join_result
-        import time
-        
-        # Tamaño de lote configurable (recomendado: 10 según DeepSeek)
-        lote_size = getattr(settings, 'CLASIFICACION_LOTE_PARALELO', 10)
-        
-        # Preparar todas las facturas para procesamiento
-        tareas_preparadas = []
-        facturas_para_procesar = []
-        
-        for factura in facturas:
-            proveedor_nit = datos.get('proveedor_nit') or factura.get('proveedor_nit')
+                empresa_ciuu_principal = datos.get('empresa_ciuu_principal')
+                empresa_ciuu_secundarios = datos.get('empresa_ciuu_secundarios', [])
+                
+                if not empresa_ciuu_principal:
+                    rut_empresa = servicio.buscar_rut_por_nit(empresa_nit)
+                    if rut_empresa:
+                        empresa_ciuu_principal = rut_empresa.get('ciuu_principal')
+                        empresa_ciuu_secundarios = rut_empresa.get('ciuu_secundarios', [])
             
-            if not proveedor_nit:
-                resultados.append({
-                    'factura_numero': factura.get('numero_factura'),
-                    'error': 'proveedor_nit no encontrado en factura',
-                    'estado': 'FALLIDO'
+            # Validar límites
+            es_valido, mensaje_error = servicio.validar_limites(facturas)
+            if not es_valido:
+                return Response(
+                    {'error': mensaje_error},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Procesar facturas (cada una puede tener proveedor diferente)
+            resultados = []
+            
+            # Configuración de procesamiento paralelo con rate limiting
+            # Deepseek API: límite de 60 llamadas por minuto (RPM)
+            # Estrategia segura: lotes de 10, máximo 50 por minuto, pausa de 60 segundos
+            from celery import group
+            from celery.result import allow_join_result
+            import time
+            
+            # Tamaño de lote configurable (recomendado: 10 según DeepSeek)
+            lote_size = getattr(settings, 'CLASIFICACION_LOTE_PARALELO', 10)
+            
+            # Preparar todas las facturas para procesamiento
+            tareas_preparadas = []
+            facturas_para_procesar = []
+            
+            for factura in facturas:
+                proveedor_nit = datos.get('proveedor_nit') or factura.get('proveedor_nit')
+                
+                if not proveedor_nit:
+                    resultados.append({
+                        'factura_numero': factura.get('numero_factura'),
+                        'error': 'proveedor_nit no encontrado en factura',
+                        'estado': 'FALLIDO'
+                    })
+                    continue
+                
+                # Buscar CIUU del proveedor (cacheado)
+                proveedor_ciuu = datos.get('proveedor_ciuu')
+                if not proveedor_ciuu:
+                    rut_proveedor = servicio.buscar_rut_por_nit(proveedor_nit)
+                    if rut_proveedor:
+                        proveedor_ciuu = rut_proveedor.get('ciuu_principal')
+                
+                facturas_para_procesar.append({
+                    'factura': factura,
+                    'proveedor_nit': proveedor_nit,
+                    'proveedor_ciuu': proveedor_ciuu
                 })
-                continue
             
-            # Buscar CIUU del proveedor (cacheado)
-            proveedor_ciuu = datos.get('proveedor_ciuu')
-            if not proveedor_ciuu:
-                rut_proveedor = servicio.buscar_rut_por_nit(proveedor_nit)
-                if rut_proveedor:
-                    proveedor_ciuu = rut_proveedor.get('ciuu_principal')
-            
-            facturas_para_procesar.append({
-                'factura': factura,
-                'proveedor_nit': proveedor_nit,
-                'proveedor_ciuu': proveedor_ciuu
-            })
-        
-        if datos.get('procesar_asincrono'):
-            # Procesar en lotes paralelos con rate limiting seguro
-            # Estrategia basada en recomendaciones de DeepSeek:
-            # - DeepSeek acepta hasta 60 llamadas por minuto (RPM)
-            # - Cada factura toma ~20 segundos en procesarse
-            # - Estrategia: Enviar 50 facturas primero (en lotes de 10), esperar 60s, enviar las restantes
-            max_facturas_por_minuto = getattr(settings, 'CLASIFICACION_MAX_FACTURAS_POR_MINUTO', 50)
-            pausa_entre_grupos = getattr(settings, 'CLASIFICACION_PAUSA_ENTRE_GRUPOS', 60)
-            
-            logger.info(f"🔄 [CLASIFICACION] Procesando {len(facturas_para_procesar)} facturas con rate limiting seguro")
-            logger.info(f"   - Tamaño de lote: {lote_size} facturas (recomendado: 10)")
-            logger.info(f"   - Máximo por minuto: {max_facturas_por_minuto} facturas (límite DeepSeek: 60 RPM)")
-            logger.info(f"   - Pausa entre grupos: {pausa_entre_grupos} segundos (para resetear contador)")
-            
-            # Dividir en lotes de tamaño configurado
-            lotes = [facturas_para_procesar[i:i + lote_size] for i in range(0, len(facturas_para_procesar), lote_size)]
-            
-            facturas_enviadas_en_grupo = 0
-            grupo_actual = 1
-            total_lotes_enviados = 0
-            
-            # Procesar lotes respetando rate limit de DeepSeek
-            for idx_lote, lote in enumerate(lotes):
-                # Verificar si necesitamos pausar (hemos enviado el máximo por minuto)
-                if facturas_enviadas_en_grupo >= max_facturas_por_minuto:
-                    logger.info(f"⏸️ [CLASIFICACION] Límite de {max_facturas_por_minuto} facturas/min alcanzado")
-                    logger.info(f"⏳ [CLASIFICACION] Esperando {pausa_entre_grupos} segundos antes del siguiente grupo...")
-                    logger.info(f"   - Grupo {grupo_actual} completado: {facturas_enviadas_en_grupo} facturas enviadas")
-                    time.sleep(pausa_entre_grupos)
-                    facturas_enviadas_en_grupo = 0
-                    grupo_actual += 1
-                    logger.info(f"✅ [CLASIFICACION] Iniciando Grupo {grupo_actual}")
+            if datos.get('procesar_asincrono'):
+                # Procesar en lotes paralelos con rate limiting seguro
+                # Estrategia basada en recomendaciones de DeepSeek:
+                # - DeepSeek acepta hasta 60 llamadas por minuto (RPM)
+                # - Cada factura toma ~20 segundos en procesarse
+                # - Estrategia: Enviar 50 facturas primero (en lotes de 10), esperar 60s, enviar las restantes
+                max_facturas_por_minuto = getattr(settings, 'CLASIFICACION_MAX_FACTURAS_POR_MINUTO', 50)
+                pausa_entre_grupos = getattr(settings, 'CLASIFICACION_PAUSA_ENTRE_GRUPOS', 60)
                 
-                logger.info(f"📦 [CLASIFICACION] Grupo {grupo_actual} - Lote {idx_lote + 1}/{len(lotes)} ({len(lote)} facturas)")
-                logger.info(f"   - Facturas enviadas en este grupo: {facturas_enviadas_en_grupo}/{max_facturas_por_minuto}")
-                logger.info(f"   - Total lotes enviados: {total_lotes_enviados}")
+                logger.info(f"🔄 [CLASIFICACION] Procesando {len(facturas_para_procesar)} facturas con rate limiting seguro")
+                logger.info(f"   - Tamaño de lote: {lote_size} facturas (recomendado: 10)")
+                logger.info(f"   - Máximo por minuto: {max_facturas_por_minuto} facturas (límite DeepSeek: 60 RPM)")
+                logger.info(f"   - Pausa entre grupos: {pausa_entre_grupos} segundos (para resetear contador)")
                 
-                # Crear grupo de tareas Celery para este lote
-                tareas_lote = []
-                for item in lote:
-                    task = clasificar_factura_contable_task.s(
-                        factura_data=item['factura'],
+                # Dividir en lotes de tamaño configurado
+                lotes = [facturas_para_procesar[i:i + lote_size] for i in range(0, len(facturas_para_procesar), lote_size)]
+                
+                facturas_enviadas_en_grupo = 0
+                grupo_actual = 1
+                total_lotes_enviados = 0
+                
+                # Procesar lotes respetando rate limit de DeepSeek
+                for idx_lote, lote in enumerate(lotes):
+                    # Verificar si necesitamos pausar (hemos enviado el máximo por minuto)
+                    if facturas_enviadas_en_grupo >= max_facturas_por_minuto:
+                        logger.info(f"⏸️ [CLASIFICACION] Límite de {max_facturas_por_minuto} facturas/min alcanzado")
+                        logger.info(f"⏳ [CLASIFICACION] Esperando {pausa_entre_grupos} segundos antes del siguiente grupo...")
+                        logger.info(f"   - Grupo {grupo_actual} completado: {facturas_enviadas_en_grupo} facturas enviadas")
+                        time.sleep(pausa_entre_grupos)
+                        facturas_enviadas_en_grupo = 0
+                        grupo_actual += 1
+                        logger.info(f"✅ [CLASIFICACION] Iniciando Grupo {grupo_actual}")
+                    
+                    logger.info(f"📦 [CLASIFICACION] Grupo {grupo_actual} - Lote {idx_lote + 1}/{len(lotes)} ({len(lote)} facturas)")
+                    logger.info(f"   - Facturas enviadas en este grupo: {facturas_enviadas_en_grupo}/{max_facturas_por_minuto}")
+                    logger.info(f"   - Total lotes enviados: {total_lotes_enviados}")
+                    
+                    # Crear grupo de tareas Celery para este lote
+                    tareas_lote = []
+                    for item in lote:
+                        task = clasificar_factura_contable_task.s(
+                            factura_data=item['factura'],
+                            empresa_nit=empresa_nit,
+                            empresa_ciuu_principal=empresa_ciuu_principal,
+                            empresa_ciuu_secundarios=empresa_ciuu_secundarios,
+                            proveedor_nit=item['proveedor_nit'],
+                            proveedor_ciuu=item['proveedor_ciuu'],
+                            aplica_retencion=datos.get('aplica_retencion', False),
+                            porcentaje_retencion=datos.get('porcentaje_retencion', 0),
+                            tipo_operacion=datos.get('tipo_operacion', 'compra'),
+                            session_dian_id=session_dian_id
+                        )
+                        tareas_lote.append(task)
+                    
+                    # Ejecutar lote en paralelo (Celery group)
+                    job = group(tareas_lote)
+                    result = job.apply_async()
+                    
+                    # Actualizar contadores
+                    facturas_enviadas_en_grupo += len(lote)
+                    total_lotes_enviados += 1
+                    
+                    # Agregar resultados inmediatamente (las tareas se ejecutan en background)
+                    for i, item in enumerate(lote):
+                        resultados.append({
+                            'factura_numero': item['factura'].get('numero_factura'),
+                            'proveedor_nit': item['proveedor_nit'],
+                            'procesamiento_asincrono': True,
+                            'task_id': result.results[i].id if i < len(result.results) else None,
+                            'lote': idx_lote + 1,
+                            'grupo': grupo_actual,
+                            'estado': 'PENDIENTE'
+                        })
+                    
+                    # Pausa entre lotes del mismo grupo para distribuir las peticiones
+                    # Esto ayuda a evitar saturar DeepSeek y distribuir las 50 facturas a lo largo del minuto
+                    # Pausa fija de 2 segundos entre lotes (seguro y predecible)
+                    if idx_lote < len(lotes) - 1 and facturas_enviadas_en_grupo < max_facturas_por_minuto:
+                        time.sleep(2)  # 2 segundos entre lotes del mismo grupo
+                
+                logger.info(f"✅ [CLASIFICACION] Todas las tareas lanzadas:")
+                logger.info(f"   - Total facturas: {len(facturas_para_procesar)}")
+                logger.info(f"   - Total lotes: {len(lotes)} (tamaño: {lote_size} facturas/lote)")
+                logger.info(f"   - Total grupos: {grupo_actual}")
+                logger.info(f"   - Tiempo estimado: ~{grupo_actual * pausa_entre_grupos + len(facturas_para_procesar) * 20 / 60} minutos")
+            else:
+                # Procesar sincrónicamente (una por una)
+                for item in facturas_para_procesar:
+                    resultado = servicio.clasificar_factura(
+                        factura=item['factura'],
                         empresa_nit=empresa_nit,
                         empresa_ciuu_principal=empresa_ciuu_principal,
                         empresa_ciuu_secundarios=empresa_ciuu_secundarios,
@@ -11907,92 +11969,57 @@ class ClasificacionContableViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
                         proveedor_ciuu=item['proveedor_ciuu'],
                         aplica_retencion=datos.get('aplica_retencion', False),
                         porcentaje_retencion=datos.get('porcentaje_retencion', 0),
-                        tipo_operacion=datos.get('tipo_operacion', 'compra'),
-                        session_dian_id=session_dian_id
-                    )
-                    tareas_lote.append(task)
-                
-                # Ejecutar lote en paralelo (Celery group)
-                job = group(tareas_lote)
-                result = job.apply_async()
-                
-                # Actualizar contadores
-                facturas_enviadas_en_grupo += len(lote)
-                total_lotes_enviados += 1
-                
-                # Agregar resultados inmediatamente (las tareas se ejecutan en background)
-                for i, item in enumerate(lote):
-                    resultados.append({
-                        'factura_numero': item['factura'].get('numero_factura'),
-                        'proveedor_nit': item['proveedor_nit'],
-                        'procesamiento_asincrono': True,
-                        'task_id': result.results[i].id if i < len(result.results) else None,
-                        'lote': idx_lote + 1,
-                        'grupo': grupo_actual,
-                        'estado': 'PENDIENTE'
-                    })
-                
-                # Pausa entre lotes del mismo grupo para distribuir las peticiones
-                # Esto ayuda a evitar saturar DeepSeek y distribuir las 50 facturas a lo largo del minuto
-                # Pausa fija de 2 segundos entre lotes (seguro y predecible)
-                if idx_lote < len(lotes) - 1 and facturas_enviadas_en_grupo < max_facturas_por_minuto:
-                    time.sleep(2)  # 2 segundos entre lotes del mismo grupo
-            
-            logger.info(f"✅ [CLASIFICACION] Todas las tareas lanzadas:")
-            logger.info(f"   - Total facturas: {len(facturas_para_procesar)}")
-            logger.info(f"   - Total lotes: {len(lotes)} (tamaño: {lote_size} facturas/lote)")
-            logger.info(f"   - Total grupos: {grupo_actual}")
-            logger.info(f"   - Tiempo estimado: ~{grupo_actual * pausa_entre_grupos + len(facturas_para_procesar) * 20 / 60} minutos")
-        else:
-            # Procesar sincrónicamente (una por una)
-            for item in facturas_para_procesar:
-                resultado = servicio.clasificar_factura(
-                    factura=item['factura'],
-                    empresa_nit=empresa_nit,
-                    empresa_ciuu_principal=empresa_ciuu_principal,
-                    empresa_ciuu_secundarios=empresa_ciuu_secundarios,
-                    proveedor_nit=item['proveedor_nit'],
-                    proveedor_ciuu=item['proveedor_ciuu'],
-                    aplica_retencion=datos.get('aplica_retencion', False),
-                    porcentaje_retencion=datos.get('porcentaje_retencion', 0),
-                    tipo_operacion=datos.get('tipo_operacion', 'compra')
-                )
-                
-                if resultado.get('success'):
-                    # Guardar en BD
-                    clasificacion = servicio.guardar_clasificacion(
-                        factura_numero=item['factura'].get('numero_factura'),
-                        proveedor_nit=item['proveedor_nit'],
-                        empresa_nit=empresa_nit,
-                        empresa_ciuu_principal=empresa_ciuu_principal,
-                        proveedor_ciuu=item['proveedor_ciuu'],
-                        resultado=resultado,
-                        session_dian_id=session_dian_id
+                        tipo_operacion=datos.get('tipo_operacion', 'compra')
                     )
                     
-                    resultados.append({
-                        'factura_numero': item['factura'].get('numero_factura'),
-                        'proveedor_nit': item['proveedor_nit'],
-                        'clasificacion_id': clasificacion.id,
-                        'procesamiento_asincrono': False,
-                        'costo_usd': float(resultado.get('costo', {}).get('costo_usd', 0)),
-                        'tiempo_segundos': resultado.get('tiempo_procesamiento', 0),
-                        'estado': 'COMPLETADO'
-                    })
-                else:
-                    resultados.append({
-                        'factura_numero': item['factura'].get('numero_factura'),
-                        'proveedor_nit': item['proveedor_nit'],
-                        'procesamiento_asincrono': False,
-                        'error': resultado.get('error'),
-                        'estado': 'FALLIDO'
-                    })
+                    if resultado.get('success'):
+                        # Guardar en BD
+                        clasificacion = servicio.guardar_clasificacion(
+                            factura_numero=item['factura'].get('numero_factura'),
+                            proveedor_nit=item['proveedor_nit'],
+                            empresa_nit=empresa_nit,
+                            empresa_ciuu_principal=empresa_ciuu_principal,
+                            proveedor_ciuu=item['proveedor_ciuu'],
+                            resultado=resultado,
+                            session_dian_id=session_dian_id
+                        )
+                        
+                        resultados.append({
+                            'factura_numero': item['factura'].get('numero_factura'),
+                            'proveedor_nit': item['proveedor_nit'],
+                            'clasificacion_id': clasificacion.id,
+                            'procesamiento_asincrono': False,
+                            'costo_usd': float(resultado.get('costo', {}).get('costo_usd', 0)),
+                            'tiempo_segundos': resultado.get('tiempo_procesamiento', 0),
+                            'estado': 'COMPLETADO'
+                        })
+                    else:
+                        resultados.append({
+                            'factura_numero': item['factura'].get('numero_factura'),
+                            'proveedor_nit': item['proveedor_nit'],
+                            'procesamiento_asincrono': False,
+                            'error': resultado.get('error'),
+                            'estado': 'FALLIDO'
+                        })
         
-        return Response({
-            'success': True,
-            'total_facturas': len(facturas),
-            'resultados': resultados
-        }, status=status.HTTP_200_OK)
+            return Response({
+                'success': True,
+                'total_facturas': len(facturas),
+                'resultados': resultados
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            print(f"❌ [CLASIFICACION] ========== ERROR ==========")
+            print(f"❌ [CLASIFICACION] Error: {type(e).__name__}: {e}")
+            traceback.print_exc()
+            logger.error(f"Error en clasificar_factura: {e}", exc_info=True)
+            return Response(
+                {
+                    'error': f'Error al clasificar factura: {str(e)}',
+                    'error_type': type(e).__name__,
+                    'traceback': traceback.format_exc() if settings.DEBUG else None
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
     
     @action(detail=False, methods=['get'], url_path='documentos-sesion/(?P<session_id>[^/.]+)')
     def listar_documentos_sesion(self, request, session_id=None):
@@ -12061,6 +12088,44 @@ class ClasificacionContableViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
                     proveedor_nit = doc.customer_nit or ''
                     proveedor_nombre = doc.customer_name or ''
                 
+                # Obtener clasificación si existe para obtener el precio
+                clasificacion = ClasificacionContable.objects.filter(
+                    factura_numero=doc.document_number,
+                    session_dian_id=session_id
+                ).first()
+                
+                tiene_clasificacion = clasificacion is not None
+                
+                # Obtener costo: si existe y es > 0, usarlo; si no, intentar recalcular desde tokens
+                costo_usd = None
+                costo_cop = None
+                
+                if clasificacion:
+                    if clasificacion.costo_total_factura and float(clasificacion.costo_total_factura) > 0:
+                        # Ya tiene costo guardado
+                        costo_usd = float(clasificacion.costo_total_factura)
+                        costo_cop = float(clasificacion.costo_total_cop) if clasificacion.costo_total_cop else None
+                    elif clasificacion.tokens_input > 0 or clasificacion.tokens_output > 0:
+                        # Recalcular desde tokens guardados
+                        from .services.clasificador_contable_service import calcular_costo_tokens
+                        
+                        # Intentar extraer cache hit/miss desde respuesta_json_completa
+                        cache_hit_tokens = None
+                        cache_miss_tokens = None
+                        if clasificacion.respuesta_json_completa:
+                            usage = clasificacion.respuesta_json_completa.get('usage', {})
+                            cache_hit_tokens = usage.get('prompt_cache_hit_tokens')
+                            cache_miss_tokens = usage.get('prompt_cache_miss_tokens')
+                        
+                        costo_info = calcular_costo_tokens(
+                            input_tokens=clasificacion.tokens_input,
+                            output_tokens=clasificacion.tokens_output,
+                            cache_hit_tokens=cache_hit_tokens,
+                            cache_miss_tokens=cache_miss_tokens
+                        )
+                        costo_usd = costo_info['costo_usd']
+                        costo_cop = costo_info['costo_cop']
+                
                 documentos_data.append({
                     'id': doc.id,
                     'document_number': doc.document_number,
@@ -12069,10 +12134,9 @@ class ClasificacionContableViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
                     'proveedor_nit': proveedor_nit,
                     'proveedor_nombre': proveedor_nombre,
                     'total_amount': float(doc.total_amount or 0),
-                    'tiene_clasificacion': ClasificacionContable.objects.filter(
-                        factura_numero=doc.document_number,
-                        session_dian_id=session_id
-                    ).exists()
+                    'tiene_clasificacion': tiene_clasificacion,
+                    'costo_usd': costo_usd,
+                    'costo_cop': costo_cop
                 })
             
             return Response({

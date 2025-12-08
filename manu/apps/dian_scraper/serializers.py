@@ -16,6 +16,14 @@ from .models import (
 class ScrapingSessionSerializer(serializers.ModelSerializer):
     nit = serializers.CharField(required=False, allow_blank=True)
     eventos_fallidos_count = serializers.SerializerMethodField()
+    # Campos de clasificación contable
+    documentos_clasificados = serializers.SerializerMethodField()
+    total_documentos = serializers.SerializerMethodField()
+    progreso_clasificacion = serializers.SerializerMethodField()
+    costo_acumulado_usd = serializers.SerializerMethodField()
+    costo_acumulado_cop = serializers.SerializerMethodField()
+    costo_estimado_total_usd = serializers.SerializerMethodField()
+    costo_estimado_total_cop = serializers.SerializerMethodField()
 
     class Meta:
         model = ScrapingSession
@@ -38,6 +46,67 @@ class ScrapingSessionSerializer(serializers.ModelSerializer):
             session=obj,
             estado='fallido'
         ).count()
+    
+    def get_documentos_clasificados(self, obj):
+        """Cantidad de documentos clasificados en esta sesión"""
+        from apps.sistema_analitico.models import ClasificacionContable
+        return ClasificacionContable.objects.filter(session_dian_id=obj.id).count()
+    
+    def get_total_documentos(self, obj):
+        """Total de documentos en la sesión"""
+        return DocumentProcessed.objects.filter(session=obj).count()
+    
+    def get_progreso_clasificacion(self, obj):
+        """Progreso de clasificación en formato "2/6" """
+        clasificados = self.get_documentos_clasificados(obj)
+        total = self.get_total_documentos(obj)
+        return f"{clasificados}/{total}" if total > 0 else "0/0"
+    
+    def get_costo_acumulado_usd(self, obj):
+        """Costo acumulado en USD de documentos ya clasificados"""
+        from apps.sistema_analitico.models import ClasificacionContable
+        from django.db.models import Sum
+        resultado = ClasificacionContable.objects.filter(
+            session_dian_id=obj.id
+        ).aggregate(total=Sum('costo_total_factura'))
+        return float(resultado['total'] or 0)
+    
+    def get_costo_acumulado_cop(self, obj):
+        """Costo acumulado en COP de documentos ya clasificados"""
+        from apps.sistema_analitico.models import ClasificacionContable
+        from django.db.models import Sum
+        resultado = ClasificacionContable.objects.filter(
+            session_dian_id=obj.id
+        ).aggregate(total=Sum('costo_total_cop'))
+        return float(resultado['total'] or 0)
+    
+    def get_costo_estimado_total_usd(self, obj):
+        """Costo total estimado o real en USD"""
+        clasificados = self.get_documentos_clasificados(obj)
+        total = self.get_total_documentos(obj)
+        costo_acumulado = self.get_costo_acumulado_usd(obj)
+        
+        if total == 0:
+            return 0.0
+        
+        # Si está completo, retornar el costo real
+        if clasificados == total:
+            return costo_acumulado
+        
+        # Si no está completo, estimar basado en el promedio
+        if clasificados > 0:
+            costo_promedio = costo_acumulado / clasificados
+            return costo_promedio * total
+        else:
+            # Si no hay clasificados, estimar basado en un promedio conservador
+            # Estimación: ~$0.00005 USD por documento (basado en pruebas)
+            return 0.00005 * total
+    
+    def get_costo_estimado_total_cop(self, obj):
+        """Costo total estimado o real en COP"""
+        from django.conf import settings
+        tasa_cambio = getattr(settings, 'TASA_CAMBIO_COP_USD', 4000)
+        return self.get_costo_estimado_total_usd(obj) * tasa_cambio
 
     def validate(self, attrs):
         print("=" * 80)

@@ -409,24 +409,60 @@ def obtener_contexto_ciuu_inteligente(ciuu_code: str) -> Dict[str, Any]:
         }
 
 
-def calcular_costo_tokens(input_tokens: int, output_tokens: int) -> Dict[str, Any]:
+def calcular_costo_tokens(
+    input_tokens: int, 
+    output_tokens: int,
+    cache_hit_tokens: int = None,
+    cache_miss_tokens: int = None
+) -> Dict[str, Any]:
     """
     Calcular costo real en USD y COP basado en tokens.
-    Precios de Deepseek (aproximados).
-    """
-    # Precios Deepseek (por 1M tokens)
-    precio_input = 0.14 / 1000000  # $0.14 por 1M tokens input
-    precio_output = 0.28 / 1000000  # $0.28 por 1M tokens output
-    tasa_cambio = 4000  # COP por USD (ajustable)
+    Usa precios reales de DeepSeek API con diferenciación de cache hit/miss.
     
-    costo_usd = (input_tokens * precio_input) + (output_tokens * precio_output)
+    Args:
+        input_tokens: Total de tokens de entrada (prompt_tokens)
+        output_tokens: Total de tokens de salida (completion_tokens)
+        cache_hit_tokens: Tokens que usaron cache (prompt_cache_hit_tokens). Si es None, se estima.
+        cache_miss_tokens: Tokens que NO usaron cache (prompt_cache_miss_tokens). Si es None, se estima.
+    
+    Returns:
+        Dict con costos, tokens y detalles
+    """
+    from django.conf import settings
+    
+    # Precios desde settings (cargados desde ENV)
+    precio_output = getattr(settings, 'DEEPSEEK_PRICE_OUTPUT_TOKEN', 0.00000042)
+    precio_cache_hit = getattr(settings, 'DEEPSEEK_PRICE_INPUT_CACHE_HIT', 0.000000028)
+    precio_cache_miss = getattr(settings, 'DEEPSEEK_PRICE_INPUT_CACHE_MISS', 0.00000056)
+    tasa_cambio = getattr(settings, 'TASA_CAMBIO_COP_USD', 4000)
+    
+    # Si no se proporcionan valores de cache, usar estimación conservadora (70% hit, 30% miss)
+    if cache_hit_tokens is None or cache_miss_tokens is None:
+        if cache_hit_tokens is None:
+            cache_hit_tokens = int(input_tokens * 0.7)  # Estimación: 70% cache hit
+        if cache_miss_tokens is None:
+            cache_miss_tokens = input_tokens - cache_hit_tokens
+    
+    # Calcular costo real con cache diferenciado
+    costo_input = (cache_hit_tokens * precio_cache_hit) + (cache_miss_tokens * precio_cache_miss)
+    costo_output = output_tokens * precio_output
+    costo_usd = costo_input + costo_output
     costo_cop = costo_usd * tasa_cambio
     
     return {
         "costo_usd": round(costo_usd, 6),
         "costo_cop": round(costo_cop, 2),
         "tokens_input": input_tokens,
-        "tokens_output": output_tokens
+        "tokens_output": output_tokens,
+        "tokens_cache_hit": cache_hit_tokens,
+        "tokens_cache_miss": cache_miss_tokens,
+        "costo_input_usd": round(costo_input, 6),
+        "costo_output_usd": round(costo_output, 6),
+        "detalle": {
+            "precio_cache_hit": precio_cache_hit,
+            "precio_cache_miss": precio_cache_miss,
+            "precio_output": precio_output
+        }
     }
 
 
@@ -750,15 +786,58 @@ class ClasificadorContableService:
             respuesta_api = response.json()
             contenido = respuesta_api['choices'][0]['message']['content']
             
-            # Calcular tokens y costos
-            input_tokens = respuesta_api['usage']['prompt_tokens']
-            output_tokens = respuesta_api['usage']['completion_tokens']
-            costo_info = calcular_costo_tokens(input_tokens, output_tokens)
+            # Calcular tokens y costos usando valores reales de cache
+            usage = respuesta_api.get('usage', {})
+            input_tokens = usage.get('prompt_tokens', 0)
+            output_tokens = usage.get('completion_tokens', 0)
+            
+            # Extraer valores reales de cache si están disponibles
+            cache_hit_tokens = usage.get('prompt_cache_hit_tokens', None)
+            cache_miss_tokens = usage.get('prompt_cache_miss_tokens', None)
+            
+            # Si no están disponibles, intentar desde prompt_tokens_details
+            if cache_hit_tokens is None and 'prompt_tokens_details' in usage:
+                cached_tokens = usage['prompt_tokens_details'].get('cached_tokens', 0)
+                if cached_tokens > 0:
+                    cache_hit_tokens = cached_tokens
+                    cache_miss_tokens = input_tokens - cached_tokens
+            
+            costo_info = calcular_costo_tokens(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cache_hit_tokens=cache_hit_tokens,
+                cache_miss_tokens=cache_miss_tokens
+            )
             
             tiempo_procesamiento = time.time() - inicio_tiempo
             
             self._print_debug(f"✅ Factura procesada en {tiempo_procesamiento:.2f}s")
-            self._print_debug(f"💰 Costo: ${costo_info['costo_usd']:.6f} USD / ${costo_info['costo_cop']:.2f} COP")
+            
+            # Mostrar información de costos (siempre visible, no solo en debug)
+            print("=" * 60)
+            print("💰 DETALLE COMPLETO DE COSTOS:")
+            print("=" * 60)
+            print(f"📊 TOKENS UTILIZADOS:")
+            print(f"   - Input tokens (total):     {costo_info['tokens_input']}")
+            print(f"   - Output tokens:            {costo_info['tokens_output']}")
+            print(f"   - Cache HIT tokens:         {costo_info['tokens_cache_hit']}")
+            print(f"   - Cache MISS tokens:        {costo_info['tokens_cache_miss']}")
+            print("")
+            print(f"💵 DESGLOSE DE COSTOS:")
+            detalle = costo_info.get('detalle', {})
+            if costo_info['tokens_cache_hit'] > 0 or costo_info['tokens_cache_miss'] > 0:
+                print(f"   - Input Cache HIT:         {costo_info['tokens_cache_hit']} × ${detalle.get('precio_cache_hit', 0):.10f} = ${(costo_info['tokens_cache_hit'] * detalle.get('precio_cache_hit', 0)):.10f} USD")
+                print(f"   - Input Cache MISS:        {costo_info['tokens_cache_miss']} × ${detalle.get('precio_cache_miss', 0):.10f} = ${(costo_info['tokens_cache_miss'] * detalle.get('precio_cache_miss', 0)):.10f} USD")
+                print(f"   - Costo Input Total:       ${costo_info['costo_input_usd']:.10f} USD")
+            else:
+                print(f"   - Costo Input (estimado):  ${costo_info['costo_input_usd']:.10f} USD")
+            print(f"   - Costo Output:            {costo_info['tokens_output']} × ${detalle.get('precio_output', 0):.10f} = ${costo_info['costo_output_usd']:.10f} USD")
+            print("")
+            print(f"💰 COSTO TOTAL:")
+            print(f"   - USD: ${costo_info['costo_usd']:.10f}")
+            from django.conf import settings as django_settings
+            print(f"   - COP: ${costo_info['costo_cop']:,.2f} (tasa: {getattr(django_settings, 'TASA_CAMBIO_COP_USD', 4000)} COP/USD)")
+            print("=" * 60)
             
             # Parsear JSON de respuesta
             try:

@@ -1476,8 +1476,8 @@ def descargar_zip_por_token(request, token):
     
     logger = logging.getLogger(__name__)
     
-    logger.info(f"🔍 [DOWNLOAD] Solicitud de descarga con token: {token[:16]}...")
-    logger.info(f"🔍 [DOWNLOAD] URL completa: {request.build_absolute_uri()}")
+    print(f"🔍 [DOWNLOAD] Token recibido: {token}")
+    print(f"🔍 [DOWNLOAD] URL completa: {request.build_absolute_uri()}")
     
     try:
         descarga = DescargaTemporalDianZip.objects.get(token=token)
@@ -1551,6 +1551,12 @@ def descargar_zip_por_token(request, token):
             )
         
     except DescargaTemporalDianZip.DoesNotExist:
+        print(f"❌ [DOWNLOAD] Token no encontrado en BD: {token}")
+        # Mostrar tokens recientes para comparar
+        tokens_recientes = DescargaTemporalDianZip.objects.order_by('-fecha_creacion')[:3]
+        print(f"❌ [DOWNLOAD] Últimos 3 tokens en BD:")
+        for t in tokens_recientes:
+            print(f"   - Token: {t.token[:32]}... (session: {t.session.id}, estado: {t.estado})")
         return Response(
             {'error': 'Token inválido o no encontrado.'},
             status=status.HTTP_404_NOT_FOUND

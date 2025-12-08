@@ -193,6 +193,16 @@ FIELD_ENCRYPTION_KEY = env('FIELD_ENCRYPTION_KEY', default='change-me')
 DEEPSEEK_API_KEY = env('DEEPSEEK_API_KEY', default='')
 DEEPSEEK_API_URL = env('DEEPSEEK_API_URL', default='https://api.deepseek.com/v1/chat/completions')
 
+# ==================== Precios DeepSeek API (por token, en USD) ====================
+# Valores reales basados en facturación de DeepSeek (diciembre 2025)
+# Estos valores se cargan desde variables de entorno para fácil ajuste
+DEEPSEEK_PRICE_OUTPUT_TOKEN = env.float('DEEPSEEK_PRICE_OUTPUT_TOKEN', default=0.00000042)  # $0.42 por 1M tokens output
+DEEPSEEK_PRICE_INPUT_CACHE_HIT = env.float('DEEPSEEK_PRICE_INPUT_CACHE_HIT', default=0.000000028)  # $0.028 por 1M tokens input (cache hit)
+DEEPSEEK_PRICE_INPUT_CACHE_MISS = env.float('DEEPSEEK_PRICE_INPUT_CACHE_MISS', default=0.00000056)  # $0.56 por 1M tokens input (cache miss)
+
+# Tasa de cambio COP/USD (ajustable según mercado)
+TASA_CAMBIO_COP_USD = env.float('TASA_CAMBIO_COP_USD', default=4000)
+
 # Configuración de clasificación contable con procesamiento paralelo
 CLASIFICACION_MAX_FACTURAS = env.int('CLASIFICACION_MAX_FACTURAS', default=0)  # 0 = ilimitado
 CLASIFICACION_MAX_ARTICULOS = env.int('CLASIFICACION_MAX_ARTICULOS', default=0)  # 0 = ilimitado
