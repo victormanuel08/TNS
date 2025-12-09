@@ -37,8 +37,12 @@ def _build_payload(codigo_ciiu: str) -> Dict:
 async def _make_async_request(payload: Dict) -> Dict:
     """
     Realiza la solicitud asíncrona a la API de búsqueda CIIU.
+    Timeout corto (5 segundos) para evitar bloqueos cuando la API no está disponible.
     """
-    async with aiohttp.ClientSession() as session:
+    # Timeout corto: 5 segundos total (conexión + lectura)
+    # Esto evita que las consultas bloqueen la clasificación cuando la API está caída
+    timeout = aiohttp.ClientTimeout(total=5, connect=2)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
         try:
             async with session.post(CIIU_BUSQUEDA_URL, json=payload) as response:
                 if response.status != 200:
@@ -47,6 +51,9 @@ async def _make_async_request(payload: Dict) -> Dict:
                 
                 response_data = await response.json()
                 return response_data
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout al consultar API CIIU (5s) - usando fallback")
+            return {'error': 'Timeout: La API de CIIU no respondió en 5 segundos'}
         except Exception as e:
             logger.error(f"Excepción al consultar API CIIU: {e}", exc_info=True)
             return {'error': str(e)}
@@ -55,9 +62,13 @@ async def _make_async_request(payload: Dict) -> Dict:
 async def _get_activity_details(cseId: str) -> Dict:
     """
     Obtiene los detalles completos de una actividad usando su cseId.
+    Timeout corto (5 segundos) para evitar bloqueos cuando la API no está disponible.
     """
     url = CIIU_DETALLES_URL.format(cseId=cseId)
-    async with aiohttp.ClientSession() as session:
+    # Timeout corto: 5 segundos total (conexión + lectura)
+    # Esto evita que las consultas bloqueen la clasificación cuando la API está caída
+    timeout = aiohttp.ClientTimeout(total=5, connect=2)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
         try:
             async with session.get(url) as response:
                 if response.status != 200:
@@ -66,6 +77,9 @@ async def _get_activity_details(cseId: str) -> Dict:
                 
                 response_data = await response.json()
                 return response_data
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout al obtener detalles de actividad {cseId} (5s) - usando fallback")
+            return {'error': 'Timeout: La API de CIIU no respondió en 5 segundos'}
         except Exception as e:
             logger.error(f"Excepción al obtener detalles de actividad {cseId}: {e}", exc_info=True)
             return {'error': str(e)}
