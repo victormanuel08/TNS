@@ -26,6 +26,7 @@ fi
 # Directorios
 SCRIPTS_DIR="/home/victus/scripts"
 SYSTEMD_DIR="/etc/systemd/system"
+# Detectar dónde está el script (puede estar en docs/scripts o en /home/victus/scripts)
 DOCS_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Crear directorio de scripts si no existe
@@ -34,16 +35,29 @@ mkdir -p /var/log
 
 echo -e "${YELLOW}1️⃣ Copiando scripts...${NC}"
 
-# Copiar scripts
-cp "$DOCS_SCRIPTS_DIR/autoscaler.sh" "$SCRIPTS_DIR/"
-cp "$DOCS_SCRIPTS_DIR/autoscaler_metrics.sh" "$SCRIPTS_DIR/"
-cp "$DOCS_SCRIPTS_DIR/autoscaler_config.json" "$SCRIPTS_DIR/"
+# Si los archivos ya están en SCRIPTS_DIR, no copiar
+if [ "$DOCS_SCRIPTS_DIR" = "$SCRIPTS_DIR" ]; then
+    echo -e "${BLUE}ℹ️  Los scripts ya están en $SCRIPTS_DIR${NC}"
+else
+    echo -e "${BLUE}📁 Copiando desde $DOCS_SCRIPTS_DIR a $SCRIPTS_DIR${NC}"
+    # Copiar scripts
+    cp "$DOCS_SCRIPTS_DIR/autoscaler.sh" "$SCRIPTS_DIR/" 2>/dev/null || echo -e "${YELLOW}⚠️  autoscaler.sh no encontrado en origen${NC}"
+    cp "$DOCS_SCRIPTS_DIR/autoscaler_metrics.sh" "$SCRIPTS_DIR/" 2>/dev/null || echo -e "${YELLOW}⚠️  autoscaler_metrics.sh no encontrado en origen${NC}"
+    cp "$DOCS_SCRIPTS_DIR/autoscaler_config.json" "$SCRIPTS_DIR/" 2>/dev/null || echo -e "${YELLOW}⚠️  autoscaler_config.json no encontrado en origen${NC}"
+fi
+
+# Verificar que los archivos existen
+if [ ! -f "$SCRIPTS_DIR/autoscaler.sh" ]; then
+    echo -e "${RED}❌ Error: autoscaler.sh no encontrado en $SCRIPTS_DIR${NC}"
+    echo -e "${YELLOW}💡 Asegúrate de que los archivos estén en $DOCS_SCRIPTS_DIR o copia manualmente a $SCRIPTS_DIR${NC}"
+    exit 1
+fi
 
 # Hacer ejecutables
 chmod +x "$SCRIPTS_DIR/autoscaler.sh"
 chmod +x "$SCRIPTS_DIR/autoscaler_metrics.sh"
 
-echo -e "${GREEN}✅ Scripts copiados${NC}"
+echo -e "${GREEN}✅ Scripts listos en $SCRIPTS_DIR${NC}"
 
 # Verificar dependencias
 echo ""
