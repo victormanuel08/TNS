@@ -18,12 +18,14 @@ class ScrapingSessionSerializer(serializers.ModelSerializer):
     eventos_fallidos_count = serializers.SerializerMethodField()
     # Campos de clasificación contable
     documentos_clasificados = serializers.SerializerMethodField()
+    reclasificaciones_count = serializers.SerializerMethodField()
     total_documentos = serializers.SerializerMethodField()
     progreso_clasificacion = serializers.SerializerMethodField()
     costo_acumulado_usd = serializers.SerializerMethodField()
     costo_acumulado_cop = serializers.SerializerMethodField()
     costo_estimado_total_usd = serializers.SerializerMethodField()
     costo_estimado_total_cop = serializers.SerializerMethodField()
+    tiempo_total_clasificacion_segundos = serializers.SerializerMethodField()
 
     class Meta:
         model = ScrapingSession
@@ -48,19 +50,41 @@ class ScrapingSessionSerializer(serializers.ModelSerializer):
         ).count()
     
     def get_documentos_clasificados(self, obj):
-        """Cantidad de documentos clasificados en esta sesión"""
+        """Cantidad de documentos únicos clasificados en esta sesión (sin contar reclasificaciones)"""
         from apps.sistema_analitico.models import ClasificacionContable
-        return ClasificacionContable.objects.filter(session_dian_id=obj.id).count()
+        # Contar solo facturas únicas (la más reciente de cada factura)
+        # Usamos la última clasificación de cada factura (más reciente por created_at)
+        facturas_unicas = ClasificacionContable.objects.filter(
+            session_dian_id=obj.id
+        ).values('factura_numero').distinct().count()
+        return facturas_unicas
+    
+    def get_reclasificaciones_count(self, obj):
+        """Cantidad de reclasificaciones (clasificaciones adicionales de facturas ya clasificadas)"""
+        from apps.sistema_analitico.models import ClasificacionContable
+        total_clasificaciones = ClasificacionContable.objects.filter(session_dian_id=obj.id).count()
+        documentos_unicos = self.get_documentos_clasificados(obj)
+        reclasificaciones = total_clasificaciones - documentos_unicos
+        return max(0, reclasificaciones)  # No puede ser negativo
     
     def get_total_documentos(self, obj):
         """Total de documentos en la sesión"""
         return DocumentProcessed.objects.filter(session=obj).count()
     
     def get_progreso_clasificacion(self, obj):
-        """Progreso de clasificación en formato "2/6" """
+        """Progreso de clasificación en formato "12/12" o "12(4)/12" si hay reclasificaciones"""
         clasificados = self.get_documentos_clasificados(obj)
+        reclasificaciones = self.get_reclasificaciones_count(obj)
         total = self.get_total_documentos(obj)
-        return f"{clasificados}/{total}" if total > 0 else "0/0"
+        
+        if total == 0:
+            return "0/0"
+        
+        # Si hay reclasificaciones, mostrarlas entre paréntesis
+        if reclasificaciones > 0:
+            return f"{clasificados}({reclasificaciones})/{total}"
+        else:
+            return f"{clasificados}/{total}"
     
     def get_costo_acumulado_usd(self, obj):
         """Costo acumulado en USD de documentos ya clasificados"""
@@ -107,6 +131,15 @@ class ScrapingSessionSerializer(serializers.ModelSerializer):
         from django.conf import settings
         tasa_cambio = getattr(settings, 'TASA_CAMBIO_COP_USD', 4000)
         return self.get_costo_estimado_total_usd(obj) * tasa_cambio
+    
+    def get_tiempo_total_clasificacion_segundos(self, obj):
+        """Tiempo total de clasificación de la sesión en segundos (suma de todos los tiempos)"""
+        from apps.sistema_analitico.models import ClasificacionContable
+        from django.db.models import Sum
+        resultado = ClasificacionContable.objects.filter(
+            session_dian_id=obj.id
+        ).aggregate(total=Sum('tiempo_procesamiento_segundos'))
+        return float(resultado['total'] or 0)
 
     def validate(self, attrs):
         print("=" * 80)
