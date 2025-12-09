@@ -320,6 +320,16 @@ evaluate_gunicorn_scaling() {
         min_memory_per_worker=300
     fi
     
+    # Calcular umbral de memoria para escalado hacia abajo
+    local memory_threshold_for_scale_down=8000
+    if [ "$total_memory_mb" -gt 16000 ]; then
+        memory_threshold_for_scale_down=8000  # Con 18GB, reducir solo si hay >8GB libres
+    elif [ "$total_memory_mb" -gt 8000 ]; then
+        memory_threshold_for_scale_down=4000
+    else
+        memory_threshold_for_scale_down=3000
+    fi
+    
     # Escalar hacia arriba: CPU alta O memoria suficiente para más workers
     if (( $(echo "$cpu > $(echo "$cpu_thresholds" | jq -r ".scale_up_$((current_workers + 1)) // 100")" | bc -l) )) && [ "$current_workers" -lt "$max_workers" ]; then
         # Verificar que hay suficiente memoria para escalar
@@ -333,18 +343,11 @@ evaluate_gunicorn_scaling() {
     elif (( $(echo "$cpu < $(echo "$cpu_thresholds" | jq -r ".scale_down_$((current_workers - 1)) // 0")" | bc -l) )) && [ "$current_workers" -gt "$min_workers" ]; then
         action="scale_down"
         target_workers=$((current_workers - 1))
-    # Escalar hacia abajo por memoria: si hay mucha memoria disponible, reducir workers
-    # Con 18GB, solo reducir si hay más de 8GB libres y CPU baja
-    local memory_threshold_for_scale_down=8000
-    if [ "$total_memory_mb" -gt 16000 ]; then
-        memory_threshold_for_scale_down=8000  # Con 18GB, reducir solo si hay >8GB libres
-    elif [ "$total_memory_mb" -gt 8000 ]; then
-        memory_threshold_for_scale_down=4000
-    else
-        memory_threshold_for_scale_down=3000
     fi
     
-    if [ "$memory_available" -gt "$memory_threshold_for_scale_down" ] && [ "$current_workers" -gt "$min_workers" ] && (( $(echo "$cpu < 50" | bc -l) )); then
+    # Escalar hacia abajo por memoria: si hay mucha memoria disponible, reducir workers
+    # Con 18GB, solo reducir si hay más de 8GB libres y CPU baja
+    if [ "$memory_available" -gt "$memory_threshold_for_scale_down" ] && [ "$current_workers" -gt "$min_workers" ] && (( $(echo "$cpu < 50" | bc -l) )) && [ "$action" = "none" ]; then
         action="scale_down"
         target_workers=$((current_workers - 1))
         log_info "📊 $service_name: Memoria abundante (${memory_available}MB) y CPU baja, reduciendo workers"
