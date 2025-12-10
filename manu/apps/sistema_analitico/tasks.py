@@ -966,8 +966,9 @@ def convertir_backup_a_gdb_task(self, descarga_temporal_id: int):
             if "Error reading data from the connection" in error_msg or "Unable to complete network request" in error_msg:
                 logger.warning(f"⚠️ Primer intento falló con formato localhost/3050:, intentando con localhost:...")
                 # Intentar con formato localhost: (sin puerto explícito)
+                # comando[7] = temp_fbk (FBK origen), comando[8] = temp_gdb_firebird (GDB destino)
                 temp_gdb_firebird = f"localhost:{temp_gdb}"
-                comando[7] = temp_gdb_firebird  # Actualizar el último argumento
+                comando[-1] = temp_gdb_firebird  # Actualizar el último argumento (GDB destino)
                 logger.info(f"🔄 Reintentando con: {' '.join(comando)}")
                 
                 resultado = subprocess.run(
