@@ -789,23 +789,41 @@ def convertir_backup_a_gdb_task(self, descarga_temporal_id: int):
             descarga.save()
             raise ValueError('No se encontró gbak para convertir el backup')
         
+        # Asegurar que el archivo de destino no exista (gbak -c requiere que no exista)
+        if os.path.exists(temp_gdb):
+            logger.warning(f"⚠️ El archivo GDB ya existe, eliminándolo: {temp_gdb}")
+            os.remove(temp_gdb)
+        
         # Convertir FBK a GDB
+        # Para archivos locales, usar formato explícito: localhost:/ruta/archivo.gdb
+        # Esto evita que Firebird intente hacer conexión de red
+        temp_gdb_firebird = f"localhost:{temp_gdb}"
+        
         comando = [
             gbak_path,
             '-c',  # Create database
             '-v',  # Verbose
             '-user', 'SYSDBA',
             '-password', 'masterkey',
-            temp_fbk,
-            temp_gdb
+            temp_fbk,  # Archivo FBK de origen (local)
+            temp_gdb_firebird  # Archivo GDB de destino (especificar localhost: para archivo local)
         ]
         
         logger.info(f"⏳ Convirtiendo backup a GDB: {' '.join(comando)}")
+        logger.info(f"📁 FBK origen: {temp_fbk}")
+        logger.info(f"📁 GDB destino: {temp_gdb} (formato Firebird: {temp_gdb_firebird})")
+        
+        # Configurar variables de entorno para manejar caracteres especiales
+        env = os.environ.copy()
+        env['LC_ALL'] = 'C.UTF-8'
+        env['LANG'] = 'C.UTF-8'
+        
         resultado = subprocess.run(
             comando,
             capture_output=True,
             text=True,
-            timeout=600  # 10 minutos máximo
+            timeout=600,  # 10 minutos máximo
+            env=env
         )
         
         # Limpiar FBK temporal
