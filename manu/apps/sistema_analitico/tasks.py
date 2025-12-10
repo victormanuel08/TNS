@@ -952,17 +952,28 @@ def convertir_backup_a_gdb_task(self, descarga_temporal_id: int):
         env['LC_ALL'] = 'C.UTF-8'
         env['LANG'] = 'C.UTF-8'
         
+        # Asegurar que el directorio temporal existe y tiene permisos correctos
+        gdb_dir = os.path.dirname(temp_gdb)
+        os.makedirs(gdb_dir, exist_ok=True)
+        # Establecer umask para que los archivos se creen con permisos 644
+        import stat
+        old_umask = os.umask(0o022)  # Permisos: 644 (rw-r--r--)
+        
         # Obtener tamaño del FBK para validar después
         fbk_size = os.path.getsize(temp_fbk) if os.path.exists(temp_fbk) else 0
         logger.info(f"📊 Tamaño del FBK: {fbk_size / (1024*1024):.2f} MB")
         
-        resultado = subprocess.run(
-            comando,
-            capture_output=True,
-            text=True,
-            timeout=600,  # 10 minutos máximo
-            env=env
-        )
+        try:
+            resultado = subprocess.run(
+                comando,
+                capture_output=True,
+                text=True,
+                timeout=600,  # 10 minutos máximo
+                env=env
+            )
+        finally:
+            # Restaurar umask original
+            os.umask(old_umask)
         
         # Verificar si hubo errores (incluso si returncode es 0, gbak puede reportar errores)
         output_completo = (resultado.stdout or '') + (resultado.stderr or '')
@@ -1055,6 +1066,62 @@ def convertir_backup_a_gdb_task(self, descarga_temporal_id: int):
         descarga.ruta_gdb_temporal = temp_gdb
         descarga.estado = 'listo'
         descarga.save()
+        
+        # Asegurar permisos de lectura para el usuario de Django/Celery
+        # El archivo fue creado con sudo gbak, así que pertenece a root
+        # Necesitamos hacerlo legible por el usuario de Django/Celery
+        try:
+            import stat
+            
+            # Intentar cambiar permisos usando subprocess con sudo si es necesario
+            # Primero intentar chmod directo (puede funcionar si el archivo está en /tmp)
+            try:
+                # Hacer el archivo legible por todos (644)
+                os.chmod(temp_gdb, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)  # 644
+                logger.info(f"✅ Permisos del GDB establecidos a 644")
+            except PermissionError:
+                # Si chmod directo falla, intentar con sudo vía subprocess
+                logger.warning(f"⚠️ chmod directo falló, intentando con sudo...")
+                try:
+                    subprocess.run(
+                        ['sudo', 'chmod', '644', temp_gdb],
+                        check=True,
+                        timeout=5
+                    )
+                    logger.info(f"✅ Permisos del GDB establecidos a 644 (con sudo)")
+                except Exception as e:
+                    logger.warning(f"⚠️ No se pudo cambiar permisos con sudo: {e}")
+                    # Intentar cambiar propietario al usuario actual
+                    try:
+                        current_user = os.getenv('USER') or os.getenv('USERNAME') or 'victus'
+                        subprocess.run(
+                            ['sudo', 'chown', f'{current_user}:{current_user}', temp_gdb],
+                            check=True,
+                            timeout=5
+                        )
+                        os.chmod(temp_gdb, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+                        logger.info(f"✅ Propietario y permisos del GDB cambiados a {current_user}")
+                    except Exception as e2:
+                        logger.error(f"❌ No se pudieron establecer permisos del GDB: {e2}")
+                        raise Exception(f"No se pudieron establecer permisos de lectura para el archivo GDB: {e2}")
+            
+            # Verificar que el archivo es legible
+            if not os.access(temp_gdb, os.R_OK):
+                logger.error(f"❌ El archivo GDB aún no es legible después de cambiar permisos")
+                # Intentar una última vez con sudo chmod
+                try:
+                    subprocess.run(['sudo', 'chmod', '644', temp_gdb], check=True, timeout=5)
+                    if not os.access(temp_gdb, os.R_OK):
+                        raise Exception("El archivo GDB no es legible después de todos los intentos")
+                except Exception as e:
+                    logger.error(f"❌ Error final estableciendo permisos: {e}")
+                    raise Exception(f"No se pudieron establecer permisos de lectura para el archivo GDB")
+            
+            logger.info(f"✅ Permisos verificados: archivo GDB es legible")
+        except Exception as e:
+            logger.error(f"❌ Error crítico estableciendo permisos del GDB: {e}", exc_info=True)
+            # No fallar la tarea, pero registrar el error
+            # El usuario puede intentar cambiar permisos manualmente si es necesario
         
         logger.info(f"✅ Backup convertido exitosamente a GDB: {temp_gdb}")
         
