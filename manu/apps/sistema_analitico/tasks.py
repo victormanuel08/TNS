@@ -1068,19 +1068,68 @@ def convertir_backup_a_gdb_task(self, descarga_temporal_id: int):
         descarga.save()
         
         # Asegurar permisos de lectura para el usuario de Django/Celery
-        # El archivo fue creado con sudo gbak, así que pertenece a root
-        # Necesitamos hacerlo legible por el usuario de Django/Celery
+        # El archivo GDB puede haber sido creado por el servidor Firebird con permisos del usuario 'firebird'
+        # Necesitamos hacerlo legible por el usuario que corre Django/Celery (probablemente 'victus')
         try:
             import stat
+            import pwd
             
-            # Intentar cambiar permisos usando subprocess con sudo si es necesario
-            # Primero intentar chmod directo (puede funcionar si el archivo está en /tmp)
+            # Obtener el usuario actual que ejecuta Celery/Django
             try:
-                # Hacer el archivo legible por todos (644)
+                current_uid = os.getuid()
+                current_user_info = pwd.getpwuid(current_uid)
+                current_user = current_user_info.pw_name
+                current_gid = current_user_info.pw_gid
+                logger.info(f"👤 Usuario actual de Celery/Django: {current_user} (UID: {current_uid}, GID: {current_gid})")
+            except Exception as e:
+                # Fallback si no podemos obtener el usuario (Windows o error)
+                current_user = os.getenv('USER') or os.getenv('USERNAME') or 'victus'
+                logger.warning(f"⚠️ No se pudo obtener UID, usando usuario por defecto: {current_user}")
+            
+            # Obtener propietario actual del archivo
+            try:
+                file_stat = os.stat(temp_gdb)
+                file_uid = file_stat.st_uid
+                file_gid = file_stat.st_gid
+                file_owner = pwd.getpwuid(file_uid).pw_name if file_uid else 'unknown'
+                logger.info(f"📁 Propietario actual del GDB: {file_owner} (UID: {file_uid}, GID: {file_gid})")
+            except Exception as e:
+                logger.warning(f"⚠️ No se pudo obtener propietario del archivo: {e}")
+                file_owner = 'unknown'
+            
+            # Si el archivo no pertenece al usuario actual, cambiar propietario
+            if file_owner != current_user:
+                logger.info(f"🔄 Cambiando propietario de {file_owner} a {current_user}...")
+                try:
+                    # Intentar cambiar propietario con sudo
+                    subprocess.run(
+                        ['sudo', 'chown', f'{current_user}:{current_user}', temp_gdb],
+                        check=True,
+                        timeout=5
+                    )
+                    logger.info(f"✅ Propietario cambiado exitosamente a {current_user}")
+                except Exception as e:
+                    logger.warning(f"⚠️ No se pudo cambiar propietario con sudo: {e}")
+                    # Si falla, al menos intentar hacer el archivo legible por todos
+                    try:
+                        subprocess.run(
+                            ['sudo', 'chmod', '644', temp_gdb],
+                            check=True,
+                            timeout=5
+                        )
+                        logger.info(f"✅ Permisos establecidos a 644 (lectura para todos)")
+                    except Exception as e2:
+                        logger.error(f"❌ No se pudieron establecer permisos: {e2}")
+                        raise Exception(f"No se pudieron establecer permisos de lectura para el archivo GDB: {e2}")
+            else:
+                logger.info(f"✅ El archivo ya pertenece al usuario correcto ({current_user})")
+            
+            # Establecer permisos 644 (rw-r--r--) para asegurar lectura
+            try:
                 os.chmod(temp_gdb, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)  # 644
                 logger.info(f"✅ Permisos del GDB establecidos a 644")
             except PermissionError:
-                # Si chmod directo falla, intentar con sudo vía subprocess
+                # Si chmod directo falla, intentar con sudo
                 logger.warning(f"⚠️ chmod directo falló, intentando con sudo...")
                 try:
                     subprocess.run(
@@ -1090,34 +1139,31 @@ def convertir_backup_a_gdb_task(self, descarga_temporal_id: int):
                     )
                     logger.info(f"✅ Permisos del GDB establecidos a 644 (con sudo)")
                 except Exception as e:
-                    logger.warning(f"⚠️ No se pudo cambiar permisos con sudo: {e}")
-                    # Intentar cambiar propietario al usuario actual
-                    try:
-                        current_user = os.getenv('USER') or os.getenv('USERNAME') or 'victus'
-                        subprocess.run(
-                            ['sudo', 'chown', f'{current_user}:{current_user}', temp_gdb],
-                            check=True,
-                            timeout=5
-                        )
-                        os.chmod(temp_gdb, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
-                        logger.info(f"✅ Propietario y permisos del GDB cambiados a {current_user}")
-                    except Exception as e2:
-                        logger.error(f"❌ No se pudieron establecer permisos del GDB: {e2}")
-                        raise Exception(f"No se pudieron establecer permisos de lectura para el archivo GDB: {e2}")
+                    logger.error(f"❌ No se pudieron establecer permisos con sudo: {e}")
+                    raise Exception(f"No se pudieron establecer permisos de lectura para el archivo GDB: {e}")
             
             # Verificar que el archivo es legible
             if not os.access(temp_gdb, os.R_OK):
                 logger.error(f"❌ El archivo GDB aún no es legible después de cambiar permisos")
-                # Intentar una última vez con sudo chmod
+                # Intentar una última vez con sudo chmod y chown
                 try:
                     subprocess.run(['sudo', 'chmod', '644', temp_gdb], check=True, timeout=5)
+                    subprocess.run(['sudo', 'chown', f'{current_user}:{current_user}', temp_gdb], check=True, timeout=5)
                     if not os.access(temp_gdb, os.R_OK):
                         raise Exception("El archivo GDB no es legible después de todos los intentos")
+                    logger.info(f"✅ Permisos corregidos en último intento")
                 except Exception as e:
                     logger.error(f"❌ Error final estableciendo permisos: {e}")
                     raise Exception(f"No se pudieron establecer permisos de lectura para el archivo GDB")
             
-            logger.info(f"✅ Permisos verificados: archivo GDB es legible")
+            # Verificar propietario final
+            try:
+                final_stat = os.stat(temp_gdb)
+                final_owner = pwd.getpwuid(final_stat.st_uid).pw_name if final_stat.st_uid else 'unknown'
+                logger.info(f"✅ Permisos verificados: archivo GDB es legible, propietario: {final_owner}, permisos: {oct(final_stat.st_mode)[-3:]}")
+            except Exception as e:
+                logger.warning(f"⚠️ No se pudo verificar propietario final: {e}")
+            
         except Exception as e:
             logger.error(f"❌ Error crítico estableciendo permisos del GDB: {e}", exc_info=True)
             # No fallar la tarea, pero registrar el error
