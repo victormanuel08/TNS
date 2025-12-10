@@ -22,6 +22,7 @@ from django.http import HttpRequest
 
 from rest_framework import serializers, viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework import permissions
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.authentication import BaseAuthentication
@@ -323,17 +324,22 @@ def _fetch_user_permissions(cursor, username):
 def _attach_api_key(request):
     # Intentar obtener API Key de diferentes headers
     api_key = request.META.get('HTTP_API_KEY')
+    print(f"🔍 [API_KEY] HTTP_API_KEY directo: {api_key}")
+    
     if not api_key:
         # Intentar desde Authorization header
         auth_header = request.META.get('HTTP_AUTHORIZATION', '')
+        print(f"🔍 [API_KEY] HTTP_AUTHORIZATION: {auth_header}")
         if auth_header.startswith('Api-Key '):
             api_key = auth_header.replace('Api-Key ', '')
+            print(f"🔍 [API_KEY] Extraída de Authorization: {api_key[:20]}...")
         elif auth_header.startswith('Bearer '):
             # Verificar que sea una API Key (formato sk_...) y no un JWT (formato eyJ...)
             bearer_token = auth_header.replace('Bearer ', '').strip()
             # Las API Keys empiezan con 'sk_', los JWT empiezan con 'eyJ'
             if bearer_token.startswith('sk_'):
                 api_key = bearer_token
+                print(f"🔍 [API_KEY] Extraída de Bearer: {api_key[:20]}...")
             # Si es JWT (eyJ...), ignorarlo - no es una API Key
     
     # Debug: mostrar todos los headers relacionados
@@ -347,7 +353,10 @@ def _attach_api_key(request):
                 print(f"   {key}: {request.META[key][:50] if len(str(request.META[key])) > 50 else request.META[key]}")
     
     if not api_key:
+        print("❌ [API_KEY] No se encontró API Key, retornando False")
         return False
+    
+    print(f"✅ [API_KEY] API Key encontrada en headers: {api_key[:20]}...")
     
     try:
         from apps.sistema_analitico.models import APIKeyCliente
@@ -460,7 +469,16 @@ class JWTOrAPIKeyAuthentication(BaseAuthentication):
 
 
 class APIKeyAwareViewSet:
+    def check_permissions(self, request):
+        """
+        Verificar permisos. IMPORTANTE: Adjuntar API Key ANTES de verificar permisos
+        porque los permission classes se ejecutan antes de initial().
+        """
+        _attach_api_key(request)
+        return super().check_permissions(request)
+    
     def initial(self, request, *args, **kwargs):
+        # También adjuntar aquí por si acaso (aunque ya debería estar adjuntada)
         _attach_api_key(request)
         return super().initial(request, *args, **kwargs)
 
@@ -1085,6 +1103,20 @@ class RUTViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
         return super().destroy(request, *args, **kwargs)
 
 
+class AllowAuthenticatedOrAPIKey(permissions.BasePermission):
+    """
+    Permite acceso si el usuario está autenticado O si tiene una API Key válida.
+    """
+    def has_permission(self, request, view):
+        # Si tiene API Key válida, permitir
+        if hasattr(request, 'cliente_api') and request.cliente_api:
+            return True
+        # Si está autenticado con usuario, permitir
+        if request.user and request.user.is_authenticated:
+            return True
+        return False
+
+
 class CalendarioTributarioViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
     """
     ViewSet para gestionar el calendario tributario.
@@ -1097,7 +1129,7 @@ class CalendarioTributarioViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
     )
     from .models import TipoTercero, TipoRegimen, Impuesto, VigenciaTributaria
     
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAuthenticatedOrAPIKey]
     
     def get_queryset(self):
         """
@@ -1604,7 +1636,7 @@ class ContrasenaEntidadViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
     
     queryset = ContrasenaEntidad.objects.all()
     serializer_class = ContrasenaEntidadSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAuthenticatedOrAPIKey]
     
     def list(self, request, *args, **kwargs):
         """
