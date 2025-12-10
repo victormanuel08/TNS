@@ -12068,7 +12068,7 @@ class BackupS3ViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
             # Descargar FBK desde S3 a archivo temporal
             temp_dir = tempfile.gettempdir()
             # Generar nombre de archivo temporal: usar backup.nombre_archivo si existe, sino generar uno por defecto
-            if backup.nombre_archivo:
+            if backup.nombre_archivo and backup.nombre_archivo.strip():
                 nombre_temp = backup.nombre_archivo
             else:
                 empresa = backup.empresa_servidor
@@ -12175,7 +12175,7 @@ def descargar_backup_por_token(request, token):
             servicio = BackupS3Service(config_s3)
             temp_dir = tempfile.gettempdir()
             # Generar nombre de archivo temporal: usar backup.nombre_archivo si existe, sino generar uno por defecto
-            if backup.nombre_archivo:
+            if backup.nombre_archivo and backup.nombre_archivo.strip():
                 nombre_temp = backup.nombre_archivo
             else:
                 empresa = backup.empresa_servidor

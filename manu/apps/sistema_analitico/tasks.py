@@ -720,8 +720,8 @@ def convertir_backup_a_gdb_task(self, descarga_temporal_id: int):
         
         # Descargar FBK desde S3
         temp_dir = tempfile.gettempdir()
-        # Generar nombre de archivo temporal: usar backup.nombre_archivo si existe, sino generar uno por defecto
-        if backup.nombre_archivo:
+        # Generar nombre de archivo temporal: usar backup.nombre_archivo si existe y no está vacío, sino generar uno por defecto
+        if backup.nombre_archivo and backup.nombre_archivo.strip():
             nombre_temp = backup.nombre_archivo
         else:
             fecha_str = backup.fecha_backup.strftime('%Y%m%d_%H%M%S') if backup.fecha_backup else 'unknown'
@@ -737,8 +737,24 @@ def convertir_backup_a_gdb_task(self, descarga_temporal_id: int):
         # Obtener nombre del archivo GDB
         ruta_base = empresa.ruta_base
         nombre_gdb = os.path.basename(ruta_base)
-        if not nombre_gdb.endswith('.gdb') and not nombre_gdb.endswith('.GDB'):
-            nombre_gdb = f"{empresa.codigo}.GDB"
+        
+        # Limpiar nombre: remover caracteres especiales y rutas de Windows
+        # Si la ruta es de Windows (contiene \ o :), extraer solo el nombre del archivo
+        if '\\' in nombre_gdb or ':' in nombre_gdb:
+            # Es una ruta de Windows, extraer solo el nombre del archivo
+            nombre_gdb = nombre_gdb.replace('\\', '/').split('/')[-1]
+        
+        # Limpiar caracteres especiales que pueden causar problemas en Linux
+        import re
+        nombre_gdb = re.sub(r'[^\w\-_.]', '_', nombre_gdb)
+        
+        # Asegurar que termine en .gdb o .GDB
+        if not nombre_gdb.lower().endswith('.gdb'):
+            if nombre_gdb:
+                # Remover extensión si existe y agregar .GDB
+                nombre_gdb = os.path.splitext(nombre_gdb)[0] + '.GDB'
+            else:
+                nombre_gdb = f"{empresa.codigo}.GDB"
         
         # Crear ruta temporal para GDB (en una carpeta persistente para que dure 1 día)
         gdb_dir = os.path.join(temp_dir, 'backups_gdb_temporales')
