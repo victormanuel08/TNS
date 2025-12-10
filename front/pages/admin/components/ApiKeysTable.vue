@@ -258,5 +258,10 @@ defineEmits<{
   white-space: normal;
   max-width: 300px;
 }
+
+.data-table td:last-child {
+  position: relative;
+  overflow: visible;
+}
 </style>
 

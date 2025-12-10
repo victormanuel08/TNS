@@ -1,6 +1,8 @@
 import asyncio
 import re
 import logging
+import os
+import shutil
 from pathlib import Path
 from rest_framework import viewsets, status
 from rest_framework.decorators import action, permission_classes, authentication_classes
@@ -1236,6 +1238,112 @@ Sistema de Scraping DIAN'''
             'message': 'Scraping iniciado',
             'session_id': session.id
         }, status=status.HTTP_201_CREATED)
+
+    def destroy(self, request, *args, **kwargs):
+        """
+        Elimina una sesión y TODO lo relacionado:
+        - Documentos procesados
+        - Archivos (Excel, JSON, ZIP)
+        - Carpetas de facturas
+        - Descargas temporales
+        - Eventos enviados
+        - Clasificaciones contables relacionadas
+        """
+        from apps.sistema_analitico.models import ClasificacionContable
+        
+        session = self.get_object()
+        session_id = session.id
+        
+        logger.info(f"🗑️ [DELETE] Iniciando eliminación completa de sesión {session_id}")
+        
+        try:
+            # 1. Eliminar archivos del modelo
+            if session.excel_file:
+                try:
+                    if os.path.exists(session.excel_file.path):
+                        os.remove(session.excel_file.path)
+                        logger.info(f"✅ [DELETE] Archivo Excel eliminado: {session.excel_file.path}")
+                except Exception as e:
+                    logger.warning(f"⚠️ [DELETE] Error eliminando Excel: {e}")
+            
+            if session.json_file:
+                try:
+                    if os.path.exists(session.json_file.path):
+                        os.remove(session.json_file.path)
+                        logger.info(f"✅ [DELETE] Archivo JSON eliminado: {session.json_file.path}")
+                except Exception as e:
+                    logger.warning(f"⚠️ [DELETE] Error eliminando JSON: {e}")
+            
+            if session.zip_file:
+                try:
+                    if os.path.exists(session.zip_file.path):
+                        os.remove(session.zip_file.path)
+                        logger.info(f"✅ [DELETE] Archivo ZIP eliminado: {session.zip_file.path}")
+                except Exception as e:
+                    logger.warning(f"⚠️ [DELETE] Error eliminando ZIP: {e}")
+            
+            # 2. Eliminar carpeta de facturas (dian_facturas/session_{id}/)
+            facturas_dir = Path(settings.MEDIA_ROOT) / 'dian_facturas' / f'session_{session_id}'
+            if facturas_dir.exists():
+                try:
+                    shutil.rmtree(facturas_dir)
+                    logger.info(f"✅ [DELETE] Carpeta de facturas eliminada: {facturas_dir}")
+                except Exception as e:
+                    logger.warning(f"⚠️ [DELETE] Error eliminando carpeta de facturas: {e}")
+            
+            # 3. Eliminar descargas temporales relacionadas
+            descargas_temporales = DescargaTemporalDianZip.objects.filter(session=session)
+            count_descargas = descargas_temporales.count()
+            for descarga in descargas_temporales:
+                # Eliminar archivo ZIP temporal si existe
+                if descarga.ruta_zip_temporal:
+                    try:
+                        if os.path.exists(descarga.ruta_zip_temporal):
+                            os.remove(descarga.ruta_zip_temporal)
+                    except Exception as e:
+                        logger.warning(f"⚠️ [DELETE] Error eliminando ZIP temporal: {e}")
+            descargas_temporales.delete()
+            logger.info(f"✅ [DELETE] {count_descargas} descargas temporales eliminadas")
+            
+            # 4. Eliminar eventos enviados
+            eventos = EventoApidianEnviado.objects.filter(session=session)
+            count_eventos = eventos.count()
+            eventos.delete()
+            logger.info(f"✅ [DELETE] {count_eventos} eventos eliminados")
+            
+            # 5. Eliminar clasificaciones contables relacionadas
+            clasificaciones = ClasificacionContable.objects.filter(session_dian_id=session_id)
+            count_clasificaciones = clasificaciones.count()
+            clasificaciones.delete()
+            logger.info(f"✅ [DELETE] {count_clasificaciones} clasificaciones contables eliminadas")
+            
+            # 6. Eliminar documentos procesados (se eliminan automáticamente por CASCADE, pero lo hacemos explícito)
+            documentos = DocumentProcessed.objects.filter(session=session)
+            count_documentos = documentos.count()
+            documentos.delete()
+            logger.info(f"✅ [DELETE] {count_documentos} documentos procesados eliminados")
+            
+            # 7. Finalmente, eliminar la sesión
+            session.delete()
+            logger.info(f"✅ [DELETE] Sesión {session_id} eliminada completamente")
+            
+            return Response({
+                'message': 'Sesión y todos sus archivos relacionados eliminados correctamente',
+                'session_id': session_id,
+                'eliminado': {
+                    'documentos': count_documentos,
+                    'eventos': count_eventos,
+                    'descargas_temporales': count_descargas,
+                    'clasificaciones': count_clasificaciones
+                }
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.error(f"❌ [DELETE] Error eliminando sesión {session_id}: {e}", exc_info=True)
+            return Response(
+                {'error': f'Error al eliminar la sesión: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class DocumentProcessedViewSet(viewsets.ReadOnlyModelViewSet):

@@ -8,7 +8,8 @@ import secrets
 import time
 import requests
 import base64
-from datetime import datetime, timedelta
+from calendar import monthrange
+from datetime import datetime, timedelta, date
 from decimal import Decimal
 import firebirdsql
 
@@ -1226,6 +1227,26 @@ class CalendarioTributarioViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
         fecha_hasta_str = request.query_params.get('fecha_hasta')
         tipo_regimen = request.query_params.get('tipo_regimen')
         
+        # Soporte para year y month (compatibilidad con plugin Chrome)
+        # Si se proporcionan year y month, convertir a fecha_desde y fecha_hasta
+        year_str = request.query_params.get('year')
+        month_str = request.query_params.get('month')
+        if year_str and month_str and not fecha_desde_str and not fecha_hasta_str:
+            try:
+                year = int(year_str)
+                month = int(month_str)
+                # Validar rango de mes
+                if month < 1 or month > 12:
+                    raise ValueError("Mes inválido")
+                # Primer día del mes
+                fecha_desde_str = f"{year}-{month:02d}-01"
+                # Último día del mes
+                _, last_day = monthrange(year, month)
+                fecha_hasta_str = f"{year}-{month:02d}-{last_day:02d}"
+            except (ValueError, TypeError):
+                # Si hay error en la conversión, ignorar y usar fecha_desde/fecha_hasta si existen
+                pass
+        
         # Si tiene API Key y no especificó empresa/nit, retornar eventos de TODAS sus empresas + NITs de RUTs
         if tiene_api_key and not es_superusuario:
             empresas_autorizadas = request.empresas_autorizadas
@@ -1710,6 +1731,77 @@ class ContrasenaEntidadViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
             queryset = queryset.filter(empresa_servidor_id=empresa_id)
         
         return queryset.order_by('entidad__nombre', 'usuario')
+    
+    @action(detail=False, methods=['get'], url_path='nits-disponibles')
+    def nits_disponibles(self, request):
+        """
+        Lista los NITs disponibles para la API Key con su razón social.
+        Retorna NITs de empresas asociadas y sus razones sociales desde RUTs si están disponibles.
+        """
+        # Verificar autenticación: API Key o superusuario
+        tiene_api_key = hasattr(request, 'cliente_api') and request.cliente_api
+        es_superusuario = request.user.is_authenticated and request.user.is_superuser
+        
+        if not tiene_api_key and not es_superusuario:
+            return Response(
+                {
+                    'error': 'Se requiere API Key válida o autenticación de superusuario',
+                    'info': 'Si tienes una API Key, envíala en el header: Api-Key: <tu_api_key>'
+                },
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        nits_list = []
+        
+        if tiene_api_key and not es_superusuario:
+            empresas_autorizadas = request.empresas_autorizadas
+            nits_empresas = set(empresas_autorizadas.values_list('nit_normalizado', flat=True).distinct())
+            
+            # Obtener razones sociales desde RUTs si están disponibles
+            from .models import RUT
+            ruts = RUT.objects.filter(nit_normalizado__in=nits_empresas).values(
+                'nit_normalizado', 'razon_social', 'nit'
+            )
+            ruts_dict = {rut['nit_normalizado']: rut for rut in ruts}
+            
+            # Construir lista de NITs con razón social
+            for nit_norm in sorted(nits_empresas):
+                rut_info = ruts_dict.get(nit_norm, {})
+                nits_list.append({
+                    'nit_normalizado': nit_norm,
+                    'nit': rut_info.get('nit', nit_norm),
+                    'razon_social': rut_info.get('razon_social', 'N/A'),
+                    'tiene_claves': ContrasenaEntidad.objects.filter(nit_normalizado=nit_norm).exists()
+                })
+        else:
+            # Superusuario: retornar todos los NITs que tienen claves
+            from django.db.models import Count
+            nits_con_claves = ContrasenaEntidad.objects.values('nit_normalizado').annotate(
+                total=Count('id')
+            ).distinct()
+            
+            nits_set = set([item['nit_normalizado'] for item in nits_con_claves])
+            
+            # Obtener razones sociales desde RUTs
+            from .models import RUT
+            ruts = RUT.objects.filter(nit_normalizado__in=nits_set).values(
+                'nit_normalizado', 'razon_social', 'nit'
+            )
+            ruts_dict = {rut['nit_normalizado']: rut for rut in ruts}
+            
+            for nit_norm in sorted(nits_set):
+                rut_info = ruts_dict.get(nit_norm, {})
+                nits_list.append({
+                    'nit_normalizado': nit_norm,
+                    'nit': rut_info.get('nit', nit_norm),
+                    'razon_social': rut_info.get('razon_social', 'N/A'),
+                    'tiene_claves': True
+                })
+        
+        return Response({
+            'nits': nits_list,
+            'total': len(nits_list)
+        }, status=status.HTTP_200_OK)
 
 
 class UserTenantProfileViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
@@ -11208,6 +11300,291 @@ class BackupS3ViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
             logger.error(f"Error iniciando backup: {e}", exc_info=True)
             return Response(
                 {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=False, methods=['get'], url_path='servidores-disponibles')
+    def servidores_disponibles(self, request):
+        """
+        Lista los servidores disponibles para la API Key.
+        Solo retorna servidores que tienen empresas asociadas a la API Key.
+        """
+        # Verificar autenticación: API Key o superusuario
+        tiene_api_key = hasattr(request, 'cliente_api') and request.cliente_api
+        es_superusuario = request.user.is_authenticated and request.user.is_superuser
+        
+        if not tiene_api_key and not es_superusuario:
+            return Response(
+                {
+                    'error': 'Se requiere API Key válida o autenticación de superusuario',
+                    'info': 'Si tienes una API Key, envíala en el header: Api-Key: <tu_api_key>'
+                },
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        if tiene_api_key and not es_superusuario:
+            empresas_autorizadas = request.empresas_autorizadas
+            # Obtener servidores únicos de las empresas autorizadas
+            servidores = Servidor.objects.filter(
+                empresas_servidor__in=empresas_autorizadas
+            ).distinct().values('id', 'nombre')
+            
+            servidores_list = [
+                {
+                    'id': s['id'],
+                    'nombre': s['nombre'],
+                    'nombre_normalizado': s['nombre'].replace(' ', '_').replace('/', '_').replace('\\', '_')
+                }
+                for s in servidores
+            ]
+        else:
+            # Superusuario: todos los servidores
+            servidores = Servidor.objects.all().values('id', 'nombre')
+            servidores_list = [
+                {
+                    'id': s['id'],
+                    'nombre': s['nombre'],
+                    'nombre_normalizado': s['nombre'].replace(' ', '_').replace('/', '_').replace('\\', '_')
+                }
+                for s in servidores
+            ]
+        
+        return Response({
+            'servidores': servidores_list,
+            'total': len(servidores_list)
+        }, status=status.HTTP_200_OK)
+    
+    @action(detail=False, methods=['get'], url_path='listar-archivos')
+    def listar_archivos_s3(self, request):
+        """
+        Lista archivos y carpetas en S3 para un servidor específico.
+        Solo muestra NITs autorizados para la API Key.
+        
+        Parámetros:
+        - servidor_id: ID del servidor (requerido)
+        - prefix: Prefijo de ruta en S3 (opcional, para navegar carpetas)
+        """
+        # Verificar autenticación
+        tiene_api_key = hasattr(request, 'cliente_api') and request.cliente_api
+        es_superusuario = request.user.is_authenticated and request.user.is_superuser
+        
+        if not tiene_api_key and not es_superusuario:
+            return Response(
+                {
+                    'error': 'Se requiere API Key válida o autenticación de superusuario',
+                    'info': 'Si tienes una API Key, envíala en el header: Api-Key: <tu_api_key>'
+                },
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        servidor_id = request.query_params.get('servidor_id')
+        prefix = request.query_params.get('prefix', '').strip()
+        
+        if not servidor_id:
+            return Response(
+                {'error': 'Se requiere servidor_id'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            servidor = Servidor.objects.get(id=servidor_id)
+        except Servidor.DoesNotExist:
+            return Response(
+                {'error': 'Servidor no encontrado'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Validar que el servidor esté autorizado
+        if tiene_api_key and not es_superusuario:
+            empresas_autorizadas = request.empresas_autorizadas
+            if not empresas_autorizadas.filter(servidor_id=servidor_id).exists():
+                return Response(
+                    {'error': 'No tienes permiso para acceder a este servidor'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            nits_autorizados = set(empresas_autorizadas.values_list('nit_normalizado', flat=True))
+        else:
+            nits_autorizados = None  # Superusuario: todos los NITs
+        
+        # Obtener configuración S3 activa
+        try:
+            config_s3 = ConfiguracionS3.objects.filter(activo=True).first()
+            if not config_s3:
+                return Response(
+                    {'error': 'No hay configuración S3 activa'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        except Exception as e:
+            logger.error(f"Error obteniendo configuración S3: {e}", exc_info=True)
+            return Response(
+                {'error': 'Error obteniendo configuración S3'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+        try:
+            from .services.backup_s3_service import BackupS3Service
+            servicio = BackupS3Service(config_s3)
+            
+            # Normalizar nombre del servidor
+            server_name = servidor.nombre.replace(' ', '_').replace('/', '_').replace('\\', '_')
+            
+            # Construir prefijo base
+            if prefix:
+                base_prefix = prefix
+            else:
+                base_prefix = f"{server_name}/"
+            
+            # Listar objetos en S3
+            paginator = servicio.s3_client.get_paginator('list_objects_v2')
+            pages = paginator.paginate(Bucket=servicio.bucket_name, Prefix=base_prefix, Delimiter='/')
+            
+            carpetas = []
+            archivos = []
+            
+            for page in pages:
+                # Carpetas (CommonPrefixes)
+                if 'CommonPrefixes' in page:
+                    for prefix_obj in page['CommonPrefixes']:
+                        folder_path = prefix_obj['Prefix']
+                        folder_name = folder_path.replace(base_prefix, '').rstrip('/')
+                        
+                        # Validar que la carpeta pertenezca a un NIT autorizado
+                        if nits_autorizados is not None:
+                            # Extraer NIT del path: server_name/nit_normalizado/...
+                            parts = folder_path.split('/')
+                            if len(parts) >= 2:
+                                nit_en_path = parts[1]  # Segundo elemento es el NIT
+                                if nit_en_path not in nits_autorizados:
+                                    continue
+                        
+                        carpetas.append({
+                            'nombre': folder_name,
+                            'ruta': folder_path,
+                            'tipo': 'carpeta'
+                        })
+                
+                # Archivos
+                if 'Contents' in page:
+                    for obj in page['Contents']:
+                        # Omitir "carpetas" (objetos que terminan en /)
+                        if obj['Key'].endswith('/'):
+                            continue
+                        
+                        file_path = obj['Key']
+                        file_name = file_path.replace(base_prefix, '')
+                        
+                        # Validar que el archivo pertenezca a un NIT autorizado
+                        if nits_autorizados is not None:
+                            parts = file_path.split('/')
+                            if len(parts) >= 2:
+                                nit_en_path = parts[1]
+                                if nit_en_path not in nits_autorizados:
+                                    continue
+                        
+                        archivos.append({
+                            'nombre': file_name,
+                            'ruta': file_path,
+                            'tipo': 'archivo',
+                            'tamano': obj['Size'],
+                            'fecha_modificacion': obj['LastModified'].isoformat() if 'LastModified' in obj else None
+                        })
+            
+            return Response({
+                'carpetas': sorted(carpetas, key=lambda x: x['nombre']),
+                'archivos': sorted(archivos, key=lambda x: x['nombre']),
+                'prefijo_actual': base_prefix,
+                'servidor': {
+                    'id': servidor.id,
+                    'nombre': servidor.nombre
+                }
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.error(f"Error listando archivos S3: {e}", exc_info=True)
+            return Response(
+                {'error': f'Error listando archivos: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=False, methods=['get'], url_path='descargar-archivo')
+    def descargar_archivo_s3(self, request):
+        """
+        Genera una URL temporal para descargar un archivo de S3.
+        
+        Parámetros:
+        - ruta: Ruta completa del archivo en S3 (requerido)
+        """
+        # Verificar autenticación
+        tiene_api_key = hasattr(request, 'cliente_api') and request.cliente_api
+        es_superusuario = request.user.is_authenticated and request.user.is_superuser
+        
+        if not tiene_api_key and not es_superusuario:
+            return Response(
+                {
+                    'error': 'Se requiere API Key válida o autenticación de superusuario',
+                    'info': 'Si tienes una API Key, envíala en el header: Api-Key: <tu_api_key>'
+                },
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        ruta = request.query_params.get('ruta')
+        if not ruta:
+            return Response(
+                {'error': 'Se requiere el parámetro ruta'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Validar que la ruta pertenezca a un NIT autorizado
+        if tiene_api_key and not es_superusuario:
+            empresas_autorizadas = request.empresas_autorizadas
+            nits_autorizados = set(empresas_autorizadas.values_list('nit_normalizado', flat=True))
+            
+            # Extraer NIT del path
+            parts = ruta.split('/')
+            if len(parts) >= 2:
+                nit_en_path = parts[1]
+                if nit_en_path not in nits_autorizados:
+                    return Response(
+                        {'error': 'No tienes permiso para acceder a este archivo'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+        
+        # Obtener configuración S3
+        try:
+            config_s3 = ConfiguracionS3.objects.filter(activo=True).first()
+            if not config_s3:
+                return Response(
+                    {'error': 'No hay configuración S3 activa'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        except Exception as e:
+            logger.error(f"Error obteniendo configuración S3: {e}", exc_info=True)
+            return Response(
+                {'error': 'Error obteniendo configuración S3'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+        try:
+            from .services.backup_s3_service import BackupS3Service
+            servicio = BackupS3Service(config_s3)
+            
+            # Generar URL presignada (válida por 1 hora)
+            url = servicio.s3_client.generate_presigned_url(
+                'get_object',
+                Params={'Bucket': servicio.bucket_name, 'Key': ruta},
+                ExpiresIn=3600
+            )
+            
+            return Response({
+                'url': url,
+                'ruta': ruta,
+                'expira_en': 3600
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.error(f"Error generando URL de descarga: {e}", exc_info=True)
+            return Response(
+                {'error': f'Error generando URL de descarga: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     

@@ -2814,20 +2814,31 @@
                 v-model="rutSearchQuery"
                 type="text"
                 class="form-input"
-                placeholder="Ej: 900869750 o Nombre de empresa..."
+                placeholder="Ej: 900869750 o Nombre de empresa... (dejar vacío para ver todos)"
                 @keyup.enter="searchRuts"
+                style="flex: 1;"
               />
               <button
                 class="btn-primary"
                 @click="searchRuts"
-                :disabled="searchingRuts || !rutSearchQuery.trim()"
+                :disabled="searchingRuts"
               >
                 <span v-if="searchingRuts">⟳</span>
                 <span v-else>🔍</span>
                 Buscar
               </button>
+              <button
+                class="btn-secondary"
+                @click="loadAllRuts"
+                :disabled="searchingRuts"
+                title="Cargar todos los RUTs disponibles"
+              >
+                <span v-if="searchingRuts">⟳</span>
+                <span v-else>📋</span>
+                Ver Todos
+              </button>
             </div>
-            <small>Busca RUTs para asociarlos a esta API Key. Los NITs asociados aparecerán en el calendario tributario.</small>
+            <small>Busca RUTs para asociarlos a esta API Key. Los NITs asociados aparecerán en el calendario tributario. Deja el campo vacío y presiona "Ver Todos" para listar todos los RUTs disponibles.</small>
           </div>
 
           <!-- Resultados de búsqueda -->
@@ -5518,34 +5529,6 @@ const requestGdbDownload = async (backupId: number, empresa: any | null) => {
 const requestFbkDownload = async (backupId: number, empresa: any | null) => {
   await solicitarDescargaBackup(backupId, 'fbk', empresa)
 }
-    
-    await Swal.fire({
-      title: 'Solicitud recibida',
-      html: `
-        <p>Se está procesando la conversión a GDB.</p>
-        <p>Recibirás un correo en <strong>${emailResult.value}</strong> con el link de descarga en breve.</p>
-        <p><small>El link será válido por 24 horas.</small></p>
-      `,
-      icon: 'success',
-      confirmButtonText: 'Aceptar',
-      customClass: { container: 'swal-z-index-fix' }
-    })
-    
-    // Recargar lista de empresas para actualizar último backup
-    if (selectedServerForEmpresas.value) {
-      await viewServerEmpresas(selectedServerForEmpresas.value)
-    }
-  } catch (error: any) {
-    console.error('Error solicitando descarga GDB:', error)
-    await Swal.fire({
-      title: 'Error',
-      text: error?.data?.error || error?.message || 'Error al solicitar la descarga',
-      icon: 'error',
-      confirmButtonText: 'Aceptar',
-      customClass: { container: 'swal-z-index-fix' }
-    })
-  }
-}
 
 const descargarUltimoBackupEmpresa = async (empresaId: number) => {
   try {
@@ -6740,17 +6723,17 @@ const loadCalendarioNits = async () => {
 }
 
 const searchRuts = async () => {
-  if (!rutSearchQuery.value.trim()) return
-  
   searchingRuts.value = true
   try {
     const query = rutSearchQuery.value.trim()
-    const response = await api.get('/api/ruts/', {
-      params: {
-        search: query,
-        limit: 50
-      }
-    })
+    const params: any = { limit: 200 }
+    
+    // Solo agregar search si hay query
+    if (query) {
+      params.search = query
+    }
+    
+    const response = await api.get('/api/ruts/', { params })
     
     // Si es un array, usar directamente; si es objeto con results, usar results
     const ruts = Array.isArray(response) ? response : (response.results || [])
@@ -6781,6 +6764,11 @@ const searchRuts = async () => {
   } finally {
     searchingRuts.value = false
   }
+}
+
+const loadAllRuts = async () => {
+  rutSearchQuery.value = ''
+  await searchRuts()
 }
 
 const asociarNitsCalendario = async () => {
