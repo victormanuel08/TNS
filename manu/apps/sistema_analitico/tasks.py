@@ -789,15 +789,103 @@ def convertir_backup_a_gdb_task(self, descarga_temporal_id: int):
             descarga.save()
             raise ValueError('No se encontró gbak para convertir el backup')
         
+        # Verificar si el servidor Firebird está corriendo (gbak -c lo requiere)
+        # Intentar verificar con systemctl o ps
+        firebird_running = False
+        try:
+            # Verificar si firebird está corriendo
+            check_firebird = subprocess.run(
+                ['systemctl', 'is-active', '--quiet', 'firebird2.5'],
+                capture_output=True,
+                timeout=2
+            )
+            if check_firebird.returncode == 0:
+                firebird_running = True
+                logger.info("✅ Servidor Firebird 2.5 está corriendo")
+        except:
+            try:
+                # Intentar con firebird3.0
+                check_firebird = subprocess.run(
+                    ['systemctl', 'is-active', '--quiet', 'firebird3.0'],
+                    capture_output=True,
+                    timeout=2
+                )
+                if check_firebird.returncode == 0:
+                    firebird_running = True
+                    logger.info("✅ Servidor Firebird 3.0 está corriendo")
+            except:
+                pass
+        
+        if not firebird_running:
+            # Intentar verificar con ps
+            try:
+                check_ps = subprocess.run(
+                    ['ps', 'aux'],
+                    capture_output=True,
+                    text=True,
+                    timeout=2
+                )
+                if 'firebird' in check_ps.stdout.lower() or 'fbserver' in check_ps.stdout.lower():
+                    firebird_running = True
+                    logger.info("✅ Servidor Firebird detectado en procesos")
+            except:
+                pass
+        
+        if not firebird_running:
+            logger.warning("⚠️ Servidor Firebird no detectado como corriendo. Intentando iniciarlo...")
+            # Intentar iniciar firebird2.5
+            try:
+                start_result = subprocess.run(
+                    ['sudo', 'systemctl', 'start', 'firebird2.5'],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                if start_result.returncode == 0:
+                    logger.info("✅ Servidor Firebird 2.5 iniciado exitosamente")
+                    firebird_running = True
+                    # Esperar un momento para que el servidor se inicie completamente
+                    import time
+                    time.sleep(2)
+                else:
+                    logger.warning(f"⚠️ No se pudo iniciar firebird2.5: {start_result.stderr}")
+            except Exception as e:
+                logger.warning(f"⚠️ Error al intentar iniciar firebird2.5: {e}")
+            
+            # Si aún no está corriendo, intentar con firebird3.0
+            if not firebird_running:
+                try:
+                    start_result = subprocess.run(
+                        ['sudo', 'systemctl', 'start', 'firebird3.0'],
+                        capture_output=True,
+                        text=True,
+                        timeout=10
+                    )
+                    if start_result.returncode == 0:
+                        logger.info("✅ Servidor Firebird 3.0 iniciado exitosamente")
+                        firebird_running = True
+                        import time
+                        time.sleep(2)
+                    else:
+                        logger.warning(f"⚠️ No se pudo iniciar firebird3.0: {start_result.stderr}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Error al intentar iniciar firebird3.0: {e}")
+            
+            if not firebird_running:
+                logger.error("❌ No se pudo iniciar el servidor Firebird. gbak -c requiere que el servidor esté corriendo.")
+                logger.error("💡 Inicia manualmente con: sudo systemctl start firebird2.5 (o firebird3.0)")
+        
         # Asegurar que el archivo de destino no exista (gbak -c requiere que no exista)
         if os.path.exists(temp_gdb):
             logger.warning(f"⚠️ El archivo GDB ya existe, eliminándolo: {temp_gdb}")
             os.remove(temp_gdb)
         
         # Convertir FBK a GDB
-        # Para archivos locales, usar formato explícito: localhost:/ruta/archivo.gdb
-        # Esto evita que Firebird intente hacer conexión de red
-        temp_gdb_firebird = f"localhost:{temp_gdb}"
+        # NOTA: gbak -c requiere que el servidor Firebird esté corriendo
+        # Para archivos locales, intentar primero sin prefijo, luego con localhost:
+        # Si la ruta es absoluta y local, usar directamente sin prefijo
+        # Si falla, intentar con localhost: (requiere servidor Firebird corriendo)
+        temp_gdb_firebird = temp_gdb  # Intentar primero sin prefijo
         
         comando = [
             gbak_path,
@@ -806,7 +894,7 @@ def convertir_backup_a_gdb_task(self, descarga_temporal_id: int):
             '-user', 'SYSDBA',
             '-password', 'masterkey',
             temp_fbk,  # Archivo FBK de origen (local)
-            temp_gdb_firebird  # Archivo GDB de destino (especificar localhost: para archivo local)
+            temp_gdb_firebird  # Archivo GDB de destino (ruta local sin prefijo)
         ]
         
         logger.info(f"⏳ Convirtiendo backup a GDB: {' '.join(comando)}")
@@ -826,6 +914,24 @@ def convertir_backup_a_gdb_task(self, descarga_temporal_id: int):
             env=env
         )
         
+        # Si falla con "Unable to complete network request", intentar con localhost:
+        if resultado.returncode != 0:
+            error_msg = resultado.stderr or resultado.stdout or "Error desconocido"
+            if "Unable to complete network request" in error_msg or "failed to create database" in error_msg:
+                logger.warning(f"⚠️ Primer intento falló, intentando con formato localhost:...")
+                # Intentar con localhost: (requiere servidor Firebird corriendo)
+                temp_gdb_firebird = f"localhost:{temp_gdb}"
+                comando[7] = temp_gdb_firebird  # Actualizar el último argumento
+                logger.info(f"🔄 Reintentando con: {' '.join(comando)}")
+                
+                resultado = subprocess.run(
+                    comando,
+                    capture_output=True,
+                    text=True,
+                    timeout=600,
+                    env=env
+                )
+        
         # Limpiar FBK temporal
         if os.path.exists(temp_fbk):
             os.remove(temp_fbk)
@@ -833,6 +939,9 @@ def convertir_backup_a_gdb_task(self, descarga_temporal_id: int):
         if resultado.returncode != 0:
             error_msg = resultado.stderr or resultado.stdout or "Error desconocido"
             logger.error(f"❌ Error convirtiendo backup a GDB: {error_msg}")
+            # Agregar mensaje más claro si el problema es el servidor Firebird
+            if "Unable to complete network request" in error_msg:
+                error_msg += "\n\n💡 NOTA: gbak -c requiere que el servidor Firebird esté corriendo. Verifica con: sudo systemctl status firebird2.5 o firebird3.0"
             descarga.estado = 'expirado'
             descarga.save()
             raise Exception(f'Error al convertir backup a GDB: {error_msg}')
