@@ -103,6 +103,34 @@ def obtener_eventos_calendario_tributario(
         filtro_fecha
     ).select_related('impuesto', 'tipo_tercero', 'tipo_regimen').order_by('fecha_limite')
     
+    # Obtener información del RUT para este NIT (razón social y NIT completo)
+    rut_info = None
+    try:
+        rut = RUT.objects.get(nit_normalizado=nit_normalizado)
+        rut_info = {
+            'nit': rut.nit or rut.nit_normalizado,
+            'nit_normalizado': rut.nit_normalizado,
+            'razon_social': rut.razon_social or '',
+            'dv': rut.dv or ''
+        }
+    except RUT.DoesNotExist:
+        # Si no hay RUT, intentar obtener desde EmpresaServidor
+        try:
+            empresa = EmpresaServidor.objects.get(nit_normalizado=nit_normalizado)
+            rut_info = {
+                'nit': empresa.nit or empresa.nit_normalizado,
+                'nit_normalizado': empresa.nit_normalizado,
+                'razon_social': empresa.razon_social or empresa.nombre or '',
+                'dv': empresa.dv or ''
+            }
+        except EmpresaServidor.DoesNotExist:
+            rut_info = {
+                'nit': nit_normalizado,
+                'nit_normalizado': nit_normalizado,
+                'razon_social': '',
+                'dv': ''
+            }
+    
     # Convertir a lista de diccionarios
     eventos = []
     for vigencia in vigencias:
@@ -118,7 +146,11 @@ def obtener_eventos_calendario_tributario(
             'tipo_tercero': vigencia.tipo_tercero.codigo if vigencia.tipo_tercero else None,
             'tipo_regimen': vigencia.tipo_regimen.codigo if vigencia.tipo_regimen else None,
             'digitos_nit': vigencia.digitos_nit or 'TODOS',
-            'dias_restantes': (vigencia.fecha_limite - date.today()).days if vigencia.fecha_limite else None
+            'dias_restantes': (vigencia.fecha_limite - date.today()).days if vigencia.fecha_limite else None,
+            'nit': rut_info['nit'],
+            'nit_normalizado': rut_info['nit_normalizado'],
+            'razon_social': rut_info['razon_social'],
+            'dv': rut_info['dv']
         })
     
     return eventos
