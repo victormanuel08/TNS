@@ -542,6 +542,10 @@ def realizar_backup_empresa_task(self, empresa_id: int, configuracion_s3_id: int
         
         logger.info(f"🔄 Iniciando backup para empresa {empresa.nombre} (ID: {empresa_id})")
         
+        # Crear servicio
+        servicio = BackupS3Service(config_s3)
+        
+        # Paso 1: Crear backup local
         self.update_state(
             state='PROCESSING',
             meta={
@@ -552,19 +556,8 @@ def realizar_backup_empresa_task(self, empresa_id: int, configuracion_s3_id: int
         )
         logger.info(f"📦 Paso 1/3: Creando backup local con gbak para {empresa.nombre}...")
         
-        # Crear servicio y realizar backup
-        servicio = BackupS3Service(config_s3)
-        
-        self.update_state(
-            state='PROCESSING',
-            meta={
-                'empresa_id': empresa_id,
-                'empresa_nombre': empresa.nombre,
-                'status': 'Paso 2/3: Subiendo a S3...'
-            }
-        )
-        logger.info(f"☁️ Paso 2/3: Subiendo backup a S3 (Contabo) para {empresa.nombre}...")
-        
+        # Realizar backup completo (esto incluye crear backup local, subir a S3 y aplicar retención)
+        # El servicio actualizará el progreso internamente
         exito, backup_s3, mensaje_error = servicio.realizar_backup_completo(empresa)
         
         if exito:

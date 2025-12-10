@@ -3,14 +3,14 @@
     <table class="data-table">
       <thead>
         <tr>
-          <th>CODIGO</th>
-          <th>NOMBRE</th>
-          <th>NIT</th>
-          <th>REPRES</th>
-          <th>ANOFIS</th>
-          <th>ARCHIVO</th>
-          <th>Último Backup</th>
-          <th>Acciones</th>
+          <th style="width: 80px;">CODIGO</th>
+          <th style="min-width: 200px;">NOMBRE</th>
+          <th style="width: 120px;">NIT</th>
+          <th style="min-width: 150px;">REPRES</th>
+          <th style="width: 70px;">ANOFIS</th>
+          <th style="min-width: 150px;">ARCHIVO</th>
+          <th style="min-width: 180px;">Último Backup</th>
+          <th style="width: 60px;">Acciones</th>
         </tr>
       </thead>
       <tbody>
@@ -61,14 +61,13 @@
             <span v-else class="text-muted">Sin backup</span>
           </td>
           <td>
-            <DropdownMenu>
+            <DropdownMenu trigger-class="btn-menu-icon">
               <template #trigger>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <circle cx="12" cy="12" r="1"/>
                   <circle cx="12" cy="5" r="1"/>
                   <circle cx="12" cy="19" r="1"/>
                 </svg>
-                Menú
               </template>
               <DropdownItem @click="$emit('create-backup', empresa.id)">
                 📦 Crear Backup
@@ -195,6 +194,61 @@ defineEmits<{
   text-align: center;
   padding: 2rem;
   color: #6b7280;
+}
+
+:deep(.btn-menu-icon) {
+  padding: 0.5rem;
+  min-width: auto;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  color: #4b5563;
+  transition: all 0.2s;
+  cursor: pointer;
+}
+
+:deep(.btn-menu-icon:hover) {
+  background: #e5e7eb;
+  border-color: #d1d5db;
+  color: #1f2937;
+}
+
+:deep(.btn-menu-icon.active) {
+  background: #1f2937;
+  border-color: #1f2937;
+  color: white;
+}
+
+.data-table {
+  table-layout: auto;
+  width: 100%;
+}
+
+.data-table td {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 0;
+}
+
+.data-table td:nth-child(2) {
+  white-space: normal;
+  max-width: 200px;
+}
+
+.data-table td:nth-child(4) {
+  white-space: normal;
+  max-width: 150px;
+}
+
+.data-table td:nth-child(6) {
+  white-space: normal;
+  max-width: 150px;
 }
 </style>
 

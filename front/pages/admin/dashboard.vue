@@ -173,20 +173,46 @@
                     </span>
                   </td>
                   <td>
-                    <div class="action-buttons">
-                      <button class="btn-small btn-primary" @click="openExtractDataModal(empresa)" title="Extraer datos">
+                    <DropdownMenu trigger-class="btn-menu-icon">
+                      <template #trigger>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <circle cx="12" cy="12" r="1"/>
+                          <circle cx="12" cy="5" r="1"/>
+                          <circle cx="12" cy="19" r="1"/>
+                        </svg>
+                      </template>
+                      <DropdownItem @click="hacerBackupEmpresa(empresa.id)">
+                        📦 Crear Backup
+                      </DropdownItem>
+                      <DropdownItem 
+                        v-if="empresa.ultimo_backup"
+                        @click="downloadBackupFromEmpresa(empresa.ultimo_backup.id, 'fbk')"
+                      >
+                        ⬇️ Descargar Último Backup (FBK)
+                      </DropdownItem>
+                      <DropdownItem 
+                        v-if="empresa.ultimo_backup"
+                        @click="requestGdbDownload(empresa.ultimo_backup.id, empresa)"
+                      >
+                        📧 Solicitar GDB por Email
+                      </DropdownItem>
+                      <DropdownDivider />
+                      <DropdownItem @click="openExtractDataModal(empresa)">
                         📥 Extraer Datos
-                      </button>
-                      <button class="btn-small btn-secondary" @click="editEmpresaSQL(empresa)" title="Editar Consulta SQL">
-                        📝 SQL
-                      </button>
-                      <button class="btn-small btn-secondary" @click="editEmpresaConfig(empresa)" title="Editar Configuración">
-                        ⚙️ Config
-                      </button>
-                      <button class="btn-small btn-info" @click="viewEmpresaDetails(empresa.id)" title="Ver detalles">
-                        👁️
-                      </button>
-                    </div>
+                      </DropdownItem>
+                      <DropdownItem @click="editEmpresaSQL(empresa)">
+                        📝 Editar SQL
+                      </DropdownItem>
+                      <DropdownItem @click="editEmpresaConfig(empresa)">
+                        ⚙️ Editar Config
+                      </DropdownItem>
+                      <DropdownItem @click="editEmpresa(empresa)">
+                        ✏️ Editar
+                      </DropdownItem>
+                      <DropdownItem @click="viewEmpresaDetails(empresa.id)">
+                        👁️ Ver Detalles
+                      </DropdownItem>
+                    </DropdownMenu>
                   </td>
                 </tr>
               </tbody>
@@ -2639,7 +2665,10 @@
         </div>
         <form @submit.prevent="createApiKey" class="modal-form">
           <div class="form-group">
-            <label>NIT *</label>
+            <label>
+              NIT *
+              <span class="tooltip-icon" title="Número de Identificación Tributaria del cliente. Debe ser único en el sistema. Se usa para identificar y asociar automáticamente las empresas del cliente a esta API Key.">❓</span>
+            </label>
             <select 
               v-model="newApiKey.nit" 
               required 
@@ -2651,10 +2680,13 @@
                 {{ nitOption.nit }} - {{ nitOption.nombre }}
               </option>
             </select>
-            <small>Selecciona un NIT y el nombre se llenará automáticamente</small>
+            <small>Selecciona un NIT y el nombre se llenará automáticamente. El sistema asociará automáticamente todas las empresas con este NIT.</small>
           </div>
           <div class="form-group">
-            <label>Nombre del Cliente *</label>
+            <label>
+              Nombre del Cliente *
+              <span class="tooltip-icon" title="Nombre o razón social del cliente. Se usa para identificar la API Key en listados y reportes. Se llena automáticamente al seleccionar el NIT.">❓</span>
+            </label>
             <input 
               v-model="newApiKey.nombre_cliente" 
               type="text" 
@@ -2664,7 +2696,10 @@
             />
           </div>
           <div class="form-group">
-            <label>Servidor (Opcional)</label>
+            <label>
+              Servidor (Opcional)
+              <span class="tooltip-icon" title="Si seleccionas un servidor específico, la API Key solo tendrá acceso a empresas de ese servidor. Si no seleccionas (Todos los servidores), la API Key tendrá acceso a todas las empresas del NIT en todos los servidores. Útil para restringir acceso por ubicación o tipo de servidor.">❓</span>
+            </label>
             <select 
               v-model="newApiKey.servidor" 
               class="form-input"
@@ -2677,7 +2712,10 @@
             <small>Si seleccionas un servidor, la API Key solo tendrá acceso a empresas de ese servidor. Si no seleccionas, tendrá acceso a todas las empresas del NIT en todos los servidores.</small>
           </div>
           <div class="form-group">
-            <label>Días de Validez</label>
+            <label>
+              Días de Validez
+              <span class="tooltip-icon" title="Número de días desde la creación hasta que la API Key expire automáticamente. Después de la fecha de caducidad, la API Key no podrá usarse aunque esté activa. Rango: 1 a 3650 días (10 años). Por defecto: 365 días (1 año).">❓</span>
+            </label>
             <input 
               v-model.number="newApiKey.dias_validez" 
               type="number" 
@@ -2686,7 +2724,7 @@
               class="form-input" 
               placeholder="365"
             />
-            <small>Número de días que la API Key será válida (por defecto: 365 días)</small>
+            <small>Número de días que la API Key será válida (por defecto: 365 días). Rango: 1 a 3650 días.</small>
           </div>
           <div class="modal-actions">
             <button type="button" class="btn-secondary" @click="showCreateApiKey = false">Cancelar</button>
@@ -3696,6 +3734,9 @@ import EmpresasTable from './components/EmpresasTable.vue'
 import CalendarioTributarioTable from './components/CalendarioTributarioTable.vue'
 import UsuariosTable from './components/UsuariosTable.vue'
 import ApiKeysTable from './components/ApiKeysTable.vue'
+import DropdownMenu from './components/DropdownMenu.vue'
+import DropdownItem from './components/DropdownItem.vue'
+import DropdownDivider from './components/DropdownDivider.vue'
 import Tabs from './components/Tabs.vue'
 import SearchBar from './components/SearchBar.vue'
 import Pagination from './components/Pagination.vue'
@@ -4389,8 +4430,15 @@ const loadServers = async () => {
 const loadEmpresas = async () => {
   loadingEmpresas.value = true
   try {
-    const response = await api.get<any>('/api/empresas-servidor/')
-    const data = Array.isArray(response) ? response : (response as any).results || []
+    // Primero cargar empresas
+    const empresasResponse = await api.get<any>('/api/empresas-servidor/')
+    const data = Array.isArray(empresasResponse) ? empresasResponse : (empresasResponse as any).results || []
+    
+    // Luego cargar backups para todas las empresas
+    const empresaIds = data.map((e: any) => e.id).join(',')
+    const backupsResponse = await api.get<any>(`/api/empresas-servidor/ultimos_backups_masivo/?empresa_ids=${empresaIds}`).catch(() => ({ backups: {} }))
+    const backupsDict = backupsResponse?.backups || {}
+    
     empresas.value = data.map((e: any) => {
       // El backend puede devolver servidor_nombre directamente o como objeto servidor
       let servidorNombre = '-'
@@ -4422,7 +4470,8 @@ const loadEmpresas = async () => {
         codigo: e.codigo || '',
         servidor_nombre: servidorNombre,
         servidor: servidorId || (typeof e.servidor === 'object' ? e.servidor.id : e.servidor),
-        estado: e.estado || 'ACTIVO'
+        estado: e.estado || 'ACTIVO',
+        ultimo_backup: backupsDict[e.id] || null
       }
     })
   } catch (error) {
@@ -5176,25 +5225,26 @@ const exportEmpresas = () => {
 const viewServerEmpresas = async (serverId: number) => {
   selectedServerForEmpresas.value = serverId
   loadingServerEmpresas.value = true
+  
+  // Asegurar que activeS3Config esté cargado
+  if (!activeS3Config.value) {
+    await loadS3Config()
+  }
+  
   try {
-    const empresasResponse = await api.get<any>(`/api/empresas-servidor/?servidor=${serverId}`)
-    const empresasData = Array.isArray(empresasResponse) ? empresasResponse : (empresasResponse as any).results || []
+    // Cargar empresas y últimos backups en paralelo (optimizado)
+    const [empresasResponse, backupsResponse] = await Promise.all([
+      api.get<any>(`/api/empresas-servidor/?servidor=${serverId}`),
+      api.get<any>(`/api/empresas-servidor/ultimos_backups_masivo/?servidor_id=${serverId}`).catch(() => ({ backups: {} }))
+    ])
     
-    // Cargar último backup para cada empresa
-    for (const empresa of empresasData) {
-      try {
-        const ultimoBackup = await api.get<any>(`/api/empresas-servidor/${empresa.id}/ultimo_backup/`)
-        empresa.ultimo_backup = ultimoBackup || null
-      } catch (error: any) {
-        // 404 significa que no hay backups, lo cual es válido
-        if (error?.status === 404 || error?.statusCode === 404) {
-          empresa.ultimo_backup = null
-        } else {
-          console.warn(`Error obteniendo último backup para empresa ${empresa.id}:`, error)
-          empresa.ultimo_backup = null
-        }
-      }
-    }
+    const empresasData = Array.isArray(empresasResponse) ? empresasResponse : (empresasResponse as any).results || []
+    const backupsDict = backupsResponse?.backups || {}
+    
+    // Asignar último backup a cada empresa
+    empresasData.forEach((empresa: any) => {
+      empresa.ultimo_backup = backupsDict[empresa.id] || null
+    })
     
     serverEmpresasList.value = empresasData
     empresasPagination.reset()
@@ -5260,11 +5310,16 @@ const saveEmpresa = async () => {
 }
 
 const hacerBackupEmpresa = async (empresaId: number) => {
+  // Asegurar que activeS3Config esté cargado
+  if (!activeS3Config.value) {
+    await loadS3Config()
+  }
+  
   if (!activeS3Config.value || !activeS3Config.value.id) {
     const Swal = (await import('sweetalert2')).default
     await Swal.fire({
       title: 'Configuración S3',
-      text: 'Debes guardar una configuración S3 activa antes de crear backups.',
+      text: 'No hay configuración S3 activa. Por favor, configura S3 en la pestaña "Backups S3" antes de crear backups.',
       icon: 'warning',
       confirmButtonText: 'Aceptar',
       customClass: { container: 'swal-z-index-fix' }
@@ -10725,5 +10780,47 @@ onMounted(async () => {
   text-align: center;
   color: #9ca3af;
   font-size: 0.875rem;
+}
+
+.tooltip-icon {
+  display: inline-block;
+  margin-left: 0.5rem;
+  cursor: help;
+  color: #6b7280;
+  font-size: 0.875rem;
+  vertical-align: middle;
+  position: relative;
+}
+
+.tooltip-icon:hover {
+  color: #1f2937;
+}
+
+:deep(.btn-menu-icon) {
+  padding: 0.5rem;
+  min-width: auto;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  color: #4b5563;
+  transition: all 0.2s;
+  cursor: pointer;
+}
+
+:deep(.btn-menu-icon:hover) {
+  background: #e5e7eb;
+  border-color: #d1d5db;
+  color: #1f2937;
+}
+
+:deep(.btn-menu-icon.active) {
+  background: #1f2937;
+  border-color: #1f2937;
+  color: white;
 }
 </style>

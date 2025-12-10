@@ -587,6 +587,75 @@ class EmpresaServidorViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
+    @action(detail=False, methods=['get'])
+    def ultimos_backups_masivo(self, request):
+        """
+        Obtiene los últimos backups de múltiples empresas en una sola petición.
+        Optimizado para evitar N+1 queries.
+        
+        Query params:
+        - empresa_ids: Lista de IDs de empresas separados por comas (ej: "1,2,3")
+        - servidor_id: ID del servidor (alternativa a empresa_ids)
+        """
+        try:
+            from .models import BackupS3
+            from .serializers import BackupS3Serializer
+            from django.db.models import Max
+            
+            empresa_ids_param = request.query_params.get('empresa_ids')
+            servidor_id = request.query_params.get('servidor_id')
+            
+            # Obtener lista de empresas
+            if empresa_ids_param:
+                empresa_ids = [int(id.strip()) for id in empresa_ids_param.split(',') if id.strip().isdigit()]
+                empresas = EmpresaServidor.objects.filter(id__in=empresa_ids)
+            elif servidor_id:
+                empresas = EmpresaServidor.objects.filter(servidor_id=servidor_id)
+            else:
+                return Response(
+                    {'error': 'Se requiere empresa_ids o servidor_id'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if not empresas.exists():
+                return Response(
+                    {'backups': {}},
+                    status=status.HTTP_200_OK
+                )
+            
+            empresa_ids_list = list(empresas.values_list('id', flat=True))
+            
+            # Obtener el último backup de cada empresa en una sola query optimizada
+            # Usar subquery para obtener el ID del último backup por empresa
+            ultimos_backups_ids = BackupS3.objects.filter(
+                empresa_servidor_id__in=empresa_ids_list,
+                estado='completado'
+            ).values('empresa_servidor_id').annotate(
+                ultimo_id=Max('id')
+            ).values_list('ultimo_id', flat=True)
+            
+            # Obtener los backups completos
+            ultimos_backups = BackupS3.objects.filter(id__in=ultimos_backups_ids)
+            
+            # Serializar y organizar por empresa_id
+            serializer = BackupS3Serializer(ultimos_backups, many=True)
+            backups_dict = {
+                backup['empresa_servidor']: backup
+                for backup in serializer.data
+            }
+            
+            return Response(
+                {'backups': backups_dict},
+                status=status.HTTP_200_OK
+            )
+            
+        except Exception as e:
+            logger.error(f"Error obteniendo últimos backups masivo: {e}", exc_info=True)
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
 class UsuarioEmpresaViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
     """
     ViewSet para gestionar permisos de usuarios a empresas.

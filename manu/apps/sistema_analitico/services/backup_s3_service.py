@@ -4,6 +4,7 @@ Servicio para gestionar backups de bases de datos Firebird a S3.
 import os
 import subprocess
 import logging
+import time
 from datetime import datetime, date
 from typing import Dict, List, Optional, Tuple
 from django.utils import timezone
@@ -69,7 +70,11 @@ class BackupS3Service:
                     retries={
                         'max_attempts': 3,
                         'mode': 'standard'
-                    }
+                    },
+                    # Timeouts para evitar bloqueos indefinidos
+                    connect_timeout=30,  # 30 segundos para conectar
+                    read_timeout=300,    # 5 minutos para leer (upload de archivos grandes)
+                    max_pool_connections=10
                 )
                 s3_kwargs['config'] = s3_config
                 logger.info(f"Configurando S3 con endpoint: {endpoint_url}, path-style: True")
@@ -467,12 +472,19 @@ class BackupS3Service:
             inicio = time.time()
             ultimo_log = inicio
             ultimo_tamano = 0
+            ultimo_progreso = inicio  # Inicializar desde el inicio
             timeout_total = 1800  # 30 minutos máximo
             timeout_sin_progreso = 300  # 5 minutos sin crecimiento del archivo = colgado
+            timeout_archivo_no_existe = 120  # 2 minutos sin que exista el archivo = bloqueado
+            
+            logger.info(f"⏳ Monitoreando proceso gbak (PID: {proceso.pid})...")
+            logger.info(f"   Timeouts: total={timeout_total//60}min, sin_progreso={timeout_sin_progreso//60}min, archivo_no_existe={timeout_archivo_no_existe}s")
             
             while True:
                 # Verificar si terminó
                 if proceso.poll() is not None:
+                    codigo_salida = proceso.returncode
+                    logger.info(f"✅ Proceso gbak terminó con código: {codigo_salida}")
                     break
                 
                 tiempo_transcurrido = time.time() - inicio
@@ -481,31 +493,60 @@ class BackupS3Service:
                 if tiempo_transcurrido > timeout_total:
                     proceso.kill()
                     logger.error(f"⏱️ Timeout total: El backup tardó más de {timeout_total//60} minutos")
+                    logger.error(f"   Proceso gbak (PID: {proceso.pid}) fue terminado forzosamente")
                     return False, None, None
                 
                 # Verificar si el archivo está creciendo (detectar procesos colgados)
                 tamano_actual = 0
-                if os.path.exists(ruta_temporal):
+                archivo_existe = os.path.exists(ruta_temporal)
+                
+                if archivo_existe:
                     tamano_actual = os.path.getsize(ruta_temporal)
                     if tamano_actual > ultimo_tamano:
                         # El archivo está creciendo, resetear contador
                         ultimo_tamano = tamano_actual
                         ultimo_progreso = time.time()
+                        logger.debug(f"📈 Archivo creciendo: {tamano_actual} bytes (+{tamano_actual - ultimo_tamano} bytes)")
                     else:
                         # El archivo no está creciendo
-                        if 'ultimo_progreso' not in locals():
-                            ultimo_progreso = time.time()
                         tiempo_sin_progreso = time.time() - ultimo_progreso
                         if tiempo_sin_progreso > timeout_sin_progreso:
                             proceso.kill()
                             logger.error(f"⏱️ Timeout sin progreso: El archivo no ha crecido en {timeout_sin_progreso//60} minutos. Proceso probablemente colgado.")
                             logger.error(f"   Tamaño del archivo: {tamano_actual} bytes (sin cambios)")
+                            logger.error(f"   Proceso gbak (PID: {proceso.pid}) fue terminado forzosamente")
+                            logger.error(f"   Tiempo transcurrido: {int(tiempo_transcurrido//60)} minutos")
                             return False, None, None
                 else:
-                    # Archivo no existe aún, dar tiempo inicial
-                    if tiempo_transcurrido > 60:  # Si pasó 1 minuto y no existe el archivo
+                    # Archivo no existe aún - verificar si el proceso está bloqueado
+                    tiempo_sin_archivo = tiempo_transcurrido
+                    # Mostrar advertencia cada 30 segundos si el archivo no existe
+                    if tiempo_sin_archivo > 30 and int(tiempo_sin_archivo) % 30 < 2:
+                        logger.warning(f"⚠️ Archivo de backup aún no existe después de {int(tiempo_sin_archivo)} segundos...")
+                        logger.warning(f"   Ruta esperada: {ruta_temporal}")
+                        logger.warning(f"   Si el archivo no aparece en {timeout_archivo_no_existe} segundos, el proceso será terminado")
+                    
+                    if tiempo_sin_archivo > timeout_archivo_no_existe:
                         proceso.kill()
-                        logger.error(f"⏱️ Timeout: El archivo de backup no se creó después de 1 minuto")
+                        logger.error(f"⏱️ Timeout: El archivo de backup no se creó después de {timeout_archivo_no_existe} segundos ({timeout_archivo_no_existe//60} minutos)")
+                        logger.error(f"   Ruta esperada: {ruta_temporal}")
+                        logger.error(f"   Proceso gbak (PID: {proceso.pid}) probablemente bloqueado esperando respuesta de Firebird")
+                        logger.error(f"   Empresa: {empresa.nombre}")
+                        if hasattr(empresa, 'servidor') and empresa.servidor:
+                            logger.error(f"   Servidor: {empresa.servidor.host}:{empresa.servidor.puerto}")
+                        logger.error(f"   Base de datos: {empresa.ruta_base}")
+                        logger.error(f"   Proceso fue terminado forzosamente")
+                        
+                        # Intentar leer stderr para ver si hay algún error
+                        try:
+                            if os.path.exists(stderr_file):
+                                with open(stderr_file, 'r') as f:
+                                    stderr_content = f.read()
+                                    if stderr_content:
+                                        logger.error(f"   Últimos errores de gbak:\n{stderr_content[-500:]}")  # Últimos 500 caracteres
+                        except Exception as e:
+                            logger.warning(f"   No se pudo leer stderr: {e}")
+                        
                         return False, None, None
                 
                 # Mostrar progreso cada 30 segundos (SIEMPRE mostrar el tamaño actual)
@@ -616,17 +657,24 @@ class BackupS3Service:
             # Si necesitas encriptación, hazlo localmente antes de subir
             # No pasar ExtraArgs si está vacío (igual que en el test que funciona)
             
-            logger.debug(f"Subiendo archivo a S3: bucket={self.bucket_name}, key={ruta_s3}")
-            logger.debug(f"   Archivo local: {ruta_archivo_local} ({os.path.getsize(ruta_archivo_local)} bytes)")
+            tamano_archivo = os.path.getsize(ruta_archivo_local)
+            tamano_mb = tamano_archivo / (1024 * 1024)
+            
+            logger.info(f"☁️ Iniciando subida a S3: bucket={self.bucket_name}, key={ruta_s3}")
+            logger.info(f"   Archivo local: {ruta_archivo_local} ({tamano_mb:.2f} MB / {tamano_archivo} bytes)")
+            logger.info(f"   Timeout configurado: connect=30s, read=300s (5 min)")
             
             # Usar upload_file sin ExtraArgs (igual que el test exitoso)
+            # El timeout está configurado en BotoConfig (connect_timeout=30, read_timeout=300)
+            inicio_upload = time.time()
             self.s3_client.upload_file(
                 ruta_archivo_local,
                 self.bucket_name,
                 ruta_s3
             )
+            tiempo_upload = time.time() - inicio_upload
             
-            logger.info(f"Backup subido exitosamente a S3: {ruta_s3}")
+            logger.info(f"✅ Backup subido exitosamente a S3: {ruta_s3} (tiempo: {tiempo_upload:.2f}s, velocidad: {tamano_mb/tiempo_upload:.2f} MB/s)")
             
             # Registrar backup exitoso en el log
             try:

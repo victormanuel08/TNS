@@ -3,16 +3,16 @@
     <table class="data-table">
       <thead>
         <tr>
-          <th>NIT</th>
-          <th>Cliente</th>
-          <th>Servidor</th>
-          <th>API Key</th>
-          <th>Empresas Asociadas</th>
-          <th>Estado</th>
-          <th>Fecha Creación</th>
-          <th>Fecha Caducidad</th>
-          <th>Peticiones</th>
-          <th>Acciones</th>
+          <th style="width: 120px;">NIT</th>
+          <th style="min-width: 200px;">Cliente</th>
+          <th style="width: 120px;">Servidor</th>
+          <th style="min-width: 250px;">API Key</th>
+          <th style="width: 140px;">Empresas</th>
+          <th style="width: 100px;">Estado</th>
+          <th style="width: 130px;">Fecha Creación</th>
+          <th style="width: 130px;">Fecha Caducidad</th>
+          <th style="width: 90px;">Peticiones</th>
+          <th style="width: 60px;">Acciones</th>
         </tr>
       </thead>
       <tbody>
@@ -67,14 +67,13 @@
           </td>
           <td>{{ key.contador_peticiones || 0 }}</td>
           <td>
-            <DropdownMenu>
+            <DropdownMenu trigger-class="btn-menu-icon">
               <template #trigger>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <circle cx="12" cy="12" r="1"/>
                   <circle cx="12" cy="5" r="1"/>
                   <circle cx="12" cy="19" r="1"/>
                 </svg>
-                Menú
               </template>
               <DropdownItem @click="$emit('regenerate', key.id)">
                 🔄 Regenerar
@@ -208,6 +207,56 @@ defineEmits<{
 .status-inactive {
   background: #fee2e2;
   color: #991b1b;
+}
+
+:deep(.btn-menu-icon) {
+  padding: 0.5rem;
+  min-width: auto;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  color: #4b5563;
+  transition: all 0.2s;
+  cursor: pointer;
+}
+
+:deep(.btn-menu-icon:hover) {
+  background: #e5e7eb;
+  border-color: #d1d5db;
+  color: #1f2937;
+}
+
+:deep(.btn-menu-icon.active) {
+  background: #1f2937;
+  border-color: #1f2937;
+  color: white;
+}
+
+.data-table {
+  table-layout: auto;
+  width: 100%;
+}
+
+.data-table td {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 0;
+}
+
+.data-table td:nth-child(2) {
+  white-space: normal;
+  max-width: 200px;
+}
+
+.data-table td:nth-child(4) {
+  white-space: normal;
+  max-width: 300px;
 }
 </style>
 
