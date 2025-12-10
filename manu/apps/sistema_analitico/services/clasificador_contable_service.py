@@ -641,6 +641,38 @@ class ClasificadorContableService:
                         except:
                             ciuu_secundarios.append(otras)
                 
+                # ✅ CORRECCIÓN: Si el RUT existe pero NO tiene CIUU, consultar API de Cámara de Comercio
+                if not ciuu_principal:
+                    self._print_debug(f"⚠️ RUT encontrado pero SIN CIUU principal, consultando Cámara de Comercio...")
+                    from .camara_comercio_service import consultar_camara_comercio_por_nit
+                    nit_para_consulta = nit_original if 'nit_original' in locals() else nit
+                    datos_ccb = consultar_camara_comercio_por_nit(nit_para_consulta)
+                    
+                    if datos_ccb and datos_ccb.get('ciuu_principal'):
+                        self._print_debug(f"✅ CIUU obtenido de Cámara de Comercio para RUT existente: {datos_ccb.get('ciuu_principal')}")
+                        # Actualizar el RUT con el CIUU encontrado
+                        try:
+                            rut.actividad_principal_ciiu = datos_ccb.get('ciuu_principal')
+                            if datos_ccb.get('ciuu_secundarios'):
+                                rut.actividad_secundaria_ciiu = datos_ccb.get('ciuu_secundarios', [])[0] if len(datos_ccb.get('ciuu_secundarios', [])) > 0 else None
+                            rut.save()
+                            self._print_debug(f"💾 RUT actualizado con CIUU de Cámara de Comercio")
+                        except Exception as e:
+                            self._print_debug(f"⚠️ Error actualizando RUT con CIUU: {e}")
+                        
+                        # Retornar con CIUU de la API
+                        return {
+                            "nit": rut.nit,
+                            "nit_normalizado": rut.nit_normalizado,
+                            "razon_social": rut.razon_social,
+                            "ciuu_principal": datos_ccb.get('ciuu_principal'),
+                            "ciuu_secundarios": datos_ccb.get('ciuu_secundarios', []),
+                            "fuente": "rut_camara_comercio"  # Indica que vino del RUT pero CIUU de API
+                        }
+                    else:
+                        self._print_debug(f"⚠️ No se encontró CIUU en Cámara de Comercio para RUT existente")
+                
+                # Si el RUT tiene CIUU o no se encontró en API, retornar lo que tiene
                 return {
                     "nit": rut.nit,
                     "nit_normalizado": rut.nit_normalizado,
@@ -665,11 +697,12 @@ class ClasificadorContableService:
                 }
             
             # 3. Consultar Cámara de Comercio (usar NIT original, no normalizado recortado)
-            self._print_debug(f"⚠️ RUT no encontrado para NIT: {nit}, consultando Cámara de Comercio...")
+            self._print_debug(f"⚠️ RUT no encontrado para NIT: {nit}, consultando API de Cámara de Comercio...")
             
             from .camara_comercio_service import consultar_camara_comercio_por_nit
             # ✅ CORRECCIÓN: Usar NIT original completo para la consulta, no el normalizado (que puede estar recortado)
             nit_para_consulta = nit_original if 'nit_original' in locals() else nit
+            self._print_debug(f"🔍 Consultando API de Cámara de Comercio (datos.gov.co) con NIT: {nit_para_consulta}")
             datos_ccb = consultar_camara_comercio_por_nit(nit_para_consulta)
             
             if datos_ccb and datos_ccb.get('ciuu_principal'):

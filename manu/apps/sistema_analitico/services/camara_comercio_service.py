@@ -56,14 +56,18 @@ def consultar_camara_comercio_por_nit(nit: str) -> Optional[Dict]:
     try:
         # Consultar API
         url = f"{CAMARA_COMERCIO_API_URL}?nit={nit_normalizado}"
-        logger.info(f"Consultando Cámara de Comercio para NIT: {nit_normalizado}")
+        logger.info(f"🌐 [CÁMARA COMERCIO] Consultando API: {url}")
+        logger.info(f"🌐 [CÁMARA COMERCIO] NIT normalizado: {nit_normalizado}")
         
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         data = response.json()
         
+        logger.info(f"🌐 [CÁMARA COMERCIO] Respuesta recibida: {len(data) if data else 0} resultados")
+        
         if not data or len(data) == 0:
-            logger.warning(f"No se encontró información en Cámara de Comercio para NIT: {nit_normalizado}")
+            logger.warning(f"⚠️ [CÁMARA COMERCIO] No se encontró información en API para NIT: {nit_normalizado}")
+            logger.warning(f"⚠️ [CÁMARA COMERCIO] URL consultada: {url}")
             # Guardar en cache como "no encontrado" por 1 hora para evitar consultas repetidas
             cache.set(cache_key, None, timeout=3600)
             return None
