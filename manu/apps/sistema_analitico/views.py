@@ -1284,6 +1284,92 @@ class CalendarioTributarioViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
             empresas_autorizadas = request.empresas_autorizadas
             cliente_api = request.cliente_api
             
+            # Si es API Key maestra (permite_scraping_total), retornar eventos de TODOS los NITs de RUTs
+            if cliente_api.permite_scraping_total:
+                # Si no especificó nit ni empresa_id, retornar eventos de TODOS los RUTs
+                if not nit and not empresa_id:
+                    todos_eventos = []
+                    nits_consultados = set()
+                    
+                    # Obtener todos los NITs de RUTs
+                    from .models import RUT
+                    todos_ruts = RUT.objects.all().values('nit_normalizado').distinct()
+                    
+                    for rut in todos_ruts:
+                        nit_rut = rut['nit_normalizado']
+                        if nit_rut and nit_rut not in nits_consultados:
+                            eventos_rut = obtener_eventos_calendario_tributario(
+                                nit=nit_rut,
+                                tipo_regimen=tipo_regimen,
+                                fecha_desde=fecha_desde,
+                                fecha_hasta=fecha_hasta
+                            )
+                            todos_eventos.extend(eventos_rut)
+                            nits_consultados.add(nit_rut)
+                    
+                    return Response({
+                        'eventos': todos_eventos,
+                        'total': len(todos_eventos),
+                        'nits_consultados': len(nits_consultados),
+                        'empresas_consultadas': 0,
+                        'nits_ruts_consultados': len(nits_consultados),
+                        'filtros': {
+                            'nit': None,
+                            'empresa_id': None,
+                            'fecha_desde': fecha_desde_str,
+                            'fecha_hasta': fecha_hasta_str,
+                            'tipo_regimen': tipo_regimen,
+                            'modo': 'todos_los_ruts_maestro'
+                        }
+                    }, status=status.HTTP_200_OK)
+                
+                # Si especificó nit, permitir consultar cualquier NIT
+                if nit:
+                    nit_normalizado = ''.join(c for c in str(nit) if c.isdigit())
+                    eventos = obtener_eventos_calendario_tributario(
+                        nit=nit_normalizado,
+                        tipo_regimen=tipo_regimen,
+                        fecha_desde=fecha_desde,
+                        fecha_hasta=fecha_hasta
+                    )
+                    return Response({
+                        'eventos': eventos,
+                        'total': len(eventos),
+                        'filtros': {
+                            'nit': nit_normalizado,
+                            'fecha_desde': fecha_desde_str,
+                            'fecha_hasta': fecha_hasta_str,
+                            'tipo_regimen': tipo_regimen,
+                            'modo': 'nit_especifico_maestro'
+                        }
+                    }, status=status.HTTP_200_OK)
+                
+                # Si especificó empresa_id, permitir consultar cualquier empresa
+                if empresa_id:
+                    try:
+                        empresa_id_int = int(empresa_id)
+                        eventos = obtener_eventos_para_empresa(
+                            empresa_id_int,
+                            fecha_desde=fecha_desde if fecha_desde else None,
+                            fecha_hasta=fecha_hasta if fecha_hasta else None
+                        )
+                        return Response({
+                            'eventos': eventos,
+                            'total': len(eventos),
+                            'filtros': {
+                                'empresa_id': empresa_id_int,
+                                'fecha_desde': fecha_desde_str,
+                                'fecha_hasta': fecha_hasta_str,
+                                'modo': 'empresa_especifica_maestro'
+                            }
+                        }, status=status.HTTP_200_OK)
+                    except ValueError:
+                        return Response(
+                            {'error': 'empresa_id debe ser un número'},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+            
+            # API Key normal: solo empresas asociadas y NITs de RUTs asociados
             # Si no especificó nit ni empresa_id, retornar eventos de:
             # 1. Empresas asociadas (EmpresaServidor)
             # 2. NITs de RUTs asociados (APIKeyNITCalendario)
@@ -1291,17 +1377,20 @@ class CalendarioTributarioViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
             if not nit and not empresa_id:
                 todos_eventos = []
                 nits_consultados = set()
+                empresas_consultadas = 0
                 
                 # 1. Eventos de empresas asociadas
-                for empresa in empresas_autorizadas:
-                    if empresa.nit_normalizado not in nits_consultados:
-                        eventos_empresa = obtener_eventos_para_empresa(
-                            empresa.id,
-                            fecha_desde=fecha_desde if fecha_desde else None,
-                            fecha_hasta=fecha_hasta if fecha_hasta else None
-                        )
-                        todos_eventos.extend(eventos_empresa)
-                        nits_consultados.add(empresa.nit_normalizado)
+                if empresas_autorizadas and hasattr(empresas_autorizadas, '__iter__'):
+                    for empresa in empresas_autorizadas:
+                        if hasattr(empresa, 'nit_normalizado') and empresa.nit_normalizado not in nits_consultados:
+                            eventos_empresa = obtener_eventos_para_empresa(
+                                empresa.id,
+                                fecha_desde=fecha_desde if fecha_desde else None,
+                                fecha_hasta=fecha_hasta if fecha_hasta else None
+                            )
+                            todos_eventos.extend(eventos_empresa)
+                            nits_consultados.add(empresa.nit_normalizado)
+                            empresas_consultadas += 1
                 
                 # 2. Eventos de NITs de RUTs asociados (solo si no están ya en empresas)
                 from .models import APIKeyNITCalendario
@@ -1326,7 +1415,7 @@ class CalendarioTributarioViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
                     'eventos': todos_eventos,
                     'total': len(todos_eventos),
                     'nits_consultados': len(nits_consultados),
-                    'empresas_consultadas': empresas_autorizadas.count(),
+                    'empresas_consultadas': empresas_consultadas,
                     'nits_ruts_consultados': len(nits_ruts),
                     'filtros': {
                         'nit': None,
@@ -1342,7 +1431,22 @@ class CalendarioTributarioViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
             if empresa_id:
                 try:
                     empresa_id_int = int(empresa_id)
-                    if not empresas_autorizadas.filter(id=empresa_id_int).exists():
+                    # Verificar si empresas_autorizadas es un QuerySet o una lista
+                    if empresas_autorizadas and hasattr(empresas_autorizadas, 'filter'):
+                        if not empresas_autorizadas.filter(id=empresa_id_int).exists():
+                            return Response(
+                                {'error': 'No tienes permiso para consultar eventos de esta empresa'},
+                                status=status.HTTP_403_FORBIDDEN
+                            )
+                    elif empresas_autorizadas and hasattr(empresas_autorizadas, '__iter__'):
+                        # Es una lista, verificar manualmente
+                        tiene_permiso = any(emp.id == empresa_id_int for emp in empresas_autorizadas if hasattr(emp, 'id'))
+                        if not tiene_permiso:
+                            return Response(
+                                {'error': 'No tienes permiso para consultar eventos de esta empresa'},
+                                status=status.HTTP_403_FORBIDDEN
+                            )
+                    else:
                         return Response(
                             {'error': 'No tienes permiso para consultar eventos de esta empresa'},
                             status=status.HTTP_403_FORBIDDEN
@@ -1358,7 +1462,11 @@ class CalendarioTributarioViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
                 cliente_api = request.cliente_api
                 
                 # Verificar si está en empresas asociadas
-                tiene_empresa = empresas_autorizadas.filter(nit_normalizado=nit_normalizado).exists()
+                tiene_empresa = False
+                if empresas_autorizadas and hasattr(empresas_autorizadas, 'filter'):
+                    tiene_empresa = empresas_autorizadas.filter(nit_normalizado=nit_normalizado).exists()
+                elif empresas_autorizadas and hasattr(empresas_autorizadas, '__iter__'):
+                    tiene_empresa = any(emp.nit_normalizado == nit_normalizado for emp in empresas_autorizadas if hasattr(emp, 'nit_normalizado'))
                 
                 # Verificar si está en NITs de RUTs asociados
                 from .models import APIKeyNITCalendario
@@ -1670,38 +1778,72 @@ class ContrasenaEntidadViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
         
         # Si tiene API Key, filtrar solo empresas autorizadas
         if tiene_api_key and not es_superusuario:
-            empresas_autorizadas = request.empresas_autorizadas
-            nits_autorizados = set(empresas_autorizadas.values_list('nit_normalizado', flat=True))
+            cliente_api = request.cliente_api
             
-            # Filtrar por NITs autorizados
-            queryset = queryset.filter(nit_normalizado__in=nits_autorizados)
-            
-            # Filtros adicionales opcionales
-            nit_filter = request.query_params.get('nit')
-            if nit_filter:
-                nit_normalizado = ''.join(c for c in str(nit_filter) if c.isdigit())
-                if nit_normalizado not in nits_autorizados:
-                    return Response(
-                        {'error': 'No tienes permiso para consultar passwords de este NIT'},
-                        status=status.HTTP_403_FORBIDDEN
-                    )
-                queryset = queryset.filter(nit_normalizado=nit_normalizado)
-            
-            empresa_id = request.query_params.get('empresa_id')
-            if empresa_id:
-                try:
-                    empresa_id_int = int(empresa_id)
-                    if not empresas_autorizadas.filter(id=empresa_id_int).exists():
+            # Si es API Key maestra (permite_scraping_total), permitir ver todas las claves
+            if cliente_api.permite_scraping_total:
+                # No filtrar por empresas - puede ver todas las claves
+                # Solo aplicar filtros opcionales si se proporcionan
+                nit_filter = request.query_params.get('nit')
+                if nit_filter:
+                    nit_normalizado = ''.join(c for c in str(nit_filter) if c.isdigit())
+                    queryset = queryset.filter(nit_normalizado=nit_normalizado)
+                
+                empresa_id = request.query_params.get('empresa_id')
+                if empresa_id:
+                    try:
+                        empresa_id_int = int(empresa_id)
+                        queryset = queryset.filter(empresa_servidor_id=empresa_id_int)
+                    except ValueError:
                         return Response(
-                            {'error': 'No tienes permiso para consultar passwords de esta empresa'},
+                            {'error': 'empresa_id debe ser un número'},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+            else:
+                # API Key normal: solo empresas asociadas
+                empresas_autorizadas = request.empresas_autorizadas
+                
+                # Verificar que empresas_autorizadas sea un QuerySet
+                if empresas_autorizadas and hasattr(empresas_autorizadas, 'values_list'):
+                    nits_autorizados = set(empresas_autorizadas.values_list('nit_normalizado', flat=True))
+                else:
+                    # Si es una lista vacía o no es QuerySet, no hay empresas autorizadas
+                    nits_autorizados = set()
+                
+                # Filtrar por NITs autorizados
+                if nits_autorizados:
+                    queryset = queryset.filter(nit_normalizado__in=nits_autorizados)
+                else:
+                    # No hay empresas autorizadas, retornar lista vacía
+                    queryset = queryset.none()
+                
+                # Filtros adicionales opcionales
+                nit_filter = request.query_params.get('nit')
+                if nit_filter:
+                    nit_normalizado = ''.join(c for c in str(nit_filter) if c.isdigit())
+                    if nit_normalizado not in nits_autorizados:
+                        return Response(
+                            {'error': 'No tienes permiso para consultar passwords de este NIT'},
                             status=status.HTTP_403_FORBIDDEN
                         )
-                    queryset = queryset.filter(empresa_servidor_id=empresa_id_int)
-                except ValueError:
-                    return Response(
-                        {'error': 'empresa_id debe ser un número'},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
+                    queryset = queryset.filter(nit_normalizado=nit_normalizado)
+                
+                empresa_id = request.query_params.get('empresa_id')
+                if empresa_id:
+                    try:
+                        empresa_id_int = int(empresa_id)
+                        if empresas_autorizadas and hasattr(empresas_autorizadas, 'filter'):
+                            if not empresas_autorizadas.filter(id=empresa_id_int).exists():
+                                return Response(
+                                    {'error': 'No tienes permiso para consultar passwords de esta empresa'},
+                                    status=status.HTTP_403_FORBIDDEN
+                                )
+                        queryset = queryset.filter(empresa_servidor_id=empresa_id_int)
+                    except ValueError:
+                        return Response(
+                            {'error': 'empresa_id debe ser un número'},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
         else:
             # Superusuario - puede ver todas, pero puede filtrar opcionalmente
             nit_filter = request.query_params.get('nit')
