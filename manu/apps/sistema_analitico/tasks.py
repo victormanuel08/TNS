@@ -26,7 +26,7 @@ def clasificar_factura_contable_task(
     session_dian_id: int = None
 ):
     """
-    Tarea Celery para clasificar factura contable usando Deepseek.
+    Tarea Celery para clasificar factura contable usando servicios de IA/Analytics.
     
     Args:
         factura_data: Dict con datos de la factura

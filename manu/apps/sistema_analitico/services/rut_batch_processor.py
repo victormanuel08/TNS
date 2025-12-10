@@ -7,9 +7,10 @@ import threading
 from typing import Dict, List, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from django.core.files.uploadedfile import InMemoryUploadedFile
-from django.db import connection
+from django.db import connection, models
+from django.db import IntegrityError
 from .rut_extractor import extract_rut_data_from_pdf
-from ..models import RUT, EmpresaServidor
+from ..models import RUT, EmpresaServidor, normalize_nit_and_extract_dv
 
 
 def normalize_nit(nit: str) -> str:
@@ -65,9 +66,11 @@ def obtener_razon_social_mejorada(rut_data: Dict) -> str:
                 return sigla
         return razon_social if razon_social else 'Sin razón social'
     
-    # Para personas naturales: construir razón social con campos 31-34 si está vacía/inválida
+    # Para personas naturales: SIEMPRE construir razón social con campos 31-34 si está vacía/inválida
+    # Esta es la lógica original que funcionaba: usar campos 31-34 cuando razón social está vacía
     if tipo_contribuyente == 'persona_natural':
-        if razon_social_invalida:
+        # Si la razón social está vacía o es inválida, construir con campos 31-34
+        if not razon_social or razon_social_invalida:
             # Construir con campos 31-34: Apellidos + Nombres
             pn_apellido1 = rut_data.get('persona_natural_primer_apellido', '').strip()
             pn_apellido2 = rut_data.get('persona_natural_segundo_apellido', '').strip()
@@ -81,6 +84,7 @@ def obtener_razon_social_mejorada(rut_data: Dict) -> str:
                 pn_otros
             ]))
             
+            # Si se pudo construir un nombre completo, usarlo
             if nombre_completo and len(nombre_completo) > 3:
                 return nombre_completo
             
@@ -90,9 +94,10 @@ def obtener_razon_social_mejorada(rut_data: Dict) -> str:
                 if not nombre_comercial.startswith('36.') and not nombre_comercial.startswith('37.'):
                     return nombre_comercial
             
-            return 'PERSONA NATURAL'
+            # Si no hay nada, usar razón social original si existe, sino "PERSONA NATURAL"
+            return razon_social if razon_social else 'PERSONA NATURAL'
         
-        # Si la razón social es válida, usarla
+        # Si la razón social es válida y no está vacía, usarla
         return razon_social
     
     # Si no se determinó el tipo o es otro caso, usar razón social original
@@ -188,6 +193,7 @@ def procesar_zip_ruts(zip_file, task=None) -> Dict:
                     # Obtener NIT
                     nit_normalizado = rut_data.get('nit_normalizado')
                     if not nit_normalizado:
+                        logger.warning(f"[RUT {pdf_name}] No se pudo detectar el NIT del PDF")
                         return {
                             'tipo': 'fallido',
                             'archivo': pdf_name,
@@ -195,8 +201,26 @@ def procesar_zip_ruts(zip_file, task=None) -> Dict:
                         }
                     
                     # Obtener razón social mejorada
+                    # 🔍 LOG DETALLADO: Mostrar qué se extrajo del PDF
+                    tipo_contribuyente = rut_data.get('tipo_contribuyente', 'NO_DETECTADO')
+                    razon_social_raw = rut_data.get('razon_social', '').strip()
+                    
+                    logger.info(f"[RUT {pdf_name}] 🔍 EXTRACCIÓN DEL PDF:")
+                    logger.info(f"  • Tipo Contribuyente: {tipo_contribuyente}")
+                    logger.info(f"  • Razón Social (campo 35): '{razon_social_raw}'")
+                    
+                    if tipo_contribuyente == 'persona_natural':
+                        pn_apellido1 = rut_data.get('persona_natural_primer_apellido', '').strip()
+                        pn_apellido2 = rut_data.get('persona_natural_segundo_apellido', '').strip()
+                        pn_nombre = rut_data.get('persona_natural_primer_nombre', '').strip()
+                        pn_otros = rut_data.get('persona_natural_otros_nombres', '').strip()
+                        logger.info(f"  • Campo 31 (Primer Apellido): '{pn_apellido1}'")
+                        logger.info(f"  • Campo 32 (Segundo Apellido): '{pn_apellido2}'")
+                        logger.info(f"  • Campo 33 (Primer Nombre): '{pn_nombre}'")
+                        logger.info(f"  • Campo 34 (Otros Nombres): '{pn_otros}'")
+                    
                     razon_social_mejorada = obtener_razon_social_mejorada(rut_data)
-                    logger.debug(f"[RUT {pdf_name}] Razón social mejorada: '{razon_social_mejorada[:50]}...'")
+                    logger.info(f"[RUT {pdf_name}] ✅ Razón Social Final: '{razon_social_mejorada}'")
                     
                     # Verificar si hay empresas asociadas
                     empresas = EmpresaServidor.objects.filter(nit_normalizado=nit_normalizado)
@@ -247,23 +271,137 @@ def procesar_zip_ruts(zip_file, task=None) -> Dict:
                             rut_data_truncado[key] = value
                     
                     # Crear o actualizar RUT con datos ya truncados
-                    rut, created = RUT.objects.get_or_create(
-                        nit_normalizado=nit_normalizado,
-                        defaults={
-                            'nit': rut_data_truncado.get('nit', nit_normalizado),
-                            'dv': rut_data_truncado.get('dv', ''),
-                            'razon_social': razon_social_final,
-                        }
-                    )
+                    # Manejar condiciones de carrera con try-except y reintentos
+                    # ✅ IMPORTANTE: Si el nit_normalizado cambió (ej: de 10050386382 a 1005038638),
+                    # buscar también por el NIT original para encontrar el RUT existente
+                    rut = None
+                    created = False
+                    max_retries = 5  # Aumentar intentos
+                    import time
+                    
+                    # Primero intentar buscar por el nit_normalizado actual
+                    rut_existente = RUT.objects.filter(nit_normalizado=nit_normalizado).first()
+                    
+                    # Si no se encuentra, buscar por el NIT original (puede que el nit_normalizado haya cambiado)
+                    if not rut_existente:
+                        nit_original = rut_data_truncado.get('nit', '')
+                        if nit_original:
+                            # Intentar normalizar el NIT original de diferentes formas
+                            nit_norm_alt, _, _ = normalize_nit_and_extract_dv(nit_original)
+                            if nit_norm_alt != nit_normalizado:
+                                rut_existente = RUT.objects.filter(nit_normalizado=nit_norm_alt).first()
+                    
+                    for attempt in range(max_retries):
+                        try:
+                            if rut_existente:
+                                # Si existe, actualizar
+                                rut = rut_existente
+                                created = False
+                                # Actualizar nit_normalizado si cambió
+                                if rut.nit_normalizado != nit_normalizado:
+                                    # Si el nit_normalizado cambió, necesitamos actualizar el registro
+                                    # Pero como nit_normalizado es unique, primero debemos verificar que no exista otro
+                                    otro_rut = RUT.objects.filter(nit_normalizado=nit_normalizado).exclude(id=rut.id).first()
+                                    if otro_rut:
+                                        # Si existe otro RUT con el nuevo nit_normalizado, eliminar el viejo y usar el nuevo
+                                        logger.warning(f"[RUT {pdf_name}] Existe otro RUT con nit_normalizado={nit_normalizado}, usando ese")
+                                        rut = otro_rut
+                                        created = False
+                                    else:
+                                        # Actualizar el nit_normalizado
+                                        rut.nit_normalizado = nit_normalizado
+                            else:
+                                # Si no existe, crear nuevo
+                                rut, created = RUT.objects.update_or_create(
+                                    nit_normalizado=nit_normalizado,
+                                    defaults={
+                                        'nit': rut_data_truncado.get('nit', nit_normalizado),
+                                        'dv': rut_data_truncado.get('dv', ''),
+                                        'razon_social': razon_social_final,
+                                    }
+                                )
+                            break  # Éxito, salir del loop
+                        except IntegrityError as e:
+                            # Si hay duplicado (condición de carrera), esperar un poco y buscar el existente
+                            logger.debug(f"[RUT {pdf_name}] IntegrityError en intento {attempt + 1}: {str(e)}")
+                            
+                            # Esperar un poco para que la transacción del otro thread se complete
+                            time.sleep(0.2 * (attempt + 1))
+                            
+                            # Intentar obtener el RUT existente de múltiples maneras
+                            rut = RUT.objects.filter(nit_normalizado=nit_normalizado).first()
+                            
+                            if not rut:
+                                # Si no se encuentra, puede ser que el nit_normalizado cambió durante normalización
+                                # Intentar buscar por el NIT original también
+                                nit_original = rut_data_truncado.get('nit', nit_normalizado)
+                                if nit_original and nit_original != nit_normalizado:
+                                    nit_norm_alt, _, _ = normalize_nit_and_extract_dv(nit_original)
+                                    if nit_norm_alt != nit_normalizado:
+                                        rut = RUT.objects.filter(nit_normalizado=nit_norm_alt).first()
+                            
+                            if rut:
+                                created = False
+                                break  # Encontrado, salir del loop
+                            
+                            # Si después de varios intentos no se encuentra, intentar usar get_or_create
+                            if attempt >= max_retries - 1:
+                                # Último intento: usar get_or_create que es más robusto
+                                try:
+                                    rut, created = RUT.objects.get_or_create(
+                                        nit_normalizado=nit_normalizado,
+                                        defaults={
+                                            'nit': rut_data_truncado.get('nit', nit_normalizado),
+                                            'dv': rut_data_truncado.get('dv', ''),
+                                            'razon_social': razon_social_final,
+                                        }
+                                    )
+                                    break
+                                except IntegrityError:
+                                    # Si aún falla, buscar una vez más
+                                    rut = RUT.objects.filter(nit_normalizado=nit_normalizado).first()
+                                    if rut:
+                                        created = False
+                                        break
+                    
+                    # Si después de todos los intentos no se encontró, lanzar error con más detalles
+                    if not rut:
+                        # Intentar una búsqueda final más amplia
+                        rut = RUT.objects.filter(nit_normalizado=nit_normalizado).first()
+                        if not rut:
+                            nit_original = rut_data_truncado.get('nit', nit_normalizado)
+                            if nit_original:
+                                nit_norm_alt, _, _ = normalize_nit_and_extract_dv(nit_original)
+                                if nit_norm_alt != nit_normalizado:
+                                    rut = RUT.objects.filter(nit_normalizado=nit_norm_alt).first()
+                        
+                        if not rut:
+                            raise Exception(
+                                f"No se pudo crear ni obtener RUT con nit_normalizado={nit_normalizado} "
+                                f"(NIT original: {rut_data_truncado.get('nit', 'N/A')}) después de {max_retries} intentos. "
+                                f"Esto puede indicar un problema de normalización o una condición de carrera persistente."
+                            )
                     
                     # Actualizar campos desde PDF (ya truncados)
+                    # Asegurar que todos los campos se trunquen antes de asignar
                     for key, value in rut_data_truncado.items():
                         if key not in ['_texto_completo', '_codigos_ciiu_encontrados', '_establecimientos'] and hasattr(rut, key):
                             try:
+                                # Obtener el campo del modelo para verificar max_length
+                                field = rut._meta.get_field(key)
+                                if isinstance(field, models.CharField) and value:
+                                    # Truncar si excede max_length
+                                    if field.max_length and len(str(value)) > field.max_length:
+                                        value = str(value)[:field.max_length]
+                                        logger.warning(f"[RUT {pdf_name}] Campo '{key}' truncado a {field.max_length} caracteres")
                                 setattr(rut, key, value)
-                            except Exception as e:
+                            except (AttributeError, ValueError) as e:
                                 logger.error(f"[RUT {pdf_name}] Error asignando campo '{key}': {str(e)}")
                                 # Continuar con el siguiente campo
+                            except Exception as e:
+                                # Para otros errores (como campos que no existen), solo loguear
+                                logger.debug(f"[RUT {pdf_name}] Campo '{key}' no se pudo asignar: {str(e)}")
+                                pass
                     
                     # Actualizar razón social si fue mejorada
                     if razon_social_mejorada != rut_data.get('razon_social', ''):
@@ -294,25 +432,92 @@ def procesar_zip_ruts(zip_file, task=None) -> Dict:
                         None
                     )
                     rut.archivo_pdf = pdf_upload
-                    rut.save()
+                    # Guardar RUT, manejando posibles errores de duplicados en procesamiento paralelo
+                    try:
+                        rut.save()
+                    except IntegrityError as e:
+                        # Si hay duplicado (otro thread lo creó), obtener el existente y actualizar
+                        # Usar el nit_normalizado del objeto rut (ya normalizado) en caso de que haya cambiado
+                        nit_actual = getattr(rut, 'nit_normalizado', nit_normalizado)
+                        # Intentar obtener el RUT existente usando filter().first() para evitar DoesNotExist
+                        rut = RUT.objects.filter(nit_normalizado=nit_actual).first()
+                        if not rut:
+                            # Si no existe con ese nit_normalizado, usar el original
+                            rut = RUT.objects.filter(nit_normalizado=nit_normalizado).first()
+                        if not rut:
+                            # Si realmente no existe, reintentar update_or_create
+                            rut, _ = RUT.objects.update_or_create(
+                                nit_normalizado=nit_normalizado,
+                                defaults={
+                                    'nit': rut_data_truncado.get('nit', nit_normalizado),
+                                    'dv': rut_data_truncado.get('dv', ''),
+                                    'razon_social': razon_social_final,
+                                }
+                            )
+                        
+                        # Re-asignar campos actualizados
+                        for key, value in rut_data_truncado.items():
+                            if key not in ['_texto_completo', '_codigos_ciiu_encontrados', '_establecimientos'] and hasattr(rut, key):
+                                try:
+                                    field = rut._meta.get_field(key)
+                                    if isinstance(field, models.CharField) and value:
+                                        if field.max_length and len(str(value)) > field.max_length:
+                                            value = str(value)[:field.max_length]
+                                    setattr(rut, key, value)
+                                except (AttributeError, ValueError, Exception):
+                                    pass
+                        rut.archivo_pdf = pdf_upload
+                        rut.razon_social = razon_social_final
+                        # Actualizar informacion_adicional si es persona natural
+                        if rut_data.get('tipo_contribuyente') == 'persona_natural':
+                            if not rut.informacion_adicional:
+                                rut.informacion_adicional = {}
+                            rut.informacion_adicional.update({
+                                'persona_natural_primer_apellido': rut_data.get('persona_natural_primer_apellido', ''),
+                                'persona_natural_segundo_apellido': rut_data.get('persona_natural_segundo_apellido', ''),
+                                'persona_natural_primer_nombre': rut_data.get('persona_natural_primer_nombre', ''),
+                                'persona_natural_otros_nombres': rut_data.get('persona_natural_otros_nombres', ''),
+                            })
+                        rut.save()
                     
                     # Procesar establecimientos
                     from ..models import EstablecimientoRUT
                     establecimientos_data = rut_data.get('_establecimientos', [])
                     EstablecimientoRUT.objects.filter(rut=rut).delete()
                     for est_data in establecimientos_data:
+                        # Truncar campos de EstablecimientoRUT antes de crear
+                        est_nombre = est_data.get('nombre', '')
+                        est_tipo = est_data.get('tipo_establecimiento', '')
+                        est_departamento = est_data.get('departamento_nombre', '')
+                        est_ciudad = est_data.get('ciudad_nombre', '')
+                        est_direccion = est_data.get('direccion', '')
+                        
+                        # Truncar según max_length del modelo
+                        if len(est_nombre) > 255:
+                            est_nombre = est_nombre[:255]
+                            logger.warning(f"[RUT {pdf_name}] Campo 'nombre' de establecimiento truncado a 255 caracteres")
+                        if est_tipo and len(est_tipo) > 100:
+                            est_tipo = est_tipo[:100]
+                            logger.warning(f"[RUT {pdf_name}] Campo 'tipo_establecimiento' truncado a 100 caracteres")
+                        if est_departamento and len(est_departamento) > 100:
+                            est_departamento = est_departamento[:100]
+                            logger.warning(f"[RUT {pdf_name}] Campo 'departamento_nombre' de establecimiento truncado a 100 caracteres")
+                        if est_ciudad and len(est_ciudad) > 100:
+                            est_ciudad = est_ciudad[:100]
+                            logger.warning(f"[RUT {pdf_name}] Campo 'ciudad_nombre' de establecimiento truncado a 100 caracteres")
+                        
                         EstablecimientoRUT.objects.create(
                             rut=rut,
-                            nombre=est_data.get('nombre', ''),
-                            tipo_establecimiento=est_data.get('tipo_establecimiento'),
+                            nombre=est_nombre,
+                            tipo_establecimiento=est_tipo,
                             tipo_establecimiento_codigo=est_data.get('tipo_establecimiento_codigo'),
                             actividad_economica_ciiu=est_data.get('actividad_economica_ciiu'),
                             actividad_economica_descripcion=est_data.get('actividad_economica_descripcion'),
                             departamento_codigo=est_data.get('departamento_codigo'),
-                            departamento_nombre=est_data.get('departamento_nombre', ''),
+                            departamento_nombre=est_departamento,
                             ciudad_codigo=est_data.get('ciudad_codigo'),
-                            ciudad_nombre=est_data.get('ciudad_nombre', ''),
-                            direccion=est_data.get('direccion', ''),
+                            ciudad_nombre=est_ciudad,
+                            direccion=est_direccion,
                             matricula_mercantil=est_data.get('matricula_mercantil'),
                             telefono=est_data.get('telefono'),
                         )
@@ -337,7 +542,6 @@ def procesar_zip_ruts(zip_file, task=None) -> Dict:
                     codigos_responsabilidades = rut_data.get('responsabilidades_codigos', [])
                     if codigos_responsabilidades:
                         from ..models import ResponsabilidadTributaria
-                        from django.db import IntegrityError
                         
                         descripciones_responsabilidades = {
                             '7': 'Retención en la fuente a título de renta',
@@ -395,6 +599,7 @@ def procesar_zip_ruts(zip_file, task=None) -> Dict:
                     }
                     
                 except Exception as e:
+                    logger.error(f"[RUT {pdf_name}] Error inesperado al procesar RUT: {str(e)}", exc_info=True)
                     return {
                         'tipo': 'fallido',
                         'archivo': pdf_name,
@@ -514,18 +719,53 @@ def generar_reporte_txt(resultados: Dict) -> str:
             reporte.append("")
     
     if resultados['fallidos']:
+        # Agrupar fallidos por tipo de error
+        fallidos_por_tipo = {}
+        for fallido in resultados['fallidos']:
+            razon = fallido.get('razon', 'Error desconocido')
+            tipo_error = 'Otros errores'
+            
+            if 'No se pudo detectar el NIT' in razon:
+                tipo_error = 'NIT no detectado'
+            elif 'Error al extraer datos del PDF' in razon:
+                tipo_error = 'Error de extracción de PDF'
+            elif 'Error inesperado' in razon:
+                tipo_error = 'Error inesperado'
+            elif 'Error procesando future' in razon:
+                tipo_error = 'Error de procesamiento'
+            
+            if tipo_error not in fallidos_por_tipo:
+                fallidos_por_tipo[tipo_error] = []
+            fallidos_por_tipo[tipo_error].append(fallido)
+        
+        # Resumen de estadísticas
         reporte.append("=" * 80)
-        reporte.append("RUTs FALLIDOS")
+        reporte.append("RESUMEN DE FALLIDOS POR TIPO")
         reporte.append("=" * 80)
         reporte.append("")
-        for i, fallido in enumerate(resultados['fallidos'], 1):
-            reporte.append(f"{i}. Archivo: {fallido['archivo']}")
-            if 'nit' in fallido:
-                reporte.append(f"   NIT: {fallido.get('nit', 'N/A')} (Normalizado: {fallido.get('nit_normalizado', 'N/A')})")
-            if 'razon_social' in fallido:
-                reporte.append(f"   Razón Social: {fallido['razon_social']}")
-            reporte.append(f"   Razón del fallo: {fallido['razon']}")
+        for tipo, lista in fallidos_por_tipo.items():
+            reporte.append(f"  {tipo}: {len(lista)} archivos")
+        reporte.append("")
+        
+        # Detalle de fallidos agrupados
+        reporte.append("=" * 80)
+        reporte.append("DETALLE DE RUTs FALLIDOS")
+        reporte.append("=" * 80)
+        reporte.append("")
+        
+        contador = 1
+        for tipo_error, lista_fallidos in sorted(fallidos_por_tipo.items()):
+            reporte.append(f"\n--- {tipo_error.upper()} ({len(lista_fallidos)} archivos) ---")
             reporte.append("")
+            for fallido in lista_fallidos:
+                reporte.append(f"{contador}. Archivo: {fallido['archivo']}")
+                if 'nit' in fallido:
+                    reporte.append(f"   NIT: {fallido.get('nit', 'N/A')} (Normalizado: {fallido.get('nit_normalizado', 'N/A')})")
+                if 'razon_social' in fallido:
+                    reporte.append(f"   Razón Social: {fallido['razon_social']}")
+                reporte.append(f"   Razón del fallo: {fallido['razon']}")
+                reporte.append("")
+                contador += 1
     
     reporte.append("=" * 80)
     reporte.append("FIN DEL REPORTE")

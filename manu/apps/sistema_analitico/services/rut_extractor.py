@@ -85,52 +85,100 @@ def extract_rut_data_from_pdf(pdf_file) -> Dict:
     )
     if nit_match:
         linea_nit = nit_match.group(1).strip()
-        # Regex para separar: números (NIT + DV) - dirección - código final (DV)
-        # Formato puede ser: "4 1 0 3 1 5 4 3 Impuestos de Cúcuta 7" (NIT de 8 dígitos + DV al final)
-        # O: "8 8 2 2 2 6 8 4 0 Impuestos de Cúcuta 7" (NIT de 9 dígitos con DV incluido)
-        patron = re.compile(r'^([\d\s]+)([^\d]+)(\d+)$')
-        partes = patron.match(linea_nit)
+        # ✅ LÓGICA CORREGIDA: Capturar todos los dígitos hasta que empiecen las letras
+        # El último dígito antes de las letras es el DV, los anteriores son el NIT
+        # Ejemplo: "4 1 0 3 1 5 4 3 Impuestos de Cúcuta 7" 
+        #   -> Capturar: "4 1 0 3 1 5 4 3" (hasta antes de "Impuestos")
+        #   -> NIT: "4103154", DV: "3" (último dígito antes de las letras)
+        #   -> El "7" es parte del código de "Impuestos de Cúcuta", NO es el DV
         
-        if partes:
-            # Procesar números iniciales (todos los dígitos antes de la dirección)
-            numeros = partes.group(1).replace(" ", "")
-            dv_final = partes.group(3).strip()  # DV al final después de la dirección
+        # Buscar donde empiezan las letras (dirección seccional)
+        patron_digitos = re.compile(r'^([\d\s]+?)(?=[A-Za-zÁÉÍÓÚáéíóúÑñ])')
+        match_digitos = patron_digitos.match(linea_nit)
+        
+        if match_digitos:
+            # Capturar todos los dígitos hasta antes de las letras
+            numeros_con_dv = match_digitos.group(1).replace(" ", "").strip()
             
-            # Aceptar NITs de 8-11 dígitos (algunos NITs de personas naturales tienen 8 dígitos)
-            if len(numeros) >= 8:
-                if len(numeros) >= 9:
-                    # Si tiene 9+ dígitos, el último puede ser el DV o el DV está al final
-                    # Intentar primero con DV al final (más común en formato RUT)
-                    nit = numeros
-                    dv = dv_final
-                    # Si el último dígito del NIT coincide con el DV final, usar el DV final
-                    if numeros[-1] == dv_final:
-                        nit = numeros[:-1]
-                        dv = dv_final
+            # ✅ LÓGICA: El último dígito antes de las letras es el DV
+            # Ejemplo: "1 0 0 5 0 3 8 6 3 8 2" -> NIT: "1005038638", DV: "2"
+            # Ejemplo: "4 1 0 3 1 5 4 3" -> NIT: "4103154", DV: "3"
+            if len(numeros_con_dv) >= 9:
+                # Si tiene 9+ dígitos, el último es el DV
+                # Ejemplo: "10050386382" -> NIT: "1005038638", DV: "2"
+                nit = numeros_con_dv[:-1]
+                dv = numeros_con_dv[-1]
+            elif len(numeros_con_dv) == 8:
+                # Si tiene exactamente 8 dígitos, el último es el DV
+                # Ejemplo: "41031543" -> NIT: "4103154", DV: "3"
+                nit = numeros_con_dv[:-1]
+                dv = numeros_con_dv[-1]
+            else:
+                # Si tiene menos de 8 dígitos, algo está mal
+                nit = numeros_con_dv
+                dv = ''
+            
+            # ✅ CORRECCIÓN: Validar longitud del NIT (sin DV) - mínimo 7 dígitos (algunos NITs tienen 7 dígitos + 1 DV = 8 total)
+            if 7 <= len(nit) <= 11:  # Validar longitud del NIT (sin DV)
+                # ✅ IMPORTANTE: Guardar NIT con formato completo (con guión y DV) para que normalize_nit_and_extract_dv lo procese correctamente
+                # Si no, save() asumirá que el último dígito es el DV y lo quitará
+                if dv:
+                    data['nit'] = f"{nit}-{dv}"  # Formato: "4103154-3"
                 else:
-                    # Si tiene exactamente 8 dígitos, usar el DV que está después de la dirección
-                    nit = numeros
-                    dv = dv_final
-                
-                if 8 <= len(nit) <= 11:  # Validar longitud
                     data['nit'] = nit
-                    data['nit_normalizado'] = nit
+                data['nit_normalizado'] = nit  # Sin DV
+                data['dv'] = dv
+                nit_encontrado = True
+        else:
+            # Fallback: Si no encuentra letras, usar el método anterior
+            patron = re.compile(r'^([\d\s]+)([^\d]+)(\d+)$')
+            partes = patron.match(linea_nit)
+            
+            if partes:
+                numeros = partes.group(1).replace(" ", "")
+                if len(numeros) >= 9:
+                    nit = numeros[:-1]
+                    dv = numeros[-1]
+                elif len(numeros) == 8:
+                    nit = numeros[:-1]
+                    dv = numeros[-1]
+                else:
+                    nit = numeros
+                    dv = ''
+                
+                # ✅ CORRECCIÓN: Validar longitud del NIT (sin DV) - mínimo 7 dígitos
+                if 7 <= len(nit) <= 11:
+                    # ✅ IMPORTANTE: Guardar NIT con formato completo (con guión y DV)
+                    if dv:
+                        data['nit'] = f"{nit}-{dv}"  # Formato: "4103154-3"
+                    else:
+                        data['nit'] = nit
+                    data['nit_normalizado'] = nit  # Sin DV
                     data['dv'] = dv
                     nit_encontrado = True
     
     # Patrón 2: Buscar NIT y DV por separado (más flexible)
+    # Este patrón busca cuando el campo "6. DV" está explícitamente separado
     if not nit_encontrado:
         nit_dv_match = re.search(
-            r'5\.\s*N(?:úmero|IT)[^\n]*Tributaria[^\n]*\(?NIT\)?[^\n]*\n([\d\s]{9,15})\s*\n\s*6\.\s*DV[^\n]*\n\s*(\d)', 
+            r'5\.\s*N(?:úmero|IT)[^\n]*Tributaria[^\n]*\(?NIT\)?[^\n]*\n([\d\s]{8,15})\s*\n\s*6\.\s*DV[^\n]*\n\s*(\d)', 
             texto_completo, 
             re.IGNORECASE | re.DOTALL
         )
         if nit_dv_match:
             nit_raw = nit_dv_match.group(1).replace(' ', '').replace('\n', '').strip()
             dv = nit_dv_match.group(2).strip()
-            if 9 <= len(nit_raw) <= 11:
-                data['nit'] = nit_raw
-                data['nit_normalizado'] = nit_raw
+            # ✅ CORRECCIÓN: Cuando el campo "6. DV" está separado, el NIT NO incluye el DV
+            # Ejemplo: NIT: "1005038638", DV: "2" (separados)
+            # El nit_raw ya es el NIT completo, NO necesita quitar el último dígito
+            nit = nit_raw
+            if 8 <= len(nit) <= 11:
+                # ✅ IMPORTANTE: Guardar NIT con formato completo (con guión y DV) para que normalize_nit_and_extract_dv lo procese correctamente
+                if dv:
+                    data['nit'] = f"{nit}-{dv}"  # Formato: "1005038638-2"
+                else:
+                    data['nit'] = nit
+                data['nit_normalizado'] = nit  # Sin DV
                 data['dv'] = dv
                 nit_encontrado = True
     
@@ -151,8 +199,12 @@ def extract_rut_data_from_pdf(pdf_file) -> Dict:
                 else:
                     nit = nit_raw
                     dv = ''
-                data['nit'] = nit
-                data['nit_normalizado'] = nit
+                # ✅ IMPORTANTE: Guardar NIT con formato completo (con guión y DV)
+                if dv:
+                    data['nit'] = f"{nit}-{dv}"  # Formato: "1005038638-2"
+                else:
+                    data['nit'] = nit
+                data['nit_normalizado'] = nit  # Sin DV
                 data['dv'] = dv
                 nit_encontrado = True
     
@@ -168,14 +220,17 @@ def extract_rut_data_from_pdf(pdf_file) -> Dict:
             dv = nit_pattern4.group(2) if nit_pattern4.group(2) else ''
             if 9 <= len(nit_raw) <= 11:
                 if dv:
-                    data['nit'] = nit_raw
-                    data['nit_normalizado'] = nit_raw
+                    # ✅ IMPORTANTE: Guardar NIT con formato completo (con guión y DV)
+                    data['nit'] = f"{nit_raw}-{dv}"  # Formato: "1005038638-2"
+                    data['nit_normalizado'] = nit_raw  # Sin DV
                     data['dv'] = dv
                 else:
                     # Si no hay DV separado, asumir que está al final
-                    data['nit'] = nit_raw[:-1]
-                    data['nit_normalizado'] = nit_raw[:-1]
-                    data['dv'] = nit_raw[-1]
+                    nit = nit_raw[:-1]
+                    dv = nit_raw[-1]
+                    data['nit'] = f"{nit}-{dv}"  # Formato: "1005038638-2"
+                    data['nit_normalizado'] = nit  # Sin DV
+                    data['dv'] = dv
                 nit_encontrado = True
     
     # Patrón 5: Buscar cualquier secuencia de 8-11 dígitos cerca de "Identificación" o "Número"
@@ -191,9 +246,12 @@ def extract_rut_data_from_pdf(pdf_file) -> Dict:
             if 8 <= len(nit_raw) <= 11:
                 # Si tiene 9+ dígitos, asumir que el último es DV
                 if len(nit_raw) >= 9:
-                    data['nit'] = nit_raw[:-1]
-                    data['nit_normalizado'] = nit_raw[:-1]
-                    data['dv'] = nit_raw[-1]
+                    nit = nit_raw[:-1]
+                    dv = nit_raw[-1]
+                    # ✅ IMPORTANTE: Guardar NIT con formato completo (con guión y DV)
+                    data['nit'] = f"{nit}-{dv}"  # Formato: "1005038638-2"
+                    data['nit_normalizado'] = nit  # Sin DV
+                    data['dv'] = dv
                 else:
                     data['nit'] = nit_raw
                     data['nit_normalizado'] = nit_raw
@@ -212,9 +270,12 @@ def extract_rut_data_from_pdf(pdf_file) -> Dict:
             nit_raw = nit_pattern6.group(1).replace(' ', '').replace('\n', '').strip()
             if 8 <= len(nit_raw) <= 11:
                 if len(nit_raw) >= 9:
-                    data['nit'] = nit_raw[:-1]
-                    data['nit_normalizado'] = nit_raw[:-1]
-                    data['dv'] = nit_raw[-1]
+                    nit = nit_raw[:-1]
+                    dv = nit_raw[-1]
+                    # ✅ IMPORTANTE: Guardar NIT con formato completo (con guión y DV)
+                    data['nit'] = f"{nit}-{dv}"  # Formato: "1005038638-2"
+                    data['nit_normalizado'] = nit  # Sin DV
+                    data['dv'] = dv
                 else:
                     data['nit'] = nit_raw
                     data['nit_normalizado'] = nit_raw
@@ -231,9 +292,12 @@ def extract_rut_data_from_pdf(pdf_file) -> Dict:
             for num in todos_los_numeros:
                 if 8 <= len(num) <= 11:
                     if len(num) >= 9:
-                        data['nit'] = num[:-1]
-                        data['nit_normalizado'] = num[:-1]
-                        data['dv'] = num[-1]
+                        nit = num[:-1]
+                        dv = num[-1]
+                        # ✅ IMPORTANTE: Guardar NIT con formato completo (con guión y DV)
+                        data['nit'] = f"{nit}-{dv}"  # Formato: "1005038638-2"
+                        data['nit_normalizado'] = nit  # Sin DV
+                        data['dv'] = dv
                     else:
                         data['nit'] = num
                         data['nit_normalizado'] = num
@@ -307,9 +371,13 @@ def extract_rut_data_from_pdf(pdf_file) -> Dict:
         if match := re.search(r"34\.\s*Otros nombres\s*\n([^\n]+)", texto_completo):
             data['persona_natural_otros_nombres'] = match.group(1).strip()
     
-    # Razón social (campo 35)
-    if match := re.search(r"35\.\s*Razón social\s*\n([^\n]+)", texto_completo):
-        data['razon_social'] = match.group(1).strip()
+    # Razón social (campo 35) - LÓGICA ORIGINAL: Solo capturar hasta el siguiente campo numerado
+    # Evitar capturar "36. Nombre comercial" o "37. Sigla" si el campo 35 está vacío
+    if match := re.search(r"35\.\s*Razón social\s*\n([^\n]+?)(?=\n\s*36\.|\n\s*37\.|\n\s*\d+\.|$)", texto_completo, re.IGNORECASE):
+        razon_social_raw = match.group(1).strip()
+        # Solo asignar si no es un campo numerado (evitar capturar "36. Nombre comercial 37. Sigla")
+        if razon_social_raw and not razon_social_raw.startswith('36.') and not razon_social_raw.startswith('37.'):
+            data['razon_social'] = razon_social_raw
     
     # Nombre comercial (campo 36) - método de BCE mejorado
     if match := re.search(r"36\.\s*Nombre comercial\s*\n(.*?)(?=\n37\.\s*Sigla|\n38\.\s*País|\n\d+\.|$)", texto_completo, re.DOTALL):

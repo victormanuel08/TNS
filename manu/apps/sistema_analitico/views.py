@@ -54,6 +54,7 @@ from .models import (
     normalize_nit_and_extract_dv,
     ConfiguracionS3,
     BackupS3,
+    AIAnalyticsAPIKey,
 )
 from .serializers import *
 from .services.data_manager import DataManager
@@ -327,8 +328,12 @@ def _attach_api_key(request):
         if auth_header.startswith('Api-Key '):
             api_key = auth_header.replace('Api-Key ', '')
         elif auth_header.startswith('Bearer '):
-            # Algunos clientes pueden enviar como Bearer
-            api_key = auth_header.replace('Bearer ', '')
+            # Verificar que sea una API Key (formato sk_...) y no un JWT (formato eyJ...)
+            bearer_token = auth_header.replace('Bearer ', '').strip()
+            # Las API Keys empiezan con 'sk_', los JWT empiezan con 'eyJ'
+            if bearer_token.startswith('sk_'):
+                api_key = bearer_token
+            # Si es JWT (eyJ...), ignorarlo - no es una API Key
     
     # Debug: mostrar todos los headers relacionados
     if not api_key:
@@ -710,8 +715,29 @@ class RUTViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
         nit_proporcionado = serializer.validated_data.get('nit', '').strip()
         
         try:
+            import logging
+            logger = logging.getLogger(__name__)
+            
             # Extraer datos del PDF
             pdf_data = self.extract_rut_data_from_pdf(archivo_pdf)
+            
+            # 🔍 LOG DETALLADO: Mostrar qué se extrajo del PDF
+            tipo_contribuyente = pdf_data.get('tipo_contribuyente', 'NO_DETECTADO')
+            razon_social_raw = pdf_data.get('razon_social', '').strip()
+            
+            logger.info(f"[RUT PDF DIRECTO] 🔍 EXTRACCIÓN DEL PDF:")
+            logger.info(f"  • Tipo Contribuyente: {tipo_contribuyente}")
+            logger.info(f"  • Razón Social (campo 35): '{razon_social_raw}'")
+            
+            if tipo_contribuyente == 'persona_natural':
+                pn_apellido1 = pdf_data.get('persona_natural_primer_apellido', '').strip()
+                pn_apellido2 = pdf_data.get('persona_natural_segundo_apellido', '').strip()
+                pn_nombre = pdf_data.get('persona_natural_primer_nombre', '').strip()
+                pn_otros = pdf_data.get('persona_natural_otros_nombres', '').strip()
+                logger.info(f"  • Campo 31 (Primer Apellido): '{pn_apellido1}'")
+                logger.info(f"  • Campo 32 (Segundo Apellido): '{pn_apellido2}'")
+                logger.info(f"  • Campo 33 (Primer Nombre): '{pn_nombre}'")
+                logger.info(f"  • Campo 34 (Otros Nombres): '{pn_otros}'")
             
             # Usar NIT proporcionado o el detectado del PDF
             nit_normalizado = self.normalize_nit(nit_proporcionado) if nit_proporcionado else pdf_data.get('nit_normalizado')
@@ -722,13 +748,18 @@ class RUTViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
+            # ✅ CORRECCIÓN: Usar obtener_razon_social_mejorada para construir razón social correctamente
+            from .services.rut_batch_processor import obtener_razon_social_mejorada
+            razon_social_mejorada = obtener_razon_social_mejorada(pdf_data)
+            logger.info(f"[RUT PDF DIRECTO] ✅ Razón Social Final: '{razon_social_mejorada}'")
+            
             # Buscar o crear RUT
             rut, created = RUT.objects.get_or_create(
                 nit_normalizado=nit_normalizado,
                 defaults={
                     'nit': pdf_data.get('nit', nit_normalizado),
                     'dv': pdf_data.get('dv', ''),
-                    'razon_social': pdf_data.get('razon_social', ''),
+                    'razon_social': razon_social_mejorada,  # ✅ Usar razón social mejorada
                 }
             )
             
@@ -738,6 +769,9 @@ class RUTViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
                     # Si el valor existe, actualizarlo; si es None o vacío, también actualizar para limpiar
                     if value is not None:
                         setattr(rut, key, value)
+            
+            # ✅ IMPORTANTE: Actualizar razón social con la versión mejorada
+            rut.razon_social = razon_social_mejorada
             
             # Reemplazar archivo PDF si existe uno anterior
             if rut.archivo_pdf:
@@ -10969,12 +11003,35 @@ def pasarela_response_view(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([AllowAny])  # Permitir API Key o JWT
 def celery_task_status_view(request, task_id):
     """
     Consulta el estado de una tarea Celery por su ID.
     GET /api/celery/task-status/{task_id}/
+    Permite autenticación con API Key o JWT.
     """
+    # Intentar autenticar con API Key primero
+    api_key_authenticated = _attach_api_key(request)
+    
+    # Si no hay API Key, intentar autenticar con JWT
+    if not api_key_authenticated:
+        from rest_framework_simplejwt.authentication import JWTAuthentication
+        jwt_auth = JWTAuthentication()
+        try:
+            user, token = jwt_auth.authenticate(request)
+            if user and token:
+                request.user = user
+        except Exception:
+            # JWT inválido o expirado, continuar sin autenticación
+            pass
+        
+        # Verificar si hay usuario autenticado (JWT o API Key)
+        if not (hasattr(request, 'user') and request.user.is_authenticated):
+            return Response(
+                {'error': 'Se requiere API Key o autenticación de usuario'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+    
     from celery.result import AsyncResult
     from config.celery import app as celery_app
     
@@ -11647,7 +11704,7 @@ class ComunicacionViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
 
 class ClasificacionContableViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
     """
-    ViewSet para clasificación contable de facturas usando Deepseek.
+    ViewSet para clasificación contable de facturas usando servicios de IA/Analytics.
     Acepta factura directa o session_id para cargar desde sesión DIAN.
     """
     permission_classes = [AllowAny]  # Permitir acceso con API Key o usuario autenticado
@@ -11672,7 +11729,7 @@ class ClasificacionContableViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
     @action(detail=False, methods=['post'], url_path='clasificar-factura')
     def clasificar_factura(self, request):
         """
-        Clasificar factura(s) contable usando Deepseek.
+        Clasificar factura(s) contable usando servicios de IA/Analytics.
         
         Acepta 4 modos:
         1. Factura directa: Enviar 'factura' en el body
@@ -11835,25 +11892,61 @@ class ClasificacionContableViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
             resultados = []
             
             # Configuración de procesamiento paralelo con rate limiting
-            # Deepseek API: límite de 60 llamadas por minuto (RPM)
+            # Servicio de IA: límite de 60 llamadas por minuto (RPM)
             # Estrategia segura: lotes de 10, máximo 50 por minuto, pausa de 60 segundos
             from celery import group
             from celery.result import allow_join_result
             import time
             
-            # Tamaño de lote configurable (recomendado: 10 según DeepSeek)
+            # Tamaño de lote configurable (recomendado: 10 según el servicio)
             lote_size = getattr(settings, 'CLASIFICACION_LOTE_PARALELO', 10)
             
             # Preparar todas las facturas para procesamiento
+            # PROTECCIÓN CONTRA DUPLICADOS: Filtrar facturas que ya están clasificadas
+            # PERO: Si forzar_reclasificacion=True, procesar todas (incluso las ya clasificadas)
             tareas_preparadas = []
             facturas_para_procesar = []
+            facturas_ya_clasificadas = []
+            
+            # Verificar si se debe forzar reclasificación (omite la protección de duplicados)
+            forzar_reclasificacion = datos.get('forzar_reclasificacion', False)
+            
+            # Si hay session_dian_id y NO se fuerza reclasificación, verificar qué facturas ya están clasificadas
+            if session_dian_id and not forzar_reclasificacion:
+                from .models import ClasificacionContable
+                facturas_clasificadas = ClasificacionContable.objects.filter(
+                    session_dian_id=session_dian_id
+                ).values_list('factura_numero', flat=True)
+                facturas_clasificadas_set = set(facturas_clasificadas)
+                logger.info(f"🔍 [CLASIFICACION] Verificando duplicados: {len(facturas_clasificadas_set)} facturas ya clasificadas en sesión {session_dian_id}")
+            else:
+                facturas_clasificadas_set = set()
+                if forzar_reclasificacion:
+                    logger.info(f"🔄 [CLASIFICACION] Modo FORZAR RECLASIFICACIÓN activo: se procesarán todas las facturas (incluso las ya clasificadas)")
             
             for factura in facturas:
+                factura_numero = factura.get('numero_factura')
+                
+                # PROTECCIÓN: Si ya está clasificada Y NO se fuerza reclasificación, omitir
+                # (evita duplicados y llamadas innecesarias en clasificación normal)
+                if session_dian_id and factura_numero and not forzar_reclasificacion:
+                    if factura_numero in facturas_clasificadas_set:
+                        facturas_ya_clasificadas.append(factura_numero)
+                        resultados.append({
+                            'factura_numero': factura_numero,
+                            'proveedor_nit': datos.get('proveedor_nit') or factura.get('proveedor_nit'),
+                            'procesamiento_asincrono': datos.get('procesar_asincrono', False),
+                            'estado': 'YA_CLASIFICADA',
+                            'mensaje': 'Esta factura ya fue clasificada previamente. Use "Reclasificar" para forzar una nueva clasificación.'
+                        })
+                        logger.info(f"⏭️ [CLASIFICACION] Factura {factura_numero} ya clasificada, omitiendo...")
+                        continue
+                
                 proveedor_nit = datos.get('proveedor_nit') or factura.get('proveedor_nit')
                 
                 if not proveedor_nit:
                     resultados.append({
-                        'factura_numero': factura.get('numero_factura'),
+                        'factura_numero': factura_numero,
                         'error': 'proveedor_nit no encontrado en factura',
                         'estado': 'FALLIDO'
                     })
@@ -11872,10 +11965,13 @@ class ClasificacionContableViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
                     'proveedor_ciuu': proveedor_ciuu
                 })
             
+            if facturas_ya_clasificadas:
+                logger.info(f"⏭️ [CLASIFICACION] {len(facturas_ya_clasificadas)} facturas ya clasificadas, omitidas: {facturas_ya_clasificadas[:5]}{'...' if len(facturas_ya_clasificadas) > 5 else ''}")
+            
             if datos.get('procesar_asincrono'):
                 # Procesar en lotes paralelos con rate limiting seguro
-                # Estrategia basada en recomendaciones de DeepSeek:
-                # - DeepSeek acepta hasta 60 llamadas por minuto (RPM)
+                # Estrategia basada en recomendaciones del servicio:
+                # - El servicio acepta hasta 60 llamadas por minuto (RPM)
                 # - Cada factura toma ~20 segundos en procesarse
                 # - Estrategia: Enviar 50 facturas primero (en lotes de 10), esperar 60s, enviar las restantes
                 max_facturas_por_minuto = getattr(settings, 'CLASIFICACION_MAX_FACTURAS_POR_MINUTO', 50)
@@ -11883,7 +11979,7 @@ class ClasificacionContableViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
                 
                 logger.info(f"🔄 [CLASIFICACION] Procesando {len(facturas_para_procesar)} facturas con rate limiting seguro")
                 logger.info(f"   - Tamaño de lote: {lote_size} facturas (recomendado: 10)")
-                logger.info(f"   - Máximo por minuto: {max_facturas_por_minuto} facturas (límite DeepSeek: 60 RPM)")
+                logger.info(f"   - Máximo por minuto: {max_facturas_por_minuto} facturas (límite del servicio: 60 RPM)")
                 logger.info(f"   - Pausa entre grupos: {pausa_entre_grupos} segundos (para resetear contador)")
                 
                 # Dividir en lotes de tamaño configurado
@@ -11893,7 +11989,7 @@ class ClasificacionContableViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
                 grupo_actual = 1
                 total_lotes_enviados = 0
                 
-                # Procesar lotes respetando rate limit de DeepSeek
+                    # Procesar lotes respetando rate limit del servicio
                 for idx_lote, lote in enumerate(lotes):
                     # Verificar si necesitamos pausar (hemos enviado el máximo por minuto)
                     if facturas_enviadas_en_grupo >= max_facturas_por_minuto:
@@ -11947,7 +12043,7 @@ class ClasificacionContableViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
                         })
                     
                     # Pausa entre lotes del mismo grupo para distribuir las peticiones
-                    # Esto ayuda a evitar saturar DeepSeek y distribuir las 50 facturas a lo largo del minuto
+                    # Esto ayuda a evitar saturar el servicio y distribuir las 50 facturas a lo largo del minuto
                     # Pausa fija de 2 segundos entre lotes (seguro y predecible)
                     if idx_lote < len(lotes) - 1 and facturas_enviadas_en_grupo < max_facturas_por_minuto:
                         time.sleep(2)  # 2 segundos entre lotes del mismo grupo
@@ -12391,7 +12487,7 @@ class ClasificacionContableViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
         proveedor_ciuu = rut_proveedor.get('ciuu_principal') if rut_proveedor else None
         
         # Clasificar nuevamente
-        print(f"🔄 [RECLASIFICAR_FACTURA] Iniciando clasificación con Deepseek...")
+        print(f"🔄 [RECLASIFICAR_FACTURA] Iniciando clasificación con servicio de IA...")
         resultado = servicio.clasificar_factura(
             factura=doc_info['factura'],
             empresa_nit=empresa_nit,
@@ -12468,7 +12564,7 @@ class ClasificacionContableViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
         from .services.camara_comercio_service import consultar_camara_comercio_por_nit
         
         try:
-            clasificacion = ClasificacionContable.objects.get(id=pk)
+            clasificacion = ClasificacionContable.objects.select_related('session_dian').get(id=pk)
             servicio = ClasificadorContableService()
             
             empresa_nit = clasificacion.empresa_nit
@@ -12482,19 +12578,35 @@ class ClasificacionContableViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
                 'ciuu_secundarios': []
             }
             
-            # Buscar RUT de empresa
+            # Buscar RUT de empresa con el NIT guardado
             rut_empresa = servicio.buscar_rut_por_nit(empresa_nit)
+            
+            # Si no se encuentra, intentar con el NIT de la sesión original (puede ser más completo)
+            if not rut_empresa and clasificacion.session_dian:
+                nit_sesion = clasificacion.session_dian.nit
+                if nit_sesion and nit_sesion != empresa_nit:
+                    logger.info(f"🔍 [ANALISIS_CIUU] NIT guardado ({empresa_nit}) no encontró RUT, intentando con NIT de sesión ({nit_sesion})")
+                    rut_empresa = servicio.buscar_rut_por_nit(nit_sesion)
+                    if rut_empresa:
+                        empresa_nit = nit_sesion  # Actualizar para mostrar el NIT correcto
+                        empresa_info['nit'] = nit_sesion
+            
             if rut_empresa:
                 empresa_info['razon_social'] = rut_empresa.get('razon_social')
                 empresa_info['ciuu_principal'] = rut_empresa.get('ciuu_principal')
                 empresa_info['ciuu_secundarios'] = rut_empresa.get('ciuu_secundarios', [])
             else:
-                # Intentar Cámara de Comercio
-                camara_info = consultar_camara_comercio_por_nit(empresa_nit)
+                # Intentar Cámara de Comercio con el NIT más completo disponible
+                nit_para_buscar = empresa_nit
+                if clasificacion.session_dian and clasificacion.session_dian.nit:
+                    nit_para_buscar = clasificacion.session_dian.nit
+                
+                camara_info = consultar_camara_comercio_por_nit(nit_para_buscar)
                 if camara_info:
                     empresa_info['razon_social'] = camara_info.get('razon_social')
                     empresa_info['ciuu_principal'] = camara_info.get('ciuu_principal')
                     empresa_info['ciuu_secundarios'] = camara_info.get('ciuu_secundarios', [])
+                    empresa_info['nit'] = nit_para_buscar  # Actualizar NIT si se encontró con el de sesión
             
             # Obtener detalles de CIUU de empresa
             if empresa_info['ciuu_principal']:
@@ -12627,4 +12739,53 @@ class ClasificacionContableViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
                 {'error': str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+
+class AIAnalyticsAPIKeyViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
+    """
+    ViewSet para gestionar API keys de servicios de IA/Analytics.
+    Permite crear, listar, actualizar y ver estadísticas de uso y costos.
+    """
+    queryset = AIAnalyticsAPIKey.objects.all()
+    serializer_class = AIAnalyticsAPIKeySerializer
+    permission_classes = [IsAuthenticated]  # Solo usuarios autenticados
+    
+    def get_queryset(self):
+        """Ordenar por última vez usada y total de peticiones"""
+        return AIAnalyticsAPIKey.objects.all().order_by('-ultima_vez_usada', '-total_peticiones')
+    
+    @action(detail=False, methods=['get'])
+    def estadisticas(self, request):
+        """
+        Obtener estadísticas agregadas de todas las API keys.
+        """
+        from django.db.models import Sum, Count
+        
+        stats = AIAnalyticsAPIKey.objects.aggregate(
+            total_api_keys=Count('id'),
+            api_keys_activas=Count('id', filter=Q(activa=True)),
+            total_peticiones=Sum('total_peticiones'),
+            total_peticiones_exitosas=Sum('total_peticiones_exitosas'),
+            total_peticiones_fallidas=Sum('total_peticiones_fallidas'),
+            total_errores_rate_limit=Sum('total_errores_rate_limit'),
+            costo_total_usd=Sum('costo_total_usd'),
+            tokens_input_total=Sum('tokens_input_total'),
+            tokens_output_total=Sum('tokens_output_total'),
+            tokens_cache_hit_total=Sum('tokens_cache_hit_total'),
+            tokens_cache_miss_total=Sum('tokens_cache_miss_total'),
+        )
+        
+        # Calcular tasas
+        if stats['total_peticiones'] and stats['total_peticiones'] > 0:
+            stats['tasa_exito_global'] = round(
+                (stats['total_peticiones_exitosas'] / stats['total_peticiones']) * 100, 2
+            )
+            stats['tasa_error_rate_limit_global'] = round(
+                (stats['total_errores_rate_limit'] / stats['total_peticiones']) * 100, 2
+            )
+        else:
+            stats['tasa_exito_global'] = 0.0
+            stats['tasa_error_rate_limit_global'] = 0.0
+        
+        return Response(stats)
 

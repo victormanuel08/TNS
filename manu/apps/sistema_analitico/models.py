@@ -661,8 +661,16 @@ class RUT(models.Model):
     def save(self, *args, **kwargs):
         """Normalizar NIT antes de guardar y truncar campos si exceden límites"""
         if self.nit:
-            # Normalizar NIT: eliminar puntos, guiones y espacios
-            self.nit_normalizado = ''.join(c for c in str(self.nit) if c.isdigit())
+            # ✅ CORRECCIÓN: Usar normalize_nit_and_extract_dv para ser consistente con el resto del sistema
+            # Esto asegura que nit_normalizado NO incluya el dígito verificador (DV)
+            # IMPORTANTE: NO modificar self.nit, debe mantener el formato completo "1005038638-2"
+            nit_norm, dv, nit_original = normalize_nit_and_extract_dv(self.nit)
+            self.nit_normalizado = nit_norm
+            # Si no hay DV guardado y se detectó uno, guardarlo
+            if dv and not self.dv:
+                self.dv = dv
+            # ✅ NO MODIFICAR self.nit - debe mantenerse con formato completo "1005038638-2"
+            # El extractor ya lo guarda con formato completo, y así debe quedarse
         
         # Truncar campos CharField si exceden su max_length
         # Obtener todos los campos CharField del modelo dinámicamente
@@ -2585,7 +2593,7 @@ class Proveedor(models.Model):
 
 class ClasificacionContable(models.Model):
     """
-    Modelo para almacenar resultados de clasificación contable de facturas usando Deepseek.
+    Modelo para almacenar resultados de clasificación contable de facturas usando servicios de IA/Analytics.
     Guarda toda la información relevante para consultas posteriores y análisis.
     """
     ESTADO_CHOICES = [
@@ -2674,11 +2682,11 @@ class ClasificacionContable(models.Model):
     # ========== DATOS ENVIADOS Y RESPUESTA ==========
     factura_json_enviada = models.JSONField(
         default=dict,
-        help_text='JSON de la factura enviada a Deepseek (sin prompt, solo factura)'
+        help_text='JSON de la factura enviada al servicio de IA (sin prompt, solo factura)'
     )
     respuesta_json_completa = models.JSONField(
         default=dict,
-        help_text='JSON completo de respuesta de Deepseek (con prompt y todo)'
+        help_text='JSON completo de respuesta del servicio de IA (con prompt y todo)'
     )
     respuesta_json_factura = models.JSONField(
         default=dict,
@@ -2722,16 +2730,156 @@ class ClasificacionContable(models.Model):
         verbose_name = 'Clasificación Contable'
         verbose_name_plural = 'Clasificaciones Contables'
         indexes = [
-            models.Index(fields=['session_dian', 'factura_numero']),
-            models.Index(fields=['proveedor_nit_normalizado']),
-            models.Index(fields=['empresa_nit']),
-            models.Index(fields=['estado']),
-            models.Index(fields=['created_at']),
+            models.Index(fields=['session_dian', 'factura_numero'], name='clasif_session_factura_idx'),
+            models.Index(fields=['proveedor_nit_normalizado'], name='clasif_prov_nit_norm_idx'),
+            models.Index(fields=['empresa_nit'], name='clasif_empresa_nit_idx'),
+            models.Index(fields=['estado'], name='clasif_estado_idx'),
+            models.Index(fields=['created_at'], name='clasif_created_at_idx'),
+            # Optimizaciones adicionales para búsquedas frecuentes
+            models.Index(fields=['proveedor_nit', 'empresa_nit'], name='clasif_prov_emp_nit_idx'),  # Para búsquedas por proveedor-empresa
+            models.Index(fields=['procesado_at'], name='clasif_procesado_at_idx'),  # Para consultas de clasificaciones completadas
         ]
         ordering = ['-created_at']
     
     def __str__(self):
         return f"Factura {self.factura_numero} - {self.proveedor_nit} ({self.estado})"
+
+
+class AIAnalyticsAPIKey(models.Model):
+    """
+    Modelo para gestionar múltiples API keys de servicios de IA/Analytics con tracking de uso y costos.
+    Permite rotación automática de API keys para distribuir la carga y evitar rate limits.
+    """
+    nombre = models.CharField(
+        max_length=100,
+        unique=True,
+        help_text='Nombre identificador de la API key (ej: "AIAnalytics-Prod-1")'
+    )
+    api_key = models.CharField(
+        max_length=255,
+        help_text='API key del servicio de IA/Analytics (encriptada o en texto plano según configuración)'
+    )
+    activa = models.BooleanField(
+        default=True,
+        help_text='Si está activa, se usará en la rotación'
+    )
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+    
+    # Tracking de uso
+    total_peticiones = models.IntegerField(
+        default=0,
+        help_text='Total de peticiones realizadas con esta API key'
+    )
+    total_peticiones_exitosas = models.IntegerField(
+        default=0,
+        help_text='Total de peticiones exitosas'
+    )
+    total_peticiones_fallidas = models.IntegerField(
+        default=0,
+        help_text='Total de peticiones fallidas'
+    )
+    total_errores_rate_limit = models.IntegerField(
+        default=0,
+        help_text='Total de errores 429 (rate limit)'
+    )
+    
+    # Tracking de costos (en USD)
+    costo_total_usd = models.DecimalField(
+        max_digits=12,
+        decimal_places=6,
+        default=0,
+        help_text='Costo total acumulado en USD'
+    )
+    tokens_input_total = models.BigIntegerField(
+        default=0,
+        help_text='Total de tokens de entrada consumidos'
+    )
+    tokens_output_total = models.BigIntegerField(
+        default=0,
+        help_text='Total de tokens de salida generados'
+    )
+    tokens_cache_hit_total = models.BigIntegerField(
+        default=0,
+        help_text='Total de tokens con cache hit'
+    )
+    tokens_cache_miss_total = models.BigIntegerField(
+        default=0,
+        help_text='Total de tokens con cache miss'
+    )
+    
+    # Última vez que se usó
+    ultima_vez_usada = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text='Última vez que se usó esta API key'
+    )
+    
+    # Notas
+    notas = models.TextField(
+        blank=True,
+        null=True,
+        help_text='Notas adicionales sobre esta API key'
+    )
+    
+    class Meta:
+        db_table = 'ai_analytics_api_keys'
+        verbose_name = 'AI Analytics API Key'
+        verbose_name_plural = 'AI Analytics API Keys'
+        ordering = ['-ultima_vez_usada', '-total_peticiones']
+        indexes = [
+            models.Index(fields=['activa', 'ultima_vez_usada']),
+            models.Index(fields=['activa']),
+        ]
+    
+    def __str__(self):
+        estado = "✅" if self.activa else "❌"
+        return f"{estado} {self.nombre} - {self.total_peticiones} peticiones - ${self.costo_total_usd:.6f} USD"
+    
+    def incrementar_peticion(self, exitosa=True, es_rate_limit=False):
+        """Incrementar contador de peticiones"""
+        self.total_peticiones += 1
+        if exitosa:
+            self.total_peticiones_exitosas += 1
+        else:
+            self.total_peticiones_fallidas += 1
+            if es_rate_limit:
+                self.total_errores_rate_limit += 1
+        self.ultima_vez_usada = timezone.now()
+        self.save(update_fields=[
+            'total_peticiones', 'total_peticiones_exitosas', 'total_peticiones_fallidas',
+            'total_errores_rate_limit', 'ultima_vez_usada'
+        ])
+    
+    def agregar_costo(self, costo_usd, tokens_input=0, tokens_output=0, tokens_cache_hit=0, tokens_cache_miss=0):
+        """Agregar costo y tokens a los totales"""
+        from django.db.models import F
+        AIAnalyticsAPIKey.objects.filter(id=self.id).update(
+            costo_total_usd=F('costo_total_usd') + costo_usd,
+            tokens_input_total=F('tokens_input_total') + tokens_input,
+            tokens_output_total=F('tokens_output_total') + tokens_output,
+            tokens_cache_hit_total=F('tokens_cache_hit_total') + tokens_cache_hit,
+            tokens_cache_miss_total=F('tokens_cache_miss_total') + tokens_cache_miss,
+            ultima_vez_usada=timezone.now()
+        )
+        # Refrescar desde BD
+        self.refresh_from_db()
+    
+    @classmethod
+    def obtener_siguiente_api_key(cls):
+        """
+        Obtener la siguiente API key activa usando round-robin.
+        Selecciona la que tiene menos peticiones recientes o la más antigua en uso.
+        """
+        api_keys = cls.objects.filter(activa=True).order_by('ultima_vez_usada', 'total_peticiones')
+        if api_keys.exists():
+            return api_keys.first()
+        return None
+    
+    @classmethod
+    def obtener_todas_activas(cls):
+        """Obtener todas las API keys activas"""
+        return cls.objects.filter(activa=True).order_by('ultima_vez_usada', 'total_peticiones')
 
 
 # Extender el modelo User

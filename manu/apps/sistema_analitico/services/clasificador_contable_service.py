@@ -6,10 +6,11 @@ import json
 import time
 import logging
 import requests
+import re
 from typing import Dict, Any, List, Optional
 from django.conf import settings
 from django.utils import timezone
-from ..models import RUT, ClasificacionContable, Proveedor, normalize_nit_and_extract_dv
+from ..models import RUT, ClasificacionContable, Proveedor, AIAnalyticsAPIKey, normalize_nit_and_extract_dv
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +142,30 @@ Grupo contable debe ser inferido del nombre, uso o naturaleza del artículo. Eje
 - DIFERIDO (gastos pagados por anticipado)
 - OTROS ACTIVOS (inversiones, propiedades de inversión)
 
+## EJEMPLOS ESPECÍFICOS POR GIRO:
+### RESTAURANTES (CIUU 5611, 5619, 5620):
+- **Alimentos/Insumos que se TRANSFORMAN** (materias primas para preparar platos) → INVENTARIO (1410) NO COSTO (6135/6175)
+  - **Razón**: En restaurantes, estos son INSUMOS/MATERIAS PRIMAS que se almacenan y luego se usan para elaborar platos. NO son gastos directos, son INVENTARIO hasta que se usen en la preparación.
+  - **Ejemplos**: Salsa rosada, chicharrón, carnes, verduras, condimentos, insumos de cocina para preparar hamburguesas, sachipapas, etc.
+  - **Cuenta**: 1410 (Inventario de materias primas) - Son insumos almacenados para elaboración de platos bajo demanda
+  - **NOTA**: Solo cuando se VENDEN los platos preparados, se traslada de inventario (1410) a costo de ventas (6135/6175)
+  
+- **Bebidas y productos que se REVENDEN DIRECTAMENTE** (sin transformar) → INVENTARIO (1435) NO COSTO (6135)
+  - **Razón**: Estos productos se venden directamente al cliente sin transformación
+  - **Ejemplos**: Gaseosas, cervezas, aguas, jugos envasados, snacks, paquetes, cigarrillos
+  - **Cuenta**: 1435 (Inventario productos terminados para reventa)
+  
+- **Equipos de cocina** → ACTIVO FIJO (1520) si son duraderos
+
+### SUPERMERCADOS/TIENDAS (CIUU 4711, 4719):
+- **Alimentos comprados** → INVENTARIO (1435) para REVENTA
+- **Razón**: Los supermercados revenden productos directamente sin transformarlos
+- **Ejemplo**: Supermercado compra "Salsa rosada" → 1435 (Inventario alimentos envasados)
+
+### FERRETERÍAS (CIUU 4651):
+- **Herramientas compradas** → INVENTARIO (1435) para REVENTA
+- **Ejemplo**: Ferretería compra "Martillo" → 1435 (Inventario herramientas)
+
 ### DESTINOS ESPECIALIZADOS (5% restante):
 - PASIVO DIFERIDO (anticipos recibidos, ingresos no causados)
 - INGRESO NO OPERACIONAL (venta de activos, ingresos financieros)
@@ -197,6 +222,35 @@ Devuelve SOLO JSON válido. Estructura:
               "240801": {{ "valor": 23750, "naturaleza": "D", "auxiliar": "02", "nomauxiliar": "IVA compras herramientas" }},
               "110505": {{ "valor": 148750, "naturaleza": "C", "auxiliar": "01", "nomauxiliar": "Proveedores nacionales" }}
             }},
+            "impuestos_aplicados": [],
+            "confianza": "ALTA"
+          }},
+          {{
+            "nombre": "Salsa rosada 2000g",
+            "ref": "F002-67890",
+            "cantidad": 1,
+            "valor_unitario": 46273.11,
+            "valor_total": 46273.11,
+            "modalidad_pago": "credito",
+            "grupo_contable": "ALIMENTOS",
+            "destino": "COSTO",
+            "cuentas": {{
+              "6135": {{ "valor": 46273.11, "naturaleza": "D", "auxiliar": "01", "nomauxiliar": "Compras de alimentos para preparación" }},
+              "240801": {{ "valor": 8791.89, "naturaleza": "D", "auxiliar": "02", "nomauxiliar": "IVA compras alimentos" }},
+              "240802": {{ "valor": 7485, "naturaleza": "D", "auxiliar": "03", "nomauxiliar": "Impoconsumo alimentos" }},
+              "110505": {{ "valor": 62550, "naturaleza": "C", "auxiliar": "01", "nomauxiliar": "Proveedores nacionales" }}
+            }},
+            "impuestos_aplicados": [
+              {{ "tipo": "iva", "tasa": 19, "valor": 8791.89 }},
+              {{ "tipo": "impoconsumo", "tasa": 0, "valor": 7485 }}
+            ],
+            "observaciones": "Restaurante (CIUU 5611) compra alimentos para transformar en comidas preparadas. Clasificado como COSTO (6135), no INVENTARIO (1435).",
+            "confianza": "ALTA"
+          }}
+        ]
+      }}
+    }}
+  }},
             "impuestos_aplicados": [],
             "confianza": "ALTA"
           }}
@@ -417,7 +471,7 @@ def calcular_costo_tokens(
 ) -> Dict[str, Any]:
     """
     Calcular costo real en USD y COP basado en tokens.
-    Usa precios reales de DeepSeek API con diferenciación de cache hit/miss.
+    Usa precios reales del servicio de IA/Analytics con diferenciación de cache hit/miss.
     
     Args:
         input_tokens: Total de tokens de entrada (prompt_tokens)
@@ -431,9 +485,10 @@ def calcular_costo_tokens(
     from django.conf import settings
     
     # Precios desde settings (cargados desde ENV)
-    precio_output = getattr(settings, 'DEEPSEEK_PRICE_OUTPUT_TOKEN', 0.00000042)
-    precio_cache_hit = getattr(settings, 'DEEPSEEK_PRICE_INPUT_CACHE_HIT', 0.000000028)
-    precio_cache_miss = getattr(settings, 'DEEPSEEK_PRICE_INPUT_CACHE_MISS', 0.00000056)
+    # Usar nuevos nombres, con fallback a nombres antiguos para compatibilidad
+    precio_output = getattr(settings, 'AIANALYTICS_PRICE_OUTPUT_TOKEN', None) or getattr(settings, 'DEEPSEEK_PRICE_OUTPUT_TOKEN', 0.00000042)
+    precio_cache_hit = getattr(settings, 'AIANALYTICS_PRICE_INPUT_CACHE_HIT', None) or getattr(settings, 'DEEPSEEK_PRICE_INPUT_CACHE_HIT', 0.000000028)
+    precio_cache_miss = getattr(settings, 'AIANALYTICS_PRICE_INPUT_CACHE_MISS', None) or getattr(settings, 'DEEPSEEK_PRICE_INPUT_CACHE_MISS', 0.00000056)
     tasa_cambio = getattr(settings, 'TASA_CAMBIO_COP_USD', 4000)
     
     # Si no se proporcionan valores de cache, usar estimación conservadora (70% hit, 30% miss)
@@ -473,8 +528,8 @@ class ClasificadorContableService:
     """
     
     def __init__(self):
-        self.api_key = getattr(settings, 'DEEPSEEK_API_KEY', '')
-        self.api_url = getattr(settings, 'DEEPSEEK_API_URL', 'https://api.deepseek.com/v1/chat/completions')
+        # API URL y configuración (usar nuevos nombres con fallback a antiguos)
+        self.api_url = getattr(settings, 'AIANALYTICS_API_URL', None) or getattr(settings, 'DEEPSEEK_API_URL', 'https://api.deepseek.com/v1/chat/completions')
         self.max_facturas = getattr(settings, 'CLASIFICACION_MAX_FACTURAS', 0)
         self.max_articulos = getattr(settings, 'CLASIFICACION_MAX_ARTICULOS', 0)
         self.max_articulos_por_factura = getattr(settings, 'CLASIFICACION_MAX_ARTICULOS_POR_FACTURA', 0)
@@ -483,12 +538,32 @@ class ClasificadorContableService:
         self.temperature = getattr(settings, 'CLASIFICACION_TEMPERATURE', 0.1)
         self.debug = getattr(settings, 'CLASIFICACION_DEBUG', False)
         
-        self.headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
+        # API Key: Intentar usar modelo primero, fallback a settings
+        self.api_key_obj = None
+        self.api_key = None
+        self._obtener_api_key()
         
         self.cache_ciuu = {}  # Cache para CIUU
+    
+    def _obtener_api_key(self):
+        """
+        Obtener API key usando rotación automática desde el modelo.
+        Si no hay API keys en el modelo, usar la de settings como fallback.
+        """
+        api_key_obj = AIAnalyticsAPIKey.obtener_siguiente_api_key()
+        if api_key_obj:
+            self.api_key_obj = api_key_obj
+            self.api_key = api_key_obj.api_key
+            logger.info(f"🔑 [API_KEY] Usando API key: {api_key_obj.nombre} (Total peticiones: {api_key_obj.total_peticiones})")
+        else:
+            # Fallback a settings si no hay API keys en BD (usar nuevos nombres con fallback a antiguos)
+            self.api_key = getattr(settings, 'AIANALYTICS_API_KEY', None) or getattr(settings, 'DEEPSEEK_API_KEY', '')
+            if self.api_key:
+                logger.warning(f"⚠️ [API_KEY] No hay API keys en BD, usando API key de settings")
+            else:
+                logger.error(f"❌ [API_KEY] No se encontró API key ni en BD ni en settings")
+        
+        # Headers se generan dinámicamente en cada petición para usar la API key actual
     
     def _print_debug(self, *args, **kwargs):
         """Print de debug si está habilitado"""
@@ -510,7 +585,7 @@ class ClasificadorContableService:
     def buscar_rut_por_nit(self, nit: str) -> Optional[Dict[str, Any]]:
         """
         Buscar CIUU por NIT con fallback inteligente:
-        1. Buscar en RUT (si existe)
+        1. Buscar en RUT (si existe) - primero con NIT tal cual, luego normalizado
         2. Buscar en Proveedor (cache de Cámara de Comercio)
         3. Consultar Cámara de Comercio si no está en cache
         4. Guardar en Proveedor para uso futuro
@@ -518,10 +593,32 @@ class ClasificadorContableService:
         Retorna None si no se encuentra en ninguna fuente.
         """
         try:
-            nit_normalizado, _, _ = normalize_nit_and_extract_dv(nit)
+            # ✅ CORRECCIÓN: Buscar primero con el NIT tal cual (sin normalizar) para evitar recortar NITs completos
+            # Ejemplo: Si viene "1005038638" (10 dígitos), NO debe recortarse a "100503863" (9 dígitos)
+            nit_original = str(nit).strip()
+            nit_limpio = re.sub(r'\D', '', nit_original)  # Solo dígitos, sin guiones ni puntos
             
-            # 1. Intentar buscar en RUT primero
-            rut = RUT.objects.filter(nit_normalizado=nit_normalizado).first()
+            # 1. Intentar buscar en RUT primero con el NIT limpio (sin normalizar)
+            rut = None
+            nit_normalizado = None
+            
+            if nit_limpio:
+                # Buscar primero con el NIT limpio tal cual (sin normalizar)
+                rut = RUT.objects.filter(nit_normalizado=nit_limpio).first()
+                
+                # Si no encuentra y el NIT tiene guión o formato especial, normalizar
+                if not rut and ('-' in nit_original or '.' in nit_original or ' ' in nit_original):
+                    nit_normalizado, _, _ = normalize_nit_and_extract_dv(nit)
+                    if nit_normalizado and nit_normalizado != nit_limpio:
+                        rut = RUT.objects.filter(nit_normalizado=nit_normalizado).first()
+                    else:
+                        nit_normalizado = nit_limpio
+                else:
+                    # Si el NIT ya está limpio y no tiene formato especial, usar directamente
+                    nit_normalizado = nit_limpio
+            else:
+                nit_normalizado, _, _ = normalize_nit_and_extract_dv(nit)
+                rut = RUT.objects.filter(nit_normalizado=nit_normalizado).first()
             
             if rut:
                 self._print_debug(f"✅ RUT encontrado para NIT: {nit} - {rut.razon_social}")
@@ -567,11 +664,13 @@ class ClasificadorContableService:
                     "fuente": proveedor.fuente
                 }
             
-            # 3. Consultar Cámara de Comercio
+            # 3. Consultar Cámara de Comercio (usar NIT original, no normalizado recortado)
             self._print_debug(f"⚠️ RUT no encontrado para NIT: {nit}, consultando Cámara de Comercio...")
             
             from .camara_comercio_service import consultar_camara_comercio_por_nit
-            datos_ccb = consultar_camara_comercio_por_nit(nit)
+            # ✅ CORRECCIÓN: Usar NIT original completo para la consulta, no el normalizado (que puede estar recortado)
+            nit_para_consulta = nit_original if 'nit_original' in locals() else nit
+            datos_ccb = consultar_camara_comercio_por_nit(nit_para_consulta)
             
             if datos_ccb and datos_ccb.get('ciuu_principal'):
                 self._print_debug(f"✅ Info obtenida de Cámara de Comercio para NIT: {nit}")
@@ -724,12 +823,12 @@ class ClasificadorContableService:
                 "articulos": articulos_factura
             }
             
-            self._print_debug(f"📤 Enviando factura {factura.get('numero_factura')} a Deepseek")
+            self._print_debug(f"📤 Enviando factura {factura.get('numero_factura')} al servicio de IA")
             self._print_debug(f"📊 Total artículos: {len(articulos_factura)}")
             for idx, art in enumerate(articulos_factura, 1):
                 self._print_debug(f"  Artículo {idx}: {art.get('nombre', 'N/A')} - Cant: {art.get('cantidad', 0)} - Total: ${art.get('valor_total', 0)} - Impuestos: {len(art.get('impuestos', []))}")
             
-            # Llamar a Deepseek
+            # Llamar al servicio de IA
             provider_messages = [
                 {"role": "system", "content": PROMPTS["clasificacion_masiva"]["system"]},
                 {"role": "user", "content": user_content}
@@ -743,27 +842,59 @@ class ClasificadorContableService:
                 "response_format": {"type": "json_object"}
             }
             
-            # Intentar llamada a Deepseek con retry y backoff exponencial
+            # Intentar llamada al servicio de IA con retry y backoff exponencial
+            # Usar rotación de API keys: obtener una nueva en cada petición
             max_retries = 3
             retry_delay = 1  # Segundos iniciales
             last_error = None
+            api_key_usada = None
+            es_rate_limit = False
             
             for intento in range(max_retries):
+                # Obtener siguiente API key (rotación automática)
+                api_key_obj = AIAnalyticsAPIKey.obtener_siguiente_api_key()
+                if api_key_obj:
+                    api_key_usada = api_key_obj
+                    current_api_key = api_key_obj.api_key
+                    logger.info(f"🔑 [API_KEY] Intento {intento + 1}: Usando API key '{api_key_obj.nombre}'")
+                else:
+                    # Fallback a settings (usar nuevos nombres con fallback a antiguos)
+                    current_api_key = getattr(settings, 'AIANALYTICS_API_KEY', None) or getattr(settings, 'DEEPSEEK_API_KEY', '')
+                    if not current_api_key:
+                        raise ValueError("No hay API keys disponibles ni en BD ni en settings")
+                
+                # Headers dinámicos con la API key actual
+                headers = {
+                    "Authorization": f"Bearer {current_api_key}",
+                    "Content-Type": "application/json"
+                }
+                
                 try:
                     response = requests.post(
                         self.api_url,
-                        headers=self.headers,
+                        headers=headers,
                         json=data,
                         timeout=self.timeout
                     )
                     response.raise_for_status()
+                    
+                    # Éxito: trackear petición exitosa
+                    if api_key_usada:
+                        api_key_usada.incrementar_peticion(exitosa=True, es_rate_limit=False)
+                    
                     last_error = None
                     break  # Éxito, salir del loop
                 except requests.exceptions.HTTPError as e:
-                    if e.response and e.response.status_code == 429:  # Rate limit
+                    es_rate_limit = (e.response and e.response.status_code == 429)
+                    
+                    # Trackear petición fallida
+                    if api_key_usada:
+                        api_key_usada.incrementar_peticion(exitosa=False, es_rate_limit=es_rate_limit)
+                    
+                    if es_rate_limit:
                         if intento < max_retries - 1:
                             wait_time = retry_delay * (2 ** intento)  # Backoff exponencial
-                            logger.warning(f"⏳ [DEEPSEEK] Rate limit alcanzado. Esperando {wait_time}s antes de reintentar (intento {intento + 1}/{max_retries})...")
+                            logger.warning(f"⏳ [AI_ANALYTICS] Rate limit alcanzado con API key '{api_key_usada.nombre if api_key_usada else 'settings'}'. Esperando {wait_time}s antes de reintentar (intento {intento + 1}/{max_retries})...")
                             time.sleep(wait_time)
                             last_error = e
                             continue
@@ -771,9 +902,13 @@ class ClasificadorContableService:
                     last_error = e
                     raise
                 except requests.exceptions.RequestException as e:
+                    # Trackear petición fallida
+                    if api_key_usada:
+                        api_key_usada.incrementar_peticion(exitosa=False, es_rate_limit=False)
+                    
                     if intento < max_retries - 1:
                         wait_time = retry_delay * (2 ** intento)
-                        logger.warning(f"⏳ [DEEPSEEK] Error de conexión. Esperando {wait_time}s antes de reintentar (intento {intento + 1}/{max_retries})...")
+                        logger.warning(f"⏳ [AI_ANALYTICS] Error de conexión. Esperando {wait_time}s antes de reintentar (intento {intento + 1}/{max_retries})...")
                         time.sleep(wait_time)
                         last_error = e
                         continue
@@ -812,6 +947,17 @@ class ClasificadorContableService:
                 cache_miss_tokens=cache_miss_tokens
             )
             
+            # Trackear costo en la API key usada
+            if api_key_usada:
+                api_key_usada.agregar_costo(
+                    costo_usd=costo_info['costo_usd'],
+                    tokens_input=input_tokens,
+                    tokens_output=output_tokens,
+                    tokens_cache_hit=cache_hit_tokens or 0,
+                    tokens_cache_miss=cache_miss_tokens or 0
+                )
+                logger.info(f"💰 [API_KEY] Costo agregado a '{api_key_usada.nombre}': ${costo_info['costo_usd']:.6f} USD (Total acumulado: ${api_key_usada.costo_total_usd:.6f} USD)")
+            
             tiempo_procesamiento = time.time() - inicio_tiempo
             
             self._print_debug(f"✅ Factura procesada en {tiempo_procesamiento:.2f}s")
@@ -848,6 +994,15 @@ class ClasificadorContableService:
                 
                 # Extraer solo la parte de la factura (sin metadata)
                 respuesta_factura = respuesta_json.get('proveedores', {}).get(proveedor_nit, {})
+                
+                # ✅ CORRECCIÓN: Incluir asientos_contables del nivel superior si existen
+                # Los asientos_contables están en el nivel raíz del JSON, no dentro de proveedores
+                if 'asientos_contables' in respuesta_json:
+                    respuesta_factura['asientos_contables'] = respuesta_json['asientos_contables']
+                
+                # También incluir recomendaciones si existen
+                if 'recomendaciones' in respuesta_json:
+                    respuesta_factura['recomendaciones'] = respuesta_json['recomendaciones']
                 
                 return {
                     "success": True,
@@ -1478,15 +1633,71 @@ class ClasificadorContableService:
             self._print_debug(f"💾 [LEER_DOCUMENTO] Modo: LECTURA DESDE raw_data (BD)")
             
             # Determinar NIT de empresa según tipo de sesión
+            # Preferir NIT del documento si está disponible (puede ser más completo)
             if session.tipo == 'Received':
-                empresa_nit = session.nit  # Receptor es la empresa
+                # Receptor es la empresa - usar customer_nit del documento si está disponible
+                empresa_nit = doc.customer_nit or session.nit
                 proveedor_nit = doc.supplier_nit or ''  # Emisor es el proveedor
             else:  # Sent
-                empresa_nit = session.nit  # Emisor es la empresa
-                proveedor_nit = doc.customer_nit or ''  # Receptor es el cliente
+                # Emisor es la empresa - usar supplier_nit del documento si está disponible
+                empresa_nit = doc.supplier_nit or session.nit
+                proveedor_nit = doc.customer_nit or ''
             
-            # Buscar CIUU de la empresa (cacheado)
-            rut_empresa = self.buscar_rut_por_nit(empresa_nit)
+            self._print_debug(f"🏢 [LEER_DOCUMENTO] Empresa NIT: {empresa_nit} (sesión: {session.nit}, doc: {doc.customer_nit if session.tipo == 'Received' else doc.supplier_nit})")
+            
+            # ✅ CORRECCIÓN: Buscar primero directamente con el NIT de la sesión (más completo y confiable)
+            # El NIT de la sesión viene directamente del modelo DianScrapingSession y no debe recortarse
+            rut_empresa = None
+            if session.nit:
+                self._print_debug(f"🔍 [LEER_DOCUMENTO] Buscando RUT primero con NIT de sesión (directo): {session.nit}")
+                rut_empresa = self.buscar_rut_por_nit(session.nit)
+                if rut_empresa:
+                    empresa_nit = session.nit  # Usar el NIT de la sesión que funcionó
+                    self._print_debug(f"✅ [LEER_DOCUMENTO] RUT encontrado con NIT de sesión: {session.nit}")
+            
+            # Si no se encuentra con el NIT de la sesión, intentar con el NIT del documento
+            if not rut_empresa and empresa_nit and empresa_nit != session.nit:
+                self._print_debug(f"🔍 [LEER_DOCUMENTO] No se encontró RUT con NIT de sesión, intentando con NIT del documento: {empresa_nit}")
+                rut_empresa = self.buscar_rut_por_nit(empresa_nit)
+                if rut_empresa:
+                    self._print_debug(f"✅ [LEER_DOCUMENTO] RUT encontrado con NIT del documento: {empresa_nit}")
+            
+            # Si aún no se encuentra, intentar búsqueda con LIKE (más eficiente que variaciones manuales)
+            if not rut_empresa and empresa_nit:
+                nit_base = re.sub(r'\D', '', empresa_nit)
+                if len(nit_base) >= 7 and len(nit_base) <= 10:
+                    self._print_debug(f"🔍 [LEER_DOCUMENTO] Buscando RUT con LIKE: {nit_base}%")
+                    # Buscar RUTs cuyo nit_normalizado empiece con el NIT base
+                    rut_like = RUT.objects.filter(nit_normalizado__startswith=nit_base).first()
+                    if rut_like:
+                        # Usar el NIT completo del RUT encontrado
+                        empresa_nit_completo = rut_like.nit if rut_like.nit else f"{rut_like.nit_normalizado}-{rut_like.dv}" if rut_like.dv else rut_like.nit_normalizado
+                        self._print_debug(f"✅ [LEER_DOCUMENTO] RUT encontrado con LIKE: {rut_like.nit_normalizado} (NIT completo: {empresa_nit_completo})")
+                        # Construir respuesta en el mismo formato que buscar_rut_por_nit
+                        ciuu_principal = rut_like.actividad_principal_ciiu if hasattr(rut_like, 'actividad_principal_ciiu') else None
+                        ciuu_secundarios = []
+                        if hasattr(rut_like, 'actividad_secundaria_ciiu') and rut_like.actividad_secundaria_ciiu:
+                            ciuu_secundarios.append(rut_like.actividad_secundaria_ciiu)
+                        if hasattr(rut_like, 'otras_actividades_ciiu') and rut_like.otras_actividades_ciiu:
+                            otras = rut_like.otras_actividades_ciiu
+                            if isinstance(otras, list):
+                                ciuu_secundarios.extend(otras)
+                            elif isinstance(otras, str):
+                                try:
+                                    otras_list = json.loads(otras) if otras.startswith('[') else [otras]
+                                    ciuu_secundarios.extend(otras_list)
+                                except:
+                                    ciuu_secundarios.append(otras)
+                        rut_empresa = {
+                            "nit": rut_like.nit,
+                            "nit_normalizado": rut_like.nit_normalizado,
+                            "razon_social": rut_like.razon_social,
+                            "ciuu_principal": ciuu_principal,
+                            "ciuu_secundarios": list(set(ciuu_secundarios)),
+                            "fuente": "rut_like"
+                        }
+                        empresa_nit = empresa_nit_completo
+            
             empresa_ciuu_info = {
                 "ciuu_principal": rut_empresa.get('ciuu_principal') if rut_empresa else None,
                 "ciuu_secundarios": rut_empresa.get('ciuu_secundarios', []) if rut_empresa else []
@@ -1660,34 +1871,82 @@ class ClasificadorContableService:
             # Verificar antes de guardar
             print(f"💾 [GUARDAR_CLASIFICACION] Preparando para guardar en BD:")
             print(f"   - factura_numero: {factura_numero}")
+            print(f"   - session_dian_id: {session_dian_id}")
             print(f"   - factura_json_enviada tiene articulos: {bool(articulos_a_guardar)}")
             print(f"   - Cantidad de artículos: {len(articulos_a_guardar)}")
             if len(articulos_a_guardar) > 0:
                 print(f"   - Primer artículo: {articulos_a_guardar[0]}")
             
-            clasificacion = ClasificacionContable.objects.create(
-                session_dian_id=session_dian_id,
-                factura_numero=factura_numero,
-                proveedor_nit=proveedor_nit,
-                proveedor_nit_normalizado=nit_normalizado,
-                empresa_nit=empresa_nit,
-                empresa_ciuu_principal=empresa_ciuu_principal,
-                proveedor_ciuu=proveedor_ciuu,
-                costo_total_factura=resultado.get('costo', {}).get('costo_usd', 0),
-                costo_total_cop=resultado.get('costo', {}).get('costo_cop', 0),
-                costo_por_articulo=resultado.get('costo', {}).get('costo_usd', 0) / total_articulos if total_articulos > 0 else 0,
-                tiempo_procesamiento_segundos=resultado.get('tiempo_procesamiento', 0),
-                tokens_input=resultado.get('tokens', {}).get('input', 0),
-                tokens_output=resultado.get('tokens', {}).get('output', 0),
-                factura_json_enviada=resultado.get('factura_json_enviada', {}),
-                respuesta_json_completa=resultado.get('respuesta_json_completa', {}),
-                respuesta_json_factura=resultado.get('respuesta_factura', {}),
-                estado='completado' if resultado.get('success') else 'fallido',
-                error_message=resultado.get('error'),
-                confianza_promedio=confianza_promedio,
-                total_articulos=total_articulos,
-                procesado_at=timezone.now() if resultado.get('success') else None
-            )
+            # PROTECCIÓN CONTRA DUPLICADOS: Verificar si ya existe clasificación para esta factura en esta sesión
+            # Esto previene duplicados por:
+            # - Clicks múltiples en "clasificar toda la sesión"
+            # - Retries de Celery
+            # - Race conditions con múltiples workers
+            clasificacion_existente = None
+            if session_dian_id and factura_numero:
+                clasificacion_existente = ClasificacionContable.objects.filter(
+                    session_dian_id=session_dian_id,
+                    factura_numero=factura_numero
+                ).order_by('-created_at').first()  # Obtener la más reciente
+            
+            if clasificacion_existente:
+                print(f"⚠️ [GUARDAR_CLASIFICACION] Ya existe clasificación para factura {factura_numero} en sesión {session_dian_id}")
+                print(f"   - Clasificación existente ID: {clasificacion_existente.id}")
+                print(f"   - Creada: {clasificacion_existente.created_at}")
+                print(f"   - Estado: {clasificacion_existente.estado}")
+                print(f"   - Actualizando clasificación existente en lugar de crear duplicado...")
+                
+                # Actualizar la clasificación existente con los nuevos datos
+                clasificacion_existente.proveedor_nit = proveedor_nit
+                clasificacion_existente.proveedor_nit_normalizado = nit_normalizado
+                clasificacion_existente.empresa_nit = empresa_nit
+                clasificacion_existente.empresa_ciuu_principal = empresa_ciuu_principal
+                clasificacion_existente.proveedor_ciuu = proveedor_ciuu
+                clasificacion_existente.costo_total_factura = resultado.get('costo', {}).get('costo_usd', 0)
+                clasificacion_existente.costo_total_cop = resultado.get('costo', {}).get('costo_cop', 0)
+                clasificacion_existente.costo_por_articulo = resultado.get('costo', {}).get('costo_usd', 0) / total_articulos if total_articulos > 0 else 0
+                clasificacion_existente.tiempo_procesamiento_segundos = resultado.get('tiempo_procesamiento', 0)
+                clasificacion_existente.tokens_input = resultado.get('tokens', {}).get('input', 0)
+                clasificacion_existente.tokens_output = resultado.get('tokens', {}).get('output', 0)
+                clasificacion_existente.factura_json_enviada = resultado.get('factura_json_enviada', {})
+                clasificacion_existente.respuesta_json_completa = resultado.get('respuesta_json_completa', {})
+                clasificacion_existente.respuesta_json_factura = resultado.get('respuesta_factura', {})
+                clasificacion_existente.estado = 'completado' if resultado.get('success') else 'fallido'
+                clasificacion_existente.error_message = resultado.get('error')
+                clasificacion_existente.confianza_promedio = confianza_promedio
+                clasificacion_existente.total_articulos = total_articulos
+                clasificacion_existente.procesado_at = timezone.now() if resultado.get('success') else None
+                clasificacion_existente.save()
+                
+                clasificacion = clasificacion_existente
+                print(f"✅ [GUARDAR_CLASIFICACION] Clasificación actualizada (ID {clasificacion.id})")
+            else:
+                # No existe, crear nueva
+                print(f"✅ [GUARDAR_CLASIFICACION] No existe clasificación previa, creando nueva...")
+                clasificacion = ClasificacionContable.objects.create(
+                    session_dian_id=session_dian_id,
+                    factura_numero=factura_numero,
+                    proveedor_nit=proveedor_nit,
+                    proveedor_nit_normalizado=nit_normalizado,
+                    empresa_nit=empresa_nit,
+                    empresa_ciuu_principal=empresa_ciuu_principal,
+                    proveedor_ciuu=proveedor_ciuu,
+                    costo_total_factura=resultado.get('costo', {}).get('costo_usd', 0),
+                    costo_total_cop=resultado.get('costo', {}).get('costo_cop', 0),
+                    costo_por_articulo=resultado.get('costo', {}).get('costo_usd', 0) / total_articulos if total_articulos > 0 else 0,
+                    tiempo_procesamiento_segundos=resultado.get('tiempo_procesamiento', 0),
+                    tokens_input=resultado.get('tokens', {}).get('input', 0),
+                    tokens_output=resultado.get('tokens', {}).get('output', 0),
+                    factura_json_enviada=resultado.get('factura_json_enviada', {}),
+                    respuesta_json_completa=resultado.get('respuesta_json_completa', {}),
+                    respuesta_json_factura=resultado.get('respuesta_factura', {}),
+                    estado='completado' if resultado.get('success') else 'fallido',
+                    error_message=resultado.get('error'),
+                    confianza_promedio=confianza_promedio,
+                    total_articulos=total_articulos,
+                    procesado_at=timezone.now() if resultado.get('success') else None
+                )
+                print(f"✅ [GUARDAR_CLASIFICACION] Clasificación creada (ID {clasificacion.id})")
             
             # Verificar después de guardar
             print(f"✅ [GUARDAR_CLASIFICACION] Clasificación guardada: ID {clasificacion.id}")

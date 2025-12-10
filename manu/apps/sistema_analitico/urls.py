@@ -2,6 +2,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from . import views
+from .views_firebird_admin import FirebirdAdminViewSet
 
 router = DefaultRouter()
 router.register('servidores', views.ServidorViewSet)
@@ -33,6 +34,8 @@ router.register('configuraciones-s3', views.ConfiguracionS3ViewSet, basename='co
 router.register('backups-s3', views.BackupS3ViewSet, basename='backups-s3')
 router.register('comunicacion', views.ComunicacionViewSet, basename='comunicacion')
 router.register('clasificacion-contable', views.ClasificacionContableViewSet, basename='clasificacion-contable')
+router.register('ai-analytics-api-keys', views.AIAnalyticsAPIKeyViewSet, basename='ai-analytics-api-keys')
+router.register('firebird-admin', FirebirdAdminViewSet, basename='firebird-admin')
 
 urlpatterns = [
     path('api/', include(router.urls)),

@@ -190,15 +190,24 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 FIELD_ENCRYPTION_KEY = env('FIELD_ENCRYPTION_KEY', default='change-me')
 
+AIANALYTICS_API_KEY = env('AIANALYTICS_API_KEY', default='')
+AIANALYTICS_API_URL = env('AIANALYTICS_API_URL', default='https://api.deepseek.com/v1/chat/completions')
+
+# Mantener compatibilidad con nombres antiguos (deprecated)
 DEEPSEEK_API_KEY = env('DEEPSEEK_API_KEY', default='')
 DEEPSEEK_API_URL = env('DEEPSEEK_API_URL', default='https://api.deepseek.com/v1/chat/completions')
 
-# ==================== Precios DeepSeek API (por token, en USD) ====================
-# Valores reales basados en facturación de DeepSeek (diciembre 2025)
+# ==================== Precios AI Analytics API (por token, en USD) ====================
+# Valores reales basados en facturación del servicio (diciembre 2025)
 # Estos valores se cargan desde variables de entorno para fácil ajuste
-DEEPSEEK_PRICE_OUTPUT_TOKEN = env.float('DEEPSEEK_PRICE_OUTPUT_TOKEN', default=0.00000042)  # $0.42 por 1M tokens output
-DEEPSEEK_PRICE_INPUT_CACHE_HIT = env.float('DEEPSEEK_PRICE_INPUT_CACHE_HIT', default=0.000000028)  # $0.028 por 1M tokens input (cache hit)
-DEEPSEEK_PRICE_INPUT_CACHE_MISS = env.float('DEEPSEEK_PRICE_INPUT_CACHE_MISS', default=0.00000056)  # $0.56 por 1M tokens input (cache miss)
+AIANALYTICS_PRICE_OUTPUT_TOKEN = env.float('AIANALYTICS_PRICE_OUTPUT_TOKEN', default=0.00000042)  # $0.42 por 1M tokens output
+AIANALYTICS_PRICE_INPUT_CACHE_HIT = env.float('AIANALYTICS_PRICE_INPUT_CACHE_HIT', default=0.000000028)  # $0.028 por 1M tokens input (cache hit)
+AIANALYTICS_PRICE_INPUT_CACHE_MISS = env.float('AIANALYTICS_PRICE_INPUT_CACHE_MISS', default=0.00000056)  # $0.56 por 1M tokens input (cache miss)
+
+# Mantener compatibilidad con nombres antiguos (deprecated)
+DEEPSEEK_PRICE_OUTPUT_TOKEN = env.float('DEEPSEEK_PRICE_OUTPUT_TOKEN', default=0.00000042)
+DEEPSEEK_PRICE_INPUT_CACHE_HIT = env.float('DEEPSEEK_PRICE_INPUT_CACHE_HIT', default=0.000000028)
+DEEPSEEK_PRICE_INPUT_CACHE_MISS = env.float('DEEPSEEK_PRICE_INPUT_CACHE_MISS', default=0.00000056)
 
 # Tasa de cambio COP/USD (ajustable según mercado)
 TASA_CAMBIO_COP_USD = env.float('TASA_CAMBIO_COP_USD', default=4000)
@@ -226,8 +235,8 @@ CLASIFICACION_MAX_TOKENS = env.int('CLASIFICACION_MAX_TOKENS', default=8000)  # 
 CLASIFICACION_TEMPERATURE = env.float('CLASIFICACION_TEMPERATURE', default=0.1)  # BCE original: 0.1
 CLASIFICACION_DEBUG = env.bool('CLASIFICACION_DEBUG', default=False)  # Activar prints de debug
 
-# ==================== Rate Limiting para DeepSeek ====================
-# DeepSeek acepta hasta 60 llamadas por minuto (rate limit estándar)
+# ==================== Rate Limiting para AI Analytics ====================
+# El servicio acepta hasta 60 llamadas por minuto (rate limit estándar)
 # 
 # Estrategia recomendada para 100 facturas:
 #   - Grupo 1: Enviar 50 facturas primero (en lotes de 10) = 5 lotes
@@ -241,7 +250,7 @@ CLASIFICACION_DEBUG = env.bool('CLASIFICACION_DEBUG', default=False)  # Activar 
 #   - Pero debemos respetar el límite de 60 RPM para evitar errores 429
 #
 # Tamaño de lote: cuántas facturas se procesan en paralelo a la vez
-# Recomendado: 10 (según recomendaciones de DeepSeek)
+# Recomendado: 10 (según recomendaciones del servicio)
 CLASIFICACION_LOTE_PARALELO = env.int('CLASIFICACION_LOTE_PARALELO', default=10)
 
 # Máximo de facturas por minuto antes de hacer pausa
@@ -249,7 +258,7 @@ CLASIFICACION_LOTE_PARALELO = env.int('CLASIFICACION_LOTE_PARALELO', default=10)
 CLASIFICACION_MAX_FACTURAS_POR_MINUTO = env.int('CLASIFICACION_MAX_FACTURAS_POR_MINUTO', default=50)
 
 # Pausa entre grupos de facturas (en segundos)
-# Recomendado: 60 segundos (para resetear el contador del minuto de DeepSeek)
+# Recomendado: 60 segundos (para resetear el contador del minuto del servicio)
 CLASIFICACION_PAUSA_ENTRE_GRUPOS = env.int('CLASIFICACION_PAUSA_ENTRE_GRUPOS', default=60)
 
 DIAN_SCRAPER_HEADLESS = env.bool('DIAN_SCRAPER_HEADLESS', default=True)

@@ -3,7 +3,7 @@ Comando de Django para recalcular costos de clasificaciones contables.
 
 Este comando:
 1. Busca todas las clasificaciones que tienen tokens pero costo = 0 o sin costo
-2. Recalcula los costos usando los precios actuales de DeepSeek
+2. Recalcula los costos usando los precios actuales del servicio de IA/Analytics
 3. Actualiza los campos costo_total_factura y costo_total_cop en la BD
 
 Uso:
@@ -20,7 +20,7 @@ from decimal import Decimal
 
 
 class Command(BaseCommand):
-    help = 'Recalcula costos de clasificaciones contables usando precios actuales de DeepSeek'
+    help = 'Recalcula costos de clasificaciones contables usando precios actuales del servicio de IA/Analytics'
 
     def add_arguments(self, parser):
         parser.add_argument(

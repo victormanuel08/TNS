@@ -154,14 +154,21 @@ class ScrapingSessionSerializer(serializers.ModelSerializer):
 
         fecha_desde = attrs.get('fecha_desde')
         fecha_hasta = attrs.get('fecha_hasta')
-        print(f"🔍 [SERIALIZER] Fechas: desde={fecha_desde}, hasta={fecha_hasta}")
+        print(f"🔍 [SERIALIZER] Fechas solicitadas: desde={fecha_desde}, hasta={fecha_hasta}")
         
         if fecha_desde and fecha_hasta and fecha_desde > fecha_hasta:
             print("❌ [SERIALIZER] fecha_desde > fecha_hasta")
             raise serializers.ValidationError('fecha_desde debe ser menor o igual a fecha_hasta')
         
-        # Validar que el rango no exceda 1 mes
-        if fecha_desde and fecha_hasta:
+        # Verificar si permite_scraping_total ANTES de validar límites
+        permite_scraping_total = False
+        if hasattr(request, 'cliente_api') and request.cliente_api:
+            permite_scraping_total = getattr(request.cliente_api, 'permite_scraping_total', False)
+            print(f"🔍 [SERIALIZER] permite_scraping_total: {permite_scraping_total}")
+        
+        # Validar que el rango no exceda 1 mes SOLO si NO tiene permite_scraping_total
+        # Con permite_scraping_total=True, el usuario puede solicitar cualquier rango
+        if not permite_scraping_total and fecha_desde and fecha_hasta:
             # Calcular el último día del mes de fecha_desde
             ultimo_dia_mes_desde = (fecha_desde.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
             
@@ -191,19 +198,18 @@ class ScrapingSessionSerializer(serializers.ModelSerializer):
         tipo = attrs.get('tipo', 'Sent')
         print(f"🔍 [SERIALIZER] Tipo: {tipo}")
         
-        # Si permite_scraping_total está activo, usar el rango completo sin validar gaps
-        permite_scraping_total = False
-        if hasattr(request, 'cliente_api') and request.cliente_api:
-            permite_scraping_total = getattr(request.cliente_api, 'permite_scraping_total', False)
-            print(f"🔍 [SERIALIZER] permite_scraping_total: {permite_scraping_total}")
-        
+        # IMPORTANTE: Con permite_scraping_total=True, usar el rango EXACTO solicitado
+        # Sin alteraciones, sin validar gaps, sin límites de mes
         if permite_scraping_total:
-            # Con scraping total, usar el rango completo solicitado sin validar gaps
-            print("✅ [SERIALIZER] Scraping total activo, usando rango completo sin validar gaps")
+            # Con scraping total, usar el rango EXACTO solicitado sin ninguna alteración
+            print("✅ [SERIALIZER] Scraping total activo, usando rango EXACTO solicitado sin validar gaps ni límites")
+            print(f"✅ [SERIALIZER] Rango solicitado: {fecha_desde} - {fecha_hasta}")
+            print(f"✅ [SERIALIZER] Rango ejecutado (igual al solicitado): {fecha_desde} - {fecha_hasta}")
             attrs['ejecutado_desde'] = fecha_desde
             attrs['ejecutado_hasta'] = fecha_hasta
         else:
-            # Validar gaps normalmente
+            # Validar gaps normalmente (solo si NO tiene permite_scraping_total)
+            print("🔍 [SERIALIZER] Sin scraping total, validando gaps...")
             try:
                 gap = self._find_next_gap(nit, tipo, fecha_desde, fecha_hasta)
                 print(f"🔍 [SERIALIZER] Gap encontrado: {gap}")
@@ -212,7 +218,7 @@ class ScrapingSessionSerializer(serializers.ModelSerializer):
                     raise serializers.ValidationError('El rango solicitado ya fue procesado previamente.')
 
                 attrs['ejecutado_desde'], attrs['ejecutado_hasta'] = gap
-                print(f"✅ [SERIALIZER] Validación exitosa. Ejecutado: {gap[0]} -> {gap[1]}")
+                print(f"✅ [SERIALIZER] Validación exitosa. Rango ejecutado (gap): {gap[0]} -> {gap[1]}")
             except serializers.ValidationError:
                 raise
             except Exception as e:

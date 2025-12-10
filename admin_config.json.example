@@ -1,0 +1,5 @@
+{
+  "api_base_url": "http://localhost:8000/api",
+  "api_key": "tu-api-key-aqui"
+}
+

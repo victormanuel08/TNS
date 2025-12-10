@@ -1,10 +1,10 @@
 """
-Comando para mostrar el prompt literal que se enviaría a Deepseek
+Comando para mostrar el prompt literal que se enviaría al servicio de IA/Analytics
 para un XML específico.
 
 Uso:
-    python manage.py mostrar_prompt_deepseek --xml ruta/al/archivo.xml --empresa_nit 123456789 --session_id 1
-    python manage.py mostrar_prompt_deepseek --document_id 123
+    python manage.py mostrar_prompt_ia --xml ruta/al/archivo.xml --empresa_nit 123456789 --session_id 1
+    python manage.py mostrar_prompt_ia --document_id 123
 """
 from django.core.management.base import BaseCommand
 from django.conf import settings
@@ -18,7 +18,7 @@ from apps.sistema_analitico.services.clasificador_contable_service import (
 
 
 class Command(BaseCommand):
-    help = 'Muestra el prompt literal que se enviaría a Deepseek para un XML o documento'
+    help = 'Muestra el prompt literal que se enviaría al servicio de IA/Analytics para un XML o documento'
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -215,7 +215,7 @@ class Command(BaseCommand):
         self.stdout.write(json.dumps(factura, ensure_ascii=False, indent=2))
         
         self.stdout.write(self.style.SUCCESS('\n' + '='*80))
-        self.stdout.write(self.style.SUCCESS('MESSAGES COMPLETO (como se envía a Deepseek)'))
+        self.stdout.write(self.style.SUCCESS('MESSAGES COMPLETO (como se envía al servicio de IA)'))
         self.stdout.write(self.style.SUCCESS('='*80 + '\n'))
         messages = [
             {"role": "system", "content": PROMPTS["clasificacion_masiva"]["system"]},

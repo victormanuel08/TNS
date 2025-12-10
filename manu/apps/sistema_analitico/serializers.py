@@ -8,7 +8,8 @@ from .models import (
     VpnConfig, EmpresaEcommerceConfig, APIKeyCliente, EmpresaDominio, UserTenantProfile,
     RUT, EstablecimientoRUT, ActividadEconomica, ResponsabilidadTributaria,
     TipoTercero, TipoRegimen, Impuesto, VigenciaTributaria,
-    Entidad, ContrasenaEntidad, ConfiguracionS3, BackupS3, ClasificacionContable
+    Entidad, ContrasenaEntidad, ConfiguracionS3, BackupS3, ClasificacionContable,
+    AIAnalyticsAPIKey
 )
 
 
@@ -1170,3 +1171,39 @@ class BackupS3Serializer(serializers.ModelSerializer):
         model = BackupS3
         fields = '__all__'
         read_only_fields = ['fecha_creacion']
+
+
+class AIAnalyticsAPIKeySerializer(serializers.ModelSerializer):
+    """
+    Serializer para gestionar API keys de servicios de IA/Analytics con tracking de uso y costos.
+    """
+    # Campos calculados para estadísticas
+    tasa_exito = serializers.SerializerMethodField()
+    tasa_error_rate_limit = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = AIAnalyticsAPIKey
+        fields = '__all__'
+        read_only_fields = [
+            'fecha_creacion', 'fecha_actualizacion',
+            'total_peticiones', 'total_peticiones_exitosas', 'total_peticiones_fallidas',
+            'total_errores_rate_limit', 'costo_total_usd',
+            'tokens_input_total', 'tokens_output_total',
+            'tokens_cache_hit_total', 'tokens_cache_miss_total',
+            'ultima_vez_usada'
+        ]
+        extra_kwargs = {
+            'api_key': {'write_only': True}  # No mostrar API key en lectura por seguridad
+        }
+    
+    def get_tasa_exito(self, obj):
+        """Calcular tasa de éxito en porcentaje"""
+        if obj.total_peticiones == 0:
+            return 0.0
+        return round((obj.total_peticiones_exitosas / obj.total_peticiones) * 100, 2)
+    
+    def get_tasa_error_rate_limit(self, obj):
+        """Calcular tasa de errores rate limit en porcentaje"""
+        if obj.total_peticiones == 0:
+            return 0.0
+        return round((obj.total_errores_rate_limit / obj.total_peticiones) * 100, 2)

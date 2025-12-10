@@ -37,12 +37,25 @@ def _build_payload(codigo_ciiu: str) -> Dict:
 async def _make_async_request(payload: Dict) -> Dict:
     """
     Realiza la solicitud asíncrona a la API de búsqueda CIIU.
-    Timeout corto (5 segundos) para evitar bloqueos cuando la API no está disponible.
+    Timeout de 30 segundos para dar tiempo suficiente a la API.
+    Headers de navegador real para evitar detección de bots.
     """
-    # Timeout corto: 5 segundos total (conexión + lectura)
-    # Esto evita que las consultas bloqueen la clasificación cuando la API está caída
-    timeout = aiohttp.ClientTimeout(total=5, connect=2)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
+    # Headers que simulan un navegador real (como BCE debería hacer)
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'es-CO,es;q=0.9,en;q=0.8',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Content-Type': 'application/json',
+        'Origin': 'https://enlinea.ccc.org.co',
+        'Referer': 'https://enlinea.ccc.org.co/',
+        'Connection': 'keep-alive',
+    }
+    
+    # Timeout de 30 segundos (similar a BCE que no tiene timeout explícito)
+    # Esto da tiempo suficiente a la API para responder
+    timeout = aiohttp.ClientTimeout(total=30, connect=10)
+    async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
         try:
             async with session.post(CIIU_BUSQUEDA_URL, json=payload) as response:
                 if response.status != 200:
@@ -52,8 +65,8 @@ async def _make_async_request(payload: Dict) -> Dict:
                 response_data = await response.json()
                 return response_data
         except asyncio.TimeoutError:
-            logger.warning(f"Timeout al consultar API CIIU (5s) - usando fallback")
-            return {'error': 'Timeout: La API de CIIU no respondió en 5 segundos'}
+            logger.warning(f"Timeout al consultar API CIIU (30s) - usando fallback")
+            return {'error': 'Timeout: La API de CIIU no respondió en 30 segundos'}
         except Exception as e:
             logger.error(f"Excepción al consultar API CIIU: {e}", exc_info=True)
             return {'error': str(e)}
@@ -62,13 +75,25 @@ async def _make_async_request(payload: Dict) -> Dict:
 async def _get_activity_details(cseId: str) -> Dict:
     """
     Obtiene los detalles completos de una actividad usando su cseId.
-    Timeout corto (5 segundos) para evitar bloqueos cuando la API no está disponible.
+    Timeout de 30 segundos para dar tiempo suficiente a la API.
+    Headers de navegador real para evitar detección de bots.
     """
     url = CIIU_DETALLES_URL.format(cseId=cseId)
-    # Timeout corto: 5 segundos total (conexión + lectura)
-    # Esto evita que las consultas bloqueen la clasificación cuando la API está caída
-    timeout = aiohttp.ClientTimeout(total=5, connect=2)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
+    
+    # Headers que simulan un navegador real (como BCE debería hacer)
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'es-CO,es;q=0.9,en;q=0.8',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Origin': 'https://enlinea.ccc.org.co',
+        'Referer': 'https://enlinea.ccc.org.co/',
+        'Connection': 'keep-alive',
+    }
+    
+    # Timeout de 30 segundos (similar a BCE que no tiene timeout explícito)
+    timeout = aiohttp.ClientTimeout(total=30, connect=10)
+    async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
         try:
             async with session.get(url) as response:
                 if response.status != 200:
@@ -78,8 +103,8 @@ async def _get_activity_details(cseId: str) -> Dict:
                 response_data = await response.json()
                 return response_data
         except asyncio.TimeoutError:
-            logger.warning(f"Timeout al obtener detalles de actividad {cseId} (5s) - usando fallback")
-            return {'error': 'Timeout: La API de CIIU no respondió en 5 segundos'}
+            logger.warning(f"Timeout al obtener detalles de actividad {cseId} (30s) - usando fallback")
+            return {'error': 'Timeout: La API de CIIU no respondió en 30 segundos'}
         except Exception as e:
             logger.error(f"Excepción al obtener detalles de actividad {cseId}: {e}", exc_info=True)
             return {'error': str(e)}

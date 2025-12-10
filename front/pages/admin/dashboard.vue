@@ -233,6 +233,322 @@
         </div>
       </section>
 
+      <!-- Firebird Admin -->
+      <section v-if="activeSection === 'firebird-admin'" class="section">
+        <div class="section-header">
+          <h2>Administración Firebird</h2>
+          <div class="actions-bar">
+            <select v-model="firebirdSelectedServidorId" class="filter-select" @change="firebirdLoadEmpresas">
+              <option value="">Selecciona un servidor</option>
+              <option v-for="server in servers" :key="server.id" :value="server.id">
+                {{ server.nombre }}
+              </option>
+            </select>
+            <select v-model="firebirdSelectedEmpresaId" class="filter-select" :disabled="!firebirdSelectedServidorId" @change="firebirdOnEmpresaChange">
+              <option value="">Selecciona una empresa</option>
+              <option v-for="empresa in firebirdEmpresas" :key="empresa.id" :value="empresa.id">
+                {{ empresa.nombre }} ({{ empresa.anio_fiscal }})
+              </option>
+            </select>
+            <button class="btn-secondary" @click="firebirdLoadData" :disabled="!firebirdSelectedEmpresaId || firebirdLoading">
+              <span v-if="firebirdLoading">⟳</span>
+              <span v-else>↻</span>
+              Actualizar
+            </button>
+          </div>
+        </div>
+
+        <div v-if="!firebirdSelectedEmpresaId" class="empty-state">
+          <p>Por favor selecciona un servidor y una empresa para gestionar sus configuraciones Firebird</p>
+        </div>
+
+        <div v-else>
+          <!-- Tabs -->
+          <div class="tabs">
+            <button 
+              v-for="tab in firebirdTabs" 
+              :key="tab.id"
+              class="tab-btn"
+              :class="{ active: firebirdActiveTab === tab.id }"
+              @click="firebirdActiveTab = tab.id"
+            >
+              {{ tab.label }}
+            </button>
+          </div>
+
+          <!-- Tab: Resoluciones -->
+          <div v-if="firebirdActiveTab === 'resoluciones'" class="tab-content">
+            <div class="section-header">
+              <h3>Resoluciones (PREFIJO)</h3>
+              <button class="btn-secondary" @click="firebirdLoadResoluciones" :disabled="firebirdLoadingResoluciones">
+                <span v-if="firebirdLoadingResoluciones">⟳</span>
+                <span v-else>↻</span>
+                Recargar
+              </button>
+            </div>
+
+            <div v-if="firebirdLoadingResoluciones" class="loading-state">
+              <p>Cargando resoluciones...</p>
+            </div>
+
+            <div v-else-if="firebirdResoluciones.length === 0" class="empty-state">
+              <p>No hay resoluciones configuradas</p>
+            </div>
+
+            <div v-else class="table-container">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Código Prefijo</th>
+                    <th>Prefijo Impresión</th>
+                    <th>Resolución</th>
+                    <th>Número Final FE</th>
+                    <th>Contingencia</th>
+                    <th>Prefijo FE</th>
+                    <th>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="res in firebirdResoluciones" :key="res.id">
+                    <td><code>{{ res.codprefijo }}</code></td>
+                    <td>{{ res.preimp || '-' }}</td>
+                    <td>{{ res.resolucion || '-' }}</td>
+                    <td>{{ res.numfinfacele || '-' }}</td>
+                    <td>{{ res.contingencia || '-' }}</td>
+                    <td>{{ res.prefe || '-' }}</td>
+                    <td>
+                      <button class="btn-small btn-primary" @click="firebirdEditResolucion(res)">
+                        ✏️ Editar
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Tab: Configuraciones -->
+          <div v-if="firebirdActiveTab === 'configuraciones'" class="tab-content">
+            <div class="section-header">
+              <h3>Configuraciones (VARIOS)</h3>
+              <button class="btn-secondary" @click="firebirdLoadConfiguraciones" :disabled="firebirdLoadingConfiguraciones">
+                <span v-if="firebirdLoadingConfiguraciones">⟳</span>
+                <span v-else>↻</span>
+                Recargar
+              </button>
+            </div>
+
+            <div v-if="firebirdLoadingConfiguraciones" class="loading-state">
+              <p>Cargando configuraciones...</p>
+            </div>
+
+            <div v-else-if="firebirdConfiguraciones.length === 0" class="empty-state">
+              <p>No hay configuraciones en la tabla VARIOS</p>
+            </div>
+
+            <div v-else class="table-container">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Variable</th>
+                    <th>Contenido</th>
+                    <th>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="conf in firebirdConfiguraciones" :key="conf.variab">
+                    <td><code>{{ conf.variab }}</code></td>
+                    <td>
+                      <span v-if="firebirdIsSensitiveConfig(conf.variab)">********</span>
+                      <span v-else>{{ conf.contenido || '-' }}</span>
+                    </td>
+                    <td>
+                      <button class="btn-small btn-primary" @click="firebirdEditConfiguracion(conf)">
+                        ✏️ Editar
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Tab: Scripts -->
+          <div v-if="firebirdActiveTab === 'scripts'" class="tab-content">
+            <div class="section-header">
+              <h3>Scripts (SCRIPTS)</h3>
+              <div class="actions-bar">
+                <button class="btn-primary" @click="firebirdCreateStandardScripts" :disabled="firebirdLoadingScriptsAction">
+                  <span>+</span> Crear Scripts Estándar
+                </button>
+                <button class="btn-secondary" @click="firebirdLoadScripts" :disabled="firebirdLoadingScripts">
+                  <span v-if="firebirdLoadingScripts">⟳</span>
+                  <span v-else>↻</span>
+                  Recargar
+                </button>
+              </div>
+            </div>
+
+            <div v-if="firebirdLoadingScripts" class="loading-state">
+              <p>Cargando scripts...</p>
+            </div>
+
+            <div v-else-if="firebirdScripts.length === 0" class="empty-state">
+              <p>No hay scripts configurados</p>
+            </div>
+
+            <div v-else class="table-container">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Nombre Script</th>
+                    <th>Concepto</th>
+                    <th>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="script in firebirdScripts" :key="script.nomscript">
+                    <td><code>{{ script.nomscript }}</code></td>
+                    <td>{{ script.concepto || '-' }}</td>
+                    <td>
+                      <button class="btn-small btn-secondary" @click="firebirdViewScriptContent(script)">
+                        👁️ Ver
+                      </button>
+                      <button class="btn-small btn-primary" @click="firebirdEditScript(script)">
+                        ✏️ Editar
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Modal Editar Resolución -->
+        <div v-if="showFirebirdResolucionModal" class="modal-overlay" @click="showFirebirdResolucionModal = false">
+          <div class="modal-content" @click.stop>
+            <div class="modal-header">
+              <h3>Editar Resolución: {{ firebirdEditingResolucion?.codprefijo }}</h3>
+              <button class="modal-close" @click="showFirebirdResolucionModal = false">×</button>
+            </div>
+            <div class="modal-body">
+              <div class="form-group">
+                <label>Código Prefijo</label>
+                <input v-model="firebirdFormResolucion.codprefijo" type="text" disabled />
+              </div>
+              <div class="form-group">
+                <label>Prefijo Impresión</label>
+                <input v-model="firebirdFormResolucion.preimp" type="text" />
+              </div>
+              <div class="form-group">
+                <label>Resolución</label>
+                <input v-model="firebirdFormResolucion.resolucion" type="text" />
+              </div>
+              <div class="form-group">
+                <label>Número Final Factura Electrónica</label>
+                <input v-model="firebirdFormResolucion.numfinfacele" type="number" />
+              </div>
+              <div class="form-group">
+                <label>Contingencia (S/N)</label>
+                <input v-model="firebirdFormResolucion.contingencia" type="text" maxlength="1" />
+              </div>
+              <div class="form-group">
+                <label>Prefijo FE</label>
+                <input v-model="firebirdFormResolucion.prefe" type="text" />
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn-secondary" @click="showFirebirdResolucionModal = false">Cancelar</button>
+              <button class="btn-primary" @click="firebirdSaveResolucion" :disabled="firebirdSaving">
+                {{ firebirdSaving ? 'Guardando...' : 'Guardar' }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Modal Editar Configuración -->
+        <div v-if="showFirebirdConfiguracionModal" class="modal-overlay" @click="showFirebirdConfiguracionModal = false">
+          <div class="modal-content" @click.stop>
+            <div class="modal-header">
+              <h3>Editar Configuración: {{ firebirdEditingConfiguracion?.variab }}</h3>
+              <button class="modal-close" @click="showFirebirdConfiguracionModal = false">×</button>
+            </div>
+            <div class="modal-body">
+              <div class="form-group">
+                <label>Variable</label>
+                <input v-model="firebirdFormConfiguracion.variab" type="text" disabled />
+              </div>
+              <div class="form-group">
+                <label>Contenido</label>
+                <input 
+                  v-model="firebirdFormConfiguracion.contenido" 
+                  :type="firebirdIsSensitiveConfig(firebirdFormConfiguracion.variab) ? 'password' : 'text'" 
+                />
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn-secondary" @click="showFirebirdConfiguracionModal = false">Cancelar</button>
+              <button class="btn-primary" @click="firebirdSaveConfiguracion" :disabled="firebirdSaving">
+                {{ firebirdSaving ? 'Guardando...' : 'Guardar' }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Modal Editar Script -->
+        <div v-if="showFirebirdScriptModal" class="modal-overlay" @click="showFirebirdScriptModal = false">
+          <div class="modal-content modal-large" @click.stop>
+            <div class="modal-header">
+              <h3>Editar Script: {{ firebirdEditingScript?.nomscript }}</h3>
+              <button class="modal-close" @click="showFirebirdScriptModal = false">×</button>
+            </div>
+            <div class="modal-body">
+              <div class="form-group">
+                <label>Nombre Script</label>
+                <input v-model="firebirdFormScript.nomscript" type="text" disabled />
+              </div>
+              <div class="form-group">
+                <label>Concepto</label>
+                <input v-model="firebirdFormScript.concepto" type="text" />
+              </div>
+              <div class="form-group">
+                <label>Contenido del Script (Pascal/Delphi)</label>
+                <textarea v-model="firebirdFormScript.conscript" rows="15" class="font-mono text-sm"></textarea>
+              </div>
+              <div class="form-group">
+                <label>
+                  <input type="checkbox" v-model="firebirdFormScript.auto_generar" />
+                  Auto-generar contenido del script (usa ruta_base de la empresa)
+                </label>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn-secondary" @click="showFirebirdScriptModal = false">Cancelar</button>
+              <button class="btn-primary" @click="firebirdSaveScript" :disabled="firebirdSaving">
+                {{ firebirdSaving ? 'Guardando...' : 'Guardar' }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Modal Ver Contenido Script -->
+        <div v-if="showFirebirdScriptContentModal" class="modal-overlay" @click="showFirebirdScriptContentModal = false">
+          <div class="modal-content modal-large" @click.stop>
+            <div class="modal-header">
+              <h3>Contenido del Script: {{ firebirdViewingScript?.nomscript }}</h3>
+              <button class="modal-close" @click="showFirebirdScriptContentModal = false">×</button>
+            </div>
+            <div class="modal-body">
+              <pre class="script-content">{{ firebirdViewingScript?.conscript }}</pre>
+            </div>
+            <div class="modal-footer">
+              <button class="btn-secondary" @click="showFirebirdScriptContentModal = false">Cerrar</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- Usuarios -->
       <section v-if="activeSection === 'usuarios'" class="section">
         <div class="section-header">
@@ -652,7 +968,7 @@
             <tbody>
               <tr v-for="rut in ruts" :key="rut.id">
                 <td>
-                  <code>{{ rut.nit }}-{{ rut.dv }}</code><br>
+                  <code>{{ rut.nit && rut.nit.includes('-') ? rut.nit : (rut.nit_normalizado + (rut.dv ? '-' + rut.dv : '')) }}</code><br>
                   <small style="color: #666;">Normalizado: {{ rut.nit_normalizado }}</small>
                 </td>
                 <td><strong>{{ rut.razon_social }}</strong></td>
@@ -2441,7 +2757,7 @@
                 <div style="flex: 1;">
                   <strong>{{ rut.razon_social }}</strong>
                   <div style="font-size: 0.875rem; color: #6b7280;">
-                    NIT: {{ rut.nit }}-{{ rut.dv }} ({{ rut.nit_normalizado }})
+                    NIT: {{ rut.nit && rut.nit.includes('-') ? rut.nit : (rut.nit_normalizado + (rut.dv ? '-' + rut.dv : '')) }} ({{ rut.nit_normalizado }})
                     <span v-if="rut.tipo_contribuyente" style="margin-left: 0.5rem;">
                       • {{ rut.tipo_contribuyente === 'persona_natural' ? 'Persona Natural' : 'Persona Jurídica' }}
                     </span>
@@ -3054,7 +3370,7 @@
             <div>
               <h3 style="margin-bottom: 15px; color: #333;">Identificación</h3>
               <div class="detail-item">
-                <strong>NIT:</strong> {{ selectedRUT.nit }}-{{ selectedRUT.dv }}<br>
+                <strong>NIT:</strong> {{ selectedRUT.nit && selectedRUT.nit.includes('-') ? selectedRUT.nit : (selectedRUT.nit_normalizado + (selectedRUT.dv ? '-' + selectedRUT.dv : '')) }}<br>
                 <small style="color: #666;">Normalizado: {{ selectedRUT.nit_normalizado }}</small>
               </div>
               <div class="detail-item">
@@ -3457,6 +3773,15 @@ const sections = [
     </svg>`
   },
   { 
+    id: 'firebird-admin', 
+    name: '3.1. Firebird Admin', 
+    icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+      <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+      <line x1="12" y1="22.08" x2="12" y2="12"/>
+    </svg>`
+  },
+  { 
     id: 'usuarios', 
     name: '3.5. Usuarios', 
     icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -3582,6 +3907,53 @@ const loadingVpn = ref(false)
 const loadingApiKeys = ref(false)
 const users = ref<any[]>([])
 const loadingUsers = ref(false)
+
+// Firebird Admin variables
+const firebirdSelectedServidorId = ref<number | null>(null)
+const firebirdSelectedEmpresaId = ref<number | null>(null)
+const firebirdEmpresas = ref<any[]>([])
+const firebirdActiveTab = ref('resoluciones')
+const firebirdTabs = [
+  { id: 'resoluciones', label: 'Resoluciones' },
+  { id: 'configuraciones', label: 'Configuraciones' },
+  { id: 'scripts', label: 'Scripts' }
+]
+const firebirdLoading = ref(false)
+const firebirdLoadingResoluciones = ref(false)
+const firebirdLoadingConfiguraciones = ref(false)
+const firebirdLoadingScripts = ref(false)
+const firebirdLoadingScriptsAction = ref(false)
+const firebirdResoluciones = ref<any[]>([])
+const firebirdConfiguraciones = ref<any[]>([])
+const firebirdScripts = ref<any[]>([])
+const showFirebirdResolucionModal = ref(false)
+const showFirebirdConfiguracionModal = ref(false)
+const showFirebirdScriptModal = ref(false)
+const showFirebirdScriptContentModal = ref(false)
+const firebirdEditingResolucion = ref<any>(null)
+const firebirdEditingConfiguracion = ref<any>(null)
+const firebirdEditingScript = ref<any>(null)
+const firebirdViewingScript = ref<any>(null)
+const firebirdSaving = ref(false)
+const firebirdFormResolucion = ref({
+  codprefijo: '',
+  preimp: '',
+  resolucion: '',
+  numfinfacele: '',
+  contingencia: '',
+  prefe: ''
+})
+const firebirdFormConfiguracion = ref({
+  variab: '',
+  contenido: ''
+})
+const firebirdFormScript = ref({
+  nomscript: '',
+  concepto: '',
+  conscript: '',
+  auto_generar: false
+})
+
 const userSearch = ref('')
 const showCreateUser = ref(false)
 const showEditUser = ref(false)
@@ -5337,6 +5709,323 @@ const formatUptime = (seconds: number) => {
   if (days > 0) return `${days}d ${hours}h`
   if (hours > 0) return `${hours}h ${mins}m`
   return `${mins}m`
+}
+
+// Firebird Admin functions
+const firebirdLoadEmpresas = async () => {
+  if (!firebirdSelectedServidorId.value) {
+    firebirdEmpresas.value = []
+    return
+  }
+  try {
+    const response = await api.get<any>('/api/empresas-servidor/', {
+      servidor: firebirdSelectedServidorId.value
+    })
+    firebirdEmpresas.value = Array.isArray(response) ? response : (response.results || [])
+  } catch (error) {
+    console.error('Error cargando empresas:', error)
+  }
+}
+
+const firebirdOnEmpresaChange = () => {
+  const empresa = firebirdEmpresas.value.find((e: any) => e.id === firebirdSelectedEmpresaId.value)
+  if (empresa) {
+    firebirdLoadData()
+  }
+}
+
+const firebirdLoadData = () => {
+  if (firebirdActiveTab.value === 'resoluciones') firebirdLoadResoluciones()
+  else if (firebirdActiveTab.value === 'configuraciones') firebirdLoadConfiguraciones()
+  else if (firebirdActiveTab.value === 'scripts') firebirdLoadScripts()
+}
+
+const firebirdLoadResoluciones = async () => {
+  if (!firebirdSelectedEmpresaId.value) return
+  firebirdLoadingResoluciones.value = true
+  try {
+    const response = await api.get<any>('/api/firebird-admin/resoluciones/', {
+      empresa_servidor_id: firebirdSelectedEmpresaId.value
+    })
+    firebirdResoluciones.value = Array.isArray(response) ? response : []
+  } catch (error: any) {
+    console.error('Error cargando resoluciones:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      icon: 'error',
+      title: 'Error',
+      text: error?.data?.error || 'Error al cargar resoluciones',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    firebirdLoadingResoluciones.value = false
+  }
+}
+
+const firebirdLoadConfiguraciones = async () => {
+  if (!firebirdSelectedEmpresaId.value) return
+  firebirdLoadingConfiguraciones.value = true
+  try {
+    const response = await api.get<any>('/api/firebird-admin/configuraciones/', {
+      empresa_servidor_id: firebirdSelectedEmpresaId.value
+    })
+    firebirdConfiguraciones.value = Array.isArray(response) ? response : []
+  } catch (error: any) {
+    console.error('Error cargando configuraciones:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      icon: 'error',
+      title: 'Error',
+      text: error?.data?.error || 'Error al cargar configuraciones',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    firebirdLoadingConfiguraciones.value = false
+  }
+}
+
+const firebirdLoadScripts = async () => {
+  if (!firebirdSelectedEmpresaId.value) return
+  firebirdLoadingScripts.value = true
+  try {
+    const response = await api.get<any>('/api/firebird-admin/scripts/', {
+      empresa_servidor_id: firebirdSelectedEmpresaId.value
+    })
+    firebirdScripts.value = Array.isArray(response) ? response : []
+  } catch (error: any) {
+    console.error('Error cargando scripts:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      icon: 'error',
+      title: 'Error',
+      text: error?.data?.error || 'Error al cargar scripts',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    firebirdLoadingScripts.value = false
+  }
+}
+
+const firebirdIsSensitiveConfig = (variab: string) => {
+  return ['TOKENDIANVM', 'API_KEY', 'API_TOKEN', 'PASSWORD'].includes(variab.toUpperCase())
+}
+
+const firebirdEditResolucion = (res: any) => {
+  firebirdEditingResolucion.value = res
+  firebirdFormResolucion.value = {
+    codprefijo: res.codprefijo || '',
+    preimp: res.preimp || '',
+    resolucion: res.resolucion || '',
+    numfinfacele: res.numfinfacele || '',
+    contingencia: res.contingencia || '',
+    prefe: res.prefe || ''
+  }
+  showFirebirdResolucionModal.value = true
+}
+
+const firebirdSaveResolucion = async () => {
+  if (!firebirdSelectedEmpresaId.value || !firebirdEditingResolucion.value) return
+  firebirdSaving.value = true
+  try {
+    await api.put('/api/firebird-admin/resoluciones/actualizar/', {
+      empresa_servidor_id: firebirdSelectedEmpresaId.value,
+      id: firebirdEditingResolucion.value.id,
+      ...firebirdFormResolucion.value
+    })
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      icon: 'success',
+      title: 'Éxito',
+      text: 'Resolución actualizada exitosamente',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    showFirebirdResolucionModal.value = false
+    await firebirdLoadResoluciones()
+  } catch (error: any) {
+    console.error('Error guardando resolución:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      icon: 'error',
+      title: 'Error',
+      text: error?.data?.error || 'Error al guardar resolución',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    firebirdSaving.value = false
+  }
+}
+
+const firebirdEditConfiguracion = (conf: any) => {
+  firebirdEditingConfiguracion.value = conf
+  firebirdFormConfiguracion.value = {
+    variab: conf.variab || '',
+    contenido: conf.contenido || ''
+  }
+  showFirebirdConfiguracionModal.value = true
+}
+
+const firebirdSaveConfiguracion = async () => {
+  if (!firebirdSelectedEmpresaId.value || !firebirdEditingConfiguracion.value) return
+  firebirdSaving.value = true
+  try {
+    await api.put('/api/firebird-admin/configuraciones/actualizar/', {
+      empresa_servidor_id: firebirdSelectedEmpresaId.value,
+      variab: firebirdFormConfiguracion.value.variab,
+      contenido: firebirdFormConfiguracion.value.contenido
+    })
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      icon: 'success',
+      title: 'Éxito',
+      text: 'Configuración actualizada exitosamente',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    showFirebirdConfiguracionModal.value = false
+    await firebirdLoadConfiguraciones()
+  } catch (error: any) {
+    console.error('Error guardando configuración:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      icon: 'error',
+      title: 'Error',
+      text: error?.data?.error || 'Error al guardar configuración',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    firebirdSaving.value = false
+  }
+}
+
+const firebirdEditScript = async (script: any) => {
+  if (!firebirdSelectedEmpresaId.value) return
+  try {
+    const response = await api.get<any>('/api/firebird-admin/scripts/obtener/', {
+      empresa_servidor_id: firebirdSelectedEmpresaId.value,
+      nomscript: script.nomscript
+    })
+    firebirdEditingScript.value = script
+    firebirdFormScript.value = {
+      nomscript: script.nomscript,
+      concepto: response.concepto || '',
+      conscript: response.conscript || '',
+      auto_generar: false
+    }
+    showFirebirdScriptModal.value = true
+  } catch (error: any) {
+    console.error('Error obteniendo script:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      icon: 'error',
+      title: 'Error',
+      text: error?.data?.error || 'Error al obtener script',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  }
+}
+
+const firebirdViewScriptContent = async (script: any) => {
+  if (!firebirdSelectedEmpresaId.value) return
+  try {
+    const response = await api.get<any>('/api/firebird-admin/scripts/obtener/', {
+      empresa_servidor_id: firebirdSelectedEmpresaId.value,
+      nomscript: script.nomscript
+    })
+    firebirdViewingScript.value = response
+    showFirebirdScriptContentModal.value = true
+  } catch (error: any) {
+    console.error('Error obteniendo script:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      icon: 'error',
+      title: 'Error',
+      text: error?.data?.error || 'Error al obtener script',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  }
+}
+
+const firebirdSaveScript = async () => {
+  if (!firebirdSelectedEmpresaId.value || !firebirdEditingScript.value) return
+  firebirdSaving.value = true
+  try {
+    await api.post('/api/firebird-admin/scripts/crear-actualizar/', {
+      empresa_servidor_id: firebirdSelectedEmpresaId.value,
+      nomscript: firebirdFormScript.value.nomscript,
+      concepto: firebirdFormScript.value.concepto,
+      conscript: firebirdFormScript.value.conscript,
+      auto_generar: firebirdFormScript.value.auto_generar
+    })
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      icon: 'success',
+      title: 'Éxito',
+      text: 'Script guardado exitosamente',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    showFirebirdScriptModal.value = false
+    await firebirdLoadScripts()
+  } catch (error: any) {
+    console.error('Error guardando script:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      icon: 'error',
+      title: 'Error',
+      text: error?.data?.error || 'Error al guardar script',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    firebirdSaving.value = false
+  }
+}
+
+const firebirdCreateStandardScripts = async () => {
+  if (!firebirdSelectedEmpresaId.value) {
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      icon: 'warning',
+      title: 'Advertencia',
+      text: 'Por favor, selecciona una empresa primero',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    return
+  }
+  
+  const Swal = (await import('sweetalert2')).default
+  const result = await Swal.fire({
+    title: '¿Crear Scripts Estándar?',
+    text: 'Esto creará o actualizará los scripts ASEN_DEVVTADES, ASEN_FACVTADES, EDIT_DEVVTA, EDIT_FACVTA y ACT_DATOS. ¿Deseas continuar?',
+    icon: 'question',
+    showCancelButton: true,
+    confirmButtonText: 'Sí, crear/actualizar',
+    cancelButtonText: 'Cancelar',
+    customClass: { container: 'swal-z-index-fix' }
+  })
+
+  if (!result.isConfirmed) return
+
+  firebirdLoadingScriptsAction.value = true
+  try {
+    const response = await api.post<any>('/api/firebird-admin/scripts/crear-lotes/', {
+      empresa_servidor_id: firebirdSelectedEmpresaId.value
+    })
+    await Swal.fire({
+      icon: 'success',
+      title: 'Éxito',
+      html: response.message + '<br>' + (response.details || []).join('<br>'),
+      customClass: { container: 'swal-z-index-fix' }
+    })
+    await firebirdLoadScripts()
+  } catch (error: any) {
+    console.error('Error creando scripts:', error)
+    await Swal.fire({
+      icon: 'error',
+      title: 'Error',
+      text: error?.data?.error || 'No se pudieron crear los scripts estándar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    firebirdLoadingScriptsAction.value = false
+  }
 }
 
 // Watch para cargar servicios cuando se cambia a esa pestaña
@@ -7537,7 +8226,7 @@ const uploadRUTPDF = async () => {
           title: '¡RUT Procesado!',
           html: `
             <div style="text-align: left;">
-              <p><strong>NIT:</strong> ${response.rut.nit || 'N/A'}-${response.rut.dv || ''}</p>
+              <p><strong>NIT:</strong> ${response.rut.nit && response.rut.nit.includes('-') ? response.rut.nit : (response.rut.nit_normalizado + (response.rut.dv ? '-' + response.rut.dv : '')) || 'N/A'}</p>
               <p><strong>Razón Social:</strong> ${response.rut.razon_social || 'N/A'}</p>
               <p><strong>Empresas asociadas encontradas:</strong> ${response.empresas_encontradas || 0}</p>
               <p style="margin-top: 10px; color: #4CAF50;">${response.mensaje || 'RUT procesado exitosamente'}</p>
@@ -7817,7 +8506,7 @@ const deleteRUT = async (rut: any) => {
       <div style="text-align: left;">
         <p>¿Estás seguro de eliminar el RUT de:</p>
         <p><strong>${rut.razon_social}</strong></p>
-        <p>NIT: ${rut.nit}-${rut.dv}</p>
+        <p>NIT: ${rut.nit && rut.nit.includes('-') ? rut.nit : (rut.nit_normalizado + (rut.dv ? '-' + rut.dv : ''))}</p>
         <p style="color: #d32f2f; margin-top: 10px;">Esta acción no se puede deshacer.</p>
       </div>
     `,
