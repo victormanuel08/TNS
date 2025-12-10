@@ -8245,14 +8245,23 @@ const downloadBackup = async (backup: any) => {
     const link = document.createElement('a')
     link.href = blobUrlDownload
     
-    // Obtener nombre del archivo desde headers o usar el nombre del backup
+    // Obtener nombre del archivo desde headers
     const contentDisposition = getHeader('content-disposition')
-    let filename = backup.nombre_archivo
+    let filename = `backup_${backup.id}.fbk` // Fallback por defecto
+    
     if (contentDisposition) {
-      const filenameMatch = contentDisposition.match(/filename="?(.+)"?/i)
-      if (filenameMatch) {
-        filename = filenameMatch[1]
+      // Intentar extraer el nombre del archivo del header Content-Disposition
+      // Formato: attachment; filename="nombre_archivo.fbk" o attachment; filename=nombre_archivo.fbk
+      const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/i)
+      if (filenameMatch && filenameMatch[1]) {
+        // Remover comillas si las hay
+        filename = filenameMatch[1].replace(/['"]/g, '').trim()
       }
+    }
+    
+    // Asegurar que el nombre tenga extensión .fbk
+    if (!filename.toLowerCase().endsWith('.fbk')) {
+      filename = `${filename}.fbk`
     }
     
     link.setAttribute('download', filename)
