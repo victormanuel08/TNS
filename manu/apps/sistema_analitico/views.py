@@ -1279,6 +1279,20 @@ class CalendarioTributarioViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
                 # Si hay error en la conversión, ignorar y usar fecha_desde/fecha_hasta si existen
                 pass
         
+        # Convertir strings de fecha a objetos date
+        fecha_desde = None
+        fecha_hasta = None
+        if fecha_desde_str:
+            try:
+                fecha_desde = datetime.strptime(fecha_desde_str, '%Y-%m-%d').date()
+            except ValueError:
+                pass
+        if fecha_hasta_str:
+            try:
+                fecha_hasta = datetime.strptime(fecha_hasta_str, '%Y-%m-%d').date()
+            except ValueError:
+                pass
+        
         # Si tiene API Key y no especificó empresa/nit, retornar eventos de TODAS sus empresas + NITs de RUTs
         if tiene_api_key and not es_superusuario:
             empresas_autorizadas = request.empresas_autorizadas
