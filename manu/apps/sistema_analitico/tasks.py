@@ -790,25 +790,37 @@ def convertir_backup_a_gdb_task(self, descarga_temporal_id: int):
             raise ValueError('No se encontró gbak para convertir el backup')
         
         # Verificar si el servidor Firebird está instalado (no solo gbak)
-        firebird_server_installed = False
+        # Si gbak está en /opt/firebird2.5, el servidor probablemente también está ahí
+        firebird_server_path = None
         posibles_servidores = [
             '/opt/firebird2.5/bin/fbserver',
             '/opt/firebird2.5/opt/firebird/bin/fbserver',
+            '/opt/firebird2.5/bin/firebird',
             '/usr/sbin/fbserver',
             '/usr/lib/firebird/2.5/bin/fbserver',
             '/usr/lib/firebird/3.0/bin/fbserver'
         ]
         for ruta_servidor in posibles_servidores:
             if os.path.exists(ruta_servidor):
-                firebird_server_installed = True
+                firebird_server_path = ruta_servidor
                 logger.info(f"✅ Servidor Firebird encontrado en: {ruta_servidor}")
                 break
         
-        if not firebird_server_installed:
-            logger.warning("⚠️ Servidor Firebird no encontrado. Solo se encontró gbak (cliente).")
-            logger.warning("💡 Para crear GDB desde FBK, necesitas instalar el servidor Firebird completo:")
-            logger.warning("   sudo apt-get install firebird3.0-server")
-            logger.warning("   O instalar Firebird 2.5 manualmente (ver docs/INSTALAR_FIREBIRD_2.5_UBUNTU.md)")
+        # Si gbak está en /opt/firebird2.5, buscar servidor en la misma ubicación
+        if not firebird_server_path and gbak_path and '/opt/firebird2.5' in gbak_path:
+            # Extraer directorio base de gbak
+            gbak_dir = os.path.dirname(gbak_path)
+            posibles_rutas_relativas = [
+                os.path.join(gbak_dir, 'fbserver'),
+                os.path.join(gbak_dir, 'firebird'),
+                os.path.join(os.path.dirname(gbak_dir), 'fbserver'),
+                os.path.join(os.path.dirname(gbak_dir), 'firebird'),
+            ]
+            for ruta_rel in posibles_rutas_relativas:
+                if os.path.exists(ruta_rel):
+                    firebird_server_path = ruta_rel
+                    logger.info(f"✅ Servidor Firebird encontrado cerca de gbak: {ruta_rel}")
+                    break
         
         # Verificar si el servidor Firebird está corriendo (gbak -c lo requiere)
         # Intentar verificar con systemctl o ps
@@ -854,7 +866,8 @@ def convertir_backup_a_gdb_task(self, descarga_temporal_id: int):
         
         if not firebird_running:
             logger.warning("⚠️ Servidor Firebird no detectado como corriendo. Intentando iniciarlo...")
-            # Intentar iniciar firebird2.5
+            
+            # Primero intentar con systemctl (si está configurado como servicio)
             try:
                 start_result = subprocess.run(
                     ['sudo', 'systemctl', 'start', 'firebird2.5'],
@@ -863,15 +876,12 @@ def convertir_backup_a_gdb_task(self, descarga_temporal_id: int):
                     timeout=10
                 )
                 if start_result.returncode == 0:
-                    logger.info("✅ Servidor Firebird 2.5 iniciado exitosamente")
+                    logger.info("✅ Servidor Firebird 2.5 iniciado exitosamente (systemctl)")
                     firebird_running = True
-                    # Esperar un momento para que el servidor se inicie completamente
                     import time
                     time.sleep(2)
-                else:
-                    logger.warning(f"⚠️ No se pudo iniciar firebird2.5: {start_result.stderr}")
             except Exception as e:
-                logger.warning(f"⚠️ Error al intentar iniciar firebird2.5: {e}")
+                logger.debug(f"systemctl firebird2.5 no disponible: {e}")
             
             # Si aún no está corriendo, intentar con firebird3.0
             if not firebird_running:
@@ -883,18 +893,32 @@ def convertir_backup_a_gdb_task(self, descarga_temporal_id: int):
                         timeout=10
                     )
                     if start_result.returncode == 0:
-                        logger.info("✅ Servidor Firebird 3.0 iniciado exitosamente")
+                        logger.info("✅ Servidor Firebird 3.0 iniciado exitosamente (systemctl)")
                         firebird_running = True
                         import time
                         time.sleep(2)
-                    else:
-                        logger.warning(f"⚠️ No se pudo iniciar firebird3.0: {start_result.stderr}")
                 except Exception as e:
-                    logger.warning(f"⚠️ Error al intentar iniciar firebird3.0: {e}")
+                    logger.debug(f"systemctl firebird3.0 no disponible: {e}")
+            
+            # Si tenemos la ruta del servidor pero no está corriendo, intentar iniciarlo directamente
+            # (para instalaciones manuales de Firebird 2.5 que no tienen systemd)
+            if not firebird_running and firebird_server_path:
+                logger.info(f"💡 Intentando iniciar servidor Firebird directamente desde: {firebird_server_path}")
+                logger.warning("⚠️ NOTA: Para instalaciones manuales, el servidor puede necesitar iniciarse manualmente.")
+                logger.warning("💡 Si el servidor no está corriendo, gbak -c fallará.")
+                logger.warning("💡 Opciones:")
+                logger.warning("   1. Iniciar servidor manualmente antes de solicitar conversión GDB")
+                logger.warning("   2. Configurar Firebird como servicio systemd")
+                logger.warning("   3. Usar Firebird en modo embedded (si está disponible)")
             
             if not firebird_running:
                 logger.error("❌ No se pudo iniciar el servidor Firebird. gbak -c requiere que el servidor esté corriendo.")
-                logger.error("💡 Inicia manualmente con: sudo systemctl start firebird2.5 (o firebird3.0)")
+                if firebird_server_path:
+                    logger.error(f"💡 Servidor encontrado en: {firebird_server_path}")
+                    logger.error("💡 Inicia manualmente el servidor antes de solicitar conversión GDB")
+                else:
+                    logger.error("💡 Instala el servidor Firebird: sudo apt-get install firebird3.0-server")
+                    logger.error("   O instala Firebird 2.5 manualmente (ver docs/INSTALAR_FIREBIRD_2.5_UBUNTU.md)")
         
         # Asegurar que el archivo de destino no exista (gbak -c requiere que no exista)
         if os.path.exists(temp_gdb):
