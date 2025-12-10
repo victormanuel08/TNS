@@ -1126,7 +1126,7 @@ def convertir_backup_a_gdb_task(self, descarga_temporal_id: int):
         logger.info(f"✅ Backup convertido exitosamente a GDB: {temp_gdb}")
         
         # Enviar correo con el link de descarga
-        from django.core.mail import send_mail
+        from django.core.mail import EmailMessage
         from django.conf import settings
         
         # Construir URL de descarga segura (usar el dominio del backend API)
@@ -1135,27 +1135,159 @@ def convertir_backup_a_gdb_task(self, descarga_temporal_id: int):
         api_url = getattr(settings, 'API_PUBLIC_URL', None) or getattr(settings, 'FRONTEND_URL', 'https://api.eddeso.com')
         download_url = f"{api_url}/api/backups/descargar/{descarga.token}/?formato=gdb"
         
+        # Obtener tamaño del archivo GDB
+        gdb_size_mb = 0
+        if os.path.exists(temp_gdb):
+            gdb_size_mb = os.path.getsize(temp_gdb) / (1024 * 1024)
+        
+        # Template HTML bonito similar al de scraping
+        message_html = f'''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {{
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }}
+        .container {{
+            background-color: #f9f9f9;
+            border-radius: 8px;
+            padding: 30px;
+            border: 1px solid #e0e0e0;
+        }}
+        .header {{
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px 8px 0 0;
+            margin: -30px -30px 20px -30px;
+            text-align: center;
+        }}
+        .header h1 {{
+            margin: 0;
+            font-size: 24px;
+        }}
+        .details {{
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            border-left: 4px solid #667eea;
+        }}
+        .details p {{
+            margin: 8px 0;
+        }}
+        .details strong {{
+            color: #667eea;
+        }}
+        .download-button {{
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 40px;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 16px;
+            margin: 20px 0;
+            text-align: center;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: transform 0.2s;
+        }}
+        .download-button:hover {{
+            transform: translateY(-2px);
+            box-shadow: 0 6px 8px rgba(0, 0, 0, 0.15);
+        }}
+        .button-container {{
+            text-align: center;
+            margin: 30px 0;
+        }}
+        .warning {{
+            background-color: #fff3cd;
+            border: 1px solid #ffc107;
+            border-radius: 6px;
+            padding: 15px;
+            margin: 20px 0;
+            color: #856404;
+        }}
+        .footer {{
+            text-align: center;
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #e0e0e0;
+            color: #666;
+            font-size: 12px;
+        }}
+        .file-info {{
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 15px 0;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>💾 Backup GDB Listo</h1>
+        </div>
+        
+        <p>Hola,</p>
+        <p>Se ha generado tu archivo GDB del backup de la empresa <strong>{empresa.nombre}</strong>.</p>
+        
+        <div class="details">
+            <p><strong>Empresa:</strong> {empresa.nombre}</p>
+            <p><strong>NIT:</strong> {empresa.nit_normalizado}</p>
+            <p><strong>Formato:</strong> GDB (Firebird Database)</p>
+            <p><strong>Tamaño:</strong> {gdb_size_mb:.2f} MB</p>
+            <p><strong>Fecha de conversión:</strong> {descarga.fecha_creacion.strftime('%d/%m/%Y %H:%M:%S')}</p>
+        </div>
+        
+        <div class="button-container">
+            <a href="{download_url}" class="download-button" target="_blank">
+                ⬇️ Descargar Archivo GDB
+            </a>
+        </div>
+        
+        <div class="file-info">
+            <p><strong>📋 Información del archivo:</strong></p>
+            <p>Este archivo GDB es una base de datos Firebird lista para usar. Puedes restaurarla directamente usando <code>gbak -c</code> o conectarte a ella con cualquier cliente Firebird.</p>
+        </div>
+        
+        <div class="warning">
+            <strong>⚠️ IMPORTANTE:</strong> Este link expirará el {descarga.fecha_expiracion.strftime('%d/%m/%Y a las %H:%M')}. Descarga el archivo lo antes posible.
+        </div>
+        
+        <div class="footer">
+            <p>Saludos,<br>Sistema de Backups TNS</p>
+            <p style="margin-top: 10px; font-size: 11px; color: #999;">
+                Si el botón no funciona, copia y pega este link en tu navegador:<br>
+                <a href="{download_url}" style="color: #667eea; word-break: break-all;">{download_url}</a>
+            </p>
+            <p style="margin-top: 10px; font-size: 11px; color: #999;">
+                Si no solicitaste esta descarga, puedes ignorar este correo.
+            </p>
+        </div>
+    </div>
+</body>
+</html>'''
+        
         # Enviar correo
         try:
-            send_mail(
-                subject=f'Link de descarga - Backup GDB {empresa.nombre}',
-                message=f'''Hola,
-
-Se ha generado tu archivo GDB del backup de {empresa.nombre}.
-
-Link de descarga (válido por 24 horas):
-{download_url}
-
-Este link expirará el {descarga.fecha_expiracion.strftime('%d/%m/%Y a las %H:%M')}.
-
-Si no solicitaste esta descarga, puedes ignorar este correo.
-
-Saludos,
-Sistema de Backups''',
-                from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@eddeso.com'),
-                recipient_list=[descarga.email],
-                fail_silently=False,
+            from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@eddeso.com')
+            email_msg = EmailMessage(
+                subject=f'💾 Backup GDB Listo - {empresa.nombre}',
+                body=message_html,
+                from_email=from_email,
+                to=[descarga.email],
             )
+            email_msg.content_subtype = "html"
+            email_msg.send(fail_silently=False)
             logger.info(f"✅ Correo enviado exitosamente a {descarga.email}")
         except Exception as e:
             logger.error(f"❌ Error enviando correo: {e}", exc_info=True)
@@ -1201,7 +1333,7 @@ def enviar_backup_fbk_por_email_task(self, descarga_temporal_id: int):
     """
     from .models import DescargaTemporalBackup, ConfiguracionS3
     from .services.backup_s3_service import BackupS3Service
-    from django.core.mail import send_mail
+    from django.core.mail import EmailMessage
     from django.conf import settings
     from django.urls import reverse
     import tempfile
@@ -1224,34 +1356,158 @@ def enviar_backup_fbk_por_email_task(self, descarga_temporal_id: int):
         api_url = getattr(settings, 'API_PUBLIC_URL', None) or getattr(settings, 'FRONTEND_URL', 'https://api.eddeso.com')
         download_url = f"{api_url}/api/backups/descargar/{descarga.token}/?formato=fbk"
         
-        # Enviar correo con el link
-        subject = f"Descarga de Backup FBK - {empresa.nombre}"
-        message = f"""
-Hola,
-
-Se ha solicitado la descarga del backup FBK para la empresa {empresa.nombre}.
-
-Información del backup:
-- Archivo: {backup.nombre_archivo}
-- Fecha: {backup.fecha_backup.strftime('%Y-%m-%d %H:%M:%S')}
-- Tamaño: {backup.tamano_gb:.2f} GB
-
-Link de descarga (válido por 24 horas):
-{download_url}
-
-Este link expirará el {descarga.fecha_expiracion.strftime('%Y-%m-%d %H:%M:%S')}.
-
-Saludos,
-Sistema de Backups TNS
-        """
+        # Obtener nombre del archivo o generar uno por defecto
+        nombre_archivo = backup.nombre_archivo if backup.nombre_archivo else f"backup_{empresa.nit_normalizado}_{backup.fecha_backup.strftime('%Y%m%d_%H%M%S')}.fbk"
         
-        send_mail(
-            subject,
-            message,
-            getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@eddeso.com'),
-            [descarga.email],
-            fail_silently=False
+        # Template HTML bonito similar al de scraping
+        message_html = f'''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {{
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }}
+        .container {{
+            background-color: #f9f9f9;
+            border-radius: 8px;
+            padding: 30px;
+            border: 1px solid #e0e0e0;
+        }}
+        .header {{
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px 8px 0 0;
+            margin: -30px -30px 20px -30px;
+            text-align: center;
+        }}
+        .header h1 {{
+            margin: 0;
+            font-size: 24px;
+        }}
+        .details {{
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            border-left: 4px solid #667eea;
+        }}
+        .details p {{
+            margin: 8px 0;
+        }}
+        .details strong {{
+            color: #667eea;
+        }}
+        .download-button {{
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 40px;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 16px;
+            margin: 20px 0;
+            text-align: center;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: transform 0.2s;
+        }}
+        .download-button:hover {{
+            transform: translateY(-2px);
+            box-shadow: 0 6px 8px rgba(0, 0, 0, 0.15);
+        }}
+        .button-container {{
+            text-align: center;
+            margin: 30px 0;
+        }}
+        .warning {{
+            background-color: #fff3cd;
+            border: 1px solid #ffc107;
+            border-radius: 6px;
+            padding: 15px;
+            margin: 20px 0;
+            color: #856404;
+        }}
+        .footer {{
+            text-align: center;
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #e0e0e0;
+            color: #666;
+            font-size: 12px;
+        }}
+        .file-info {{
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 15px 0;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>💾 Backup FBK Listo</h1>
+        </div>
+        
+        <p>Hola,</p>
+        <p>Se ha solicitado la descarga del backup FBK para la empresa <strong>{empresa.nombre}</strong>.</p>
+        
+        <div class="details">
+            <p><strong>Empresa:</strong> {empresa.nombre}</p>
+            <p><strong>NIT:</strong> {empresa.nit_normalizado}</p>
+            <p><strong>Archivo:</strong> {nombre_archivo}</p>
+            <p><strong>Formato:</strong> FBK (Firebird Backup)</p>
+            <p><strong>Fecha del backup:</strong> {backup.fecha_backup.strftime('%d/%m/%Y %H:%M:%S')}</p>
+            <p><strong>Tamaño:</strong> {backup.tamano_gb:.2f} GB</p>
+        </div>
+        
+        <div class="button-container">
+            <a href="{download_url}" class="download-button" target="_blank">
+                ⬇️ Descargar Archivo FBK
+            </a>
+        </div>
+        
+        <div class="file-info">
+            <p><strong>📋 Información del archivo:</strong></p>
+            <p>Este archivo FBK es un backup completo de la base de datos Firebird. Puedes restaurarlo usando <code>gbak -c</code> o cualquier herramienta de gestión de Firebird.</p>
+        </div>
+        
+        <div class="warning">
+            <strong>⚠️ IMPORTANTE:</strong> Este link expirará el {descarga.fecha_expiracion.strftime('%d/%m/%Y a las %H:%M')}. Descarga el archivo lo antes posible.
+        </div>
+        
+        <div class="footer">
+            <p>Saludos,<br>Sistema de Backups TNS</p>
+            <p style="margin-top: 10px; font-size: 11px; color: #999;">
+                Si el botón no funciona, copia y pega este link en tu navegador:<br>
+                <a href="{download_url}" style="color: #667eea; word-break: break-all;">{download_url}</a>
+            </p>
+            <p style="margin-top: 10px; font-size: 11px; color: #999;">
+                Si no solicitaste esta descarga, puedes ignorar este correo.
+            </p>
+        </div>
+    </div>
+</body>
+</html>'''
+        
+        # Enviar correo con formato HTML
+        from django.core.mail import EmailMessage
+        from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@eddeso.com')
+        email_msg = EmailMessage(
+            subject=f'💾 Backup FBK Listo - {empresa.nombre}',
+            body=message_html,
+            from_email=from_email,
+            to=[descarga.email],
         )
+        email_msg.content_subtype = "html"
+        email_msg.send(fail_silently=False)
         
         # Actualizar estado
         descarga.estado = 'listo'
