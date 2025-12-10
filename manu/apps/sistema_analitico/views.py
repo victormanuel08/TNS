@@ -1786,25 +1786,48 @@ class ContrasenaEntidadViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
         nits_list = []
         
         if tiene_api_key and not es_superusuario:
-            empresas_autorizadas = request.empresas_autorizadas
-            nits_empresas = set(empresas_autorizadas.values_list('nit_normalizado', flat=True).distinct())
+            cliente_api = request.cliente_api
             
-            # Obtener razones sociales desde RUTs si están disponibles
-            from .models import RUT
-            ruts = RUT.objects.filter(nit_normalizado__in=nits_empresas).values(
-                'nit_normalizado', 'razon_social', 'nit'
-            )
-            ruts_dict = {rut['nit_normalizado']: rut for rut in ruts}
-            
-            # Construir lista de NITs con razón social
-            for nit_norm in sorted(nits_empresas):
-                rut_info = ruts_dict.get(nit_norm, {})
-                nits_list.append({
-                    'nit_normalizado': nit_norm,
-                    'nit': rut_info.get('nit', nit_norm),
-                    'razon_social': rut_info.get('razon_social', 'N/A'),
-                    'tiene_claves': ContrasenaEntidad.objects.filter(nit_normalizado=nit_norm).exists()
-                })
+            # Si es API Key maestra (permite_scraping_total), listar todos los NITs de RUTs
+            if cliente_api.permite_scraping_total:
+                from .models import RUT
+                ruts = RUT.objects.all().values('nit_normalizado', 'nit', 'razon_social', 'dv').distinct()
+                
+                for rut in ruts:
+                    nits_list.append({
+                        'nit_normalizado': rut['nit_normalizado'],
+                        'nit': rut['nit'] or rut['nit_normalizado'],
+                        'razon_social': rut['razon_social'] or 'N/A',
+                        'dv': rut.get('dv', ''),
+                        'tiene_claves': ContrasenaEntidad.objects.filter(nit_normalizado=rut['nit_normalizado']).exists()
+                    })
+            else:
+                # API Key normal: solo NITs de empresas asociadas
+                empresas_autorizadas = request.empresas_autorizadas
+                if empresas_autorizadas and hasattr(empresas_autorizadas, 'values_list'):
+                    nits_empresas = set(empresas_autorizadas.values_list('nit_normalizado', flat=True).distinct())
+                else:
+                    # Si es una lista vacía o no es un queryset, usar lista vacía
+                    nits_empresas = set()
+                
+                # Obtener razones sociales desde RUTs si están disponibles
+                from .models import RUT
+                if nits_empresas:
+                    ruts = RUT.objects.filter(nit_normalizado__in=nits_empresas).values(
+                        'nit_normalizado', 'razon_social', 'nit', 'dv'
+                    )
+                    ruts_dict = {rut['nit_normalizado']: rut for rut in ruts}
+                    
+                    # Construir lista de NITs con razón social
+                    for nit_norm in sorted(nits_empresas):
+                        rut_info = ruts_dict.get(nit_norm, {})
+                        nits_list.append({
+                            'nit_normalizado': nit_norm,
+                            'nit': rut_info.get('nit', nit_norm),
+                            'razon_social': rut_info.get('razon_social', 'N/A'),
+                            'dv': rut_info.get('dv', ''),
+                            'tiene_claves': ContrasenaEntidad.objects.filter(nit_normalizado=nit_norm).exists()
+                        })
         else:
             # Superusuario: retornar todos los NITs que tienen claves
             from django.db.models import Count
@@ -1832,7 +1855,8 @@ class ContrasenaEntidadViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
         
         return Response({
             'nits': nits_list,
-            'total': len(nits_list)
+            'total': len(nits_list),
+            'es_api_key_maestra': tiene_api_key and getattr(request.cliente_api, 'permite_scraping_total', False) if tiene_api_key else False
         }, status=status.HTTP_200_OK)
 
 
