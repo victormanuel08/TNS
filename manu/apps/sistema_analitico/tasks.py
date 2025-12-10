@@ -789,6 +789,27 @@ def convertir_backup_a_gdb_task(self, descarga_temporal_id: int):
             descarga.save()
             raise ValueError('No se encontró gbak para convertir el backup')
         
+        # Verificar si el servidor Firebird está instalado (no solo gbak)
+        firebird_server_installed = False
+        posibles_servidores = [
+            '/opt/firebird2.5/bin/fbserver',
+            '/opt/firebird2.5/opt/firebird/bin/fbserver',
+            '/usr/sbin/fbserver',
+            '/usr/lib/firebird/2.5/bin/fbserver',
+            '/usr/lib/firebird/3.0/bin/fbserver'
+        ]
+        for ruta_servidor in posibles_servidores:
+            if os.path.exists(ruta_servidor):
+                firebird_server_installed = True
+                logger.info(f"✅ Servidor Firebird encontrado en: {ruta_servidor}")
+                break
+        
+        if not firebird_server_installed:
+            logger.warning("⚠️ Servidor Firebird no encontrado. Solo se encontró gbak (cliente).")
+            logger.warning("💡 Para crear GDB desde FBK, necesitas instalar el servidor Firebird completo:")
+            logger.warning("   sudo apt-get install firebird3.0-server")
+            logger.warning("   O instalar Firebird 2.5 manualmente (ver docs/INSTALAR_FIREBIRD_2.5_UBUNTU.md)")
+        
         # Verificar si el servidor Firebird está corriendo (gbak -c lo requiere)
         # Intentar verificar con systemctl o ps
         firebird_running = False
@@ -882,10 +903,11 @@ def convertir_backup_a_gdb_task(self, descarga_temporal_id: int):
         
         # Convertir FBK a GDB
         # NOTA: gbak -c requiere que el servidor Firebird esté corriendo
-        # Para archivos locales, intentar primero sin prefijo, luego con localhost:
-        # Si la ruta es absoluta y local, usar directamente sin prefijo
-        # Si falla, intentar con localhost: (requiere servidor Firebird corriendo)
-        temp_gdb_firebird = temp_gdb  # Intentar primero sin prefijo
+        # Para Firebird, el formato correcto para archivos locales es:
+        # - Sin prefijo: solo funciona si el servidor está en modo embedded
+        # - Con localhost:: requiere servidor corriendo en localhost
+        # Intentar primero con localhost: (formato estándar)
+        temp_gdb_firebird = f"localhost:{temp_gdb}"
         
         comando = [
             gbak_path,
@@ -894,7 +916,7 @@ def convertir_backup_a_gdb_task(self, descarga_temporal_id: int):
             '-user', 'SYSDBA',
             '-password', 'masterkey',
             temp_fbk,  # Archivo FBK de origen (local)
-            temp_gdb_firebird  # Archivo GDB de destino (ruta local sin prefijo)
+            temp_gdb_firebird  # Archivo GDB de destino (formato localhost:)
         ]
         
         logger.info(f"⏳ Convirtiendo backup a GDB: {' '.join(comando)}")
@@ -914,23 +936,17 @@ def convertir_backup_a_gdb_task(self, descarga_temporal_id: int):
             env=env
         )
         
-        # Si falla con "Unable to complete network request", intentar con localhost:
+        # Si falla con "Unable to complete network request", el servidor no está corriendo
+        # Intentar verificar si Firebird está instalado pero no corriendo
         if resultado.returncode != 0:
             error_msg = resultado.stderr or resultado.stdout or "Error desconocido"
             if "Unable to complete network request" in error_msg or "failed to create database" in error_msg:
-                logger.warning(f"⚠️ Primer intento falló, intentando con formato localhost:...")
-                # Intentar con localhost: (requiere servidor Firebird corriendo)
-                temp_gdb_firebird = f"localhost:{temp_gdb}"
-                comando[7] = temp_gdb_firebird  # Actualizar el último argumento
-                logger.info(f"🔄 Reintentando con: {' '.join(comando)}")
-                
-                resultado = subprocess.run(
-                    comando,
-                    capture_output=True,
-                    text=True,
-                    timeout=600,
-                    env=env
-                )
+                logger.error(f"❌ Error: El servidor Firebird no está corriendo o no está instalado.")
+                logger.error(f"💡 Para crear GDB desde FBK, necesitas el servidor Firebird corriendo.")
+                logger.error(f"💡 Opciones:")
+                logger.error(f"   1. Instalar servidor Firebird: sudo apt-get install firebird3.0-server (o firebird2.5)")
+                logger.error(f"   2. Iniciar servidor: sudo systemctl start firebird3.0 (o firebird2.5)")
+                logger.error(f"   3. Verificar si está instalado: which fbserver o ls /opt/firebird2.5/bin/fbserver")
         
         # Limpiar FBK temporal
         if os.path.exists(temp_fbk):
