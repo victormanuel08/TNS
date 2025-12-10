@@ -952,6 +952,10 @@ def convertir_backup_a_gdb_task(self, descarga_temporal_id: int):
         env['LC_ALL'] = 'C.UTF-8'
         env['LANG'] = 'C.UTF-8'
         
+        # Obtener tamaño del FBK para validar después
+        fbk_size = os.path.getsize(temp_fbk) if os.path.exists(temp_fbk) else 0
+        logger.info(f"📊 Tamaño del FBK: {fbk_size / (1024*1024):.2f} MB")
+        
         resultado = subprocess.run(
             comando,
             capture_output=True,
@@ -960,15 +964,30 @@ def convertir_backup_a_gdb_task(self, descarga_temporal_id: int):
             env=env
         )
         
+        # Verificar si hubo errores (incluso si returncode es 0, gbak puede reportar errores)
+        output_completo = (resultado.stdout or '') + (resultado.stderr or '')
+        tiene_error = (
+            resultado.returncode != 0 or
+            'ERROR:' in output_completo or
+            'failed to create database' in output_completo.lower() or
+            'Error reading data from the connection' in output_completo or
+            'do not recognize record type' in output_completo.lower()
+        )
+        
         # Si falla, intentar con formato alternativo (sin puerto explícito)
-        if resultado.returncode != 0:
+        if tiene_error:
             error_msg = resultado.stderr or resultado.stdout or "Error desconocido"
+            logger.warning(f"⚠️ Primer intento falló. Error: {error_msg[:200]}")
+            
+            # Limpiar archivo parcial si existe
+            if os.path.exists(temp_gdb):
+                logger.warning(f"⚠️ Eliminando archivo GDB parcial: {temp_gdb}")
+                os.remove(temp_gdb)
+            
             if "Error reading data from the connection" in error_msg or "Unable to complete network request" in error_msg:
-                logger.warning(f"⚠️ Primer intento falló con formato localhost/3050:, intentando con localhost:...")
-                # Intentar con formato localhost: (sin puerto explícito)
-                # comando[7] = temp_fbk (FBK origen), comando[8] = temp_gdb_firebird (GDB destino)
+                logger.warning(f"⚠️ Intentando con formato localhost: (sin puerto explícito)...")
                 temp_gdb_firebird = f"localhost:{temp_gdb}"
-                comando[-1] = temp_gdb_firebird  # Actualizar el último argumento (GDB destino)
+                comando[-1] = temp_gdb_firebird
                 logger.info(f"🔄 Reintentando con: {' '.join(comando)}")
                 
                 resultado = subprocess.run(
@@ -978,17 +997,56 @@ def convertir_backup_a_gdb_task(self, descarga_temporal_id: int):
                     timeout=600,
                     env=env
                 )
+                
+                # Verificar de nuevo
+                output_completo = (resultado.stdout or '') + (resultado.stderr or '')
+                tiene_error = (
+                    resultado.returncode != 0 or
+                    'ERROR:' in output_completo or
+                    'failed to create database' in output_completo.lower() or
+                    'Error reading data from the connection' in output_completo
+                )
         
         # Limpiar FBK temporal
         if os.path.exists(temp_fbk):
             os.remove(temp_fbk)
         
-        if resultado.returncode != 0:
+        # Verificar que el archivo GDB se creó y tiene un tamaño razonable
+        gdb_existe = os.path.exists(temp_gdb)
+        gdb_size = os.path.getsize(temp_gdb) if gdb_existe else 0
+        
+        if gdb_existe:
+            logger.info(f"📊 Archivo GDB creado. Tamaño: {gdb_size / (1024*1024):.2f} MB")
+            # El GDB normalmente es más pequeño que el FBK (el FBK está comprimido)
+            # Para un FBK de 24MB, un GDB de 1.6MB puede ser razonable si está muy comprimido
+            # Pero si es menor a 500KB para un FBK grande, probablemente está incompleto
+            if fbk_size > 0 and gdb_size < (fbk_size * 0.02):  # Menos del 2% del tamaño del FBK
+                logger.error(f"❌ Archivo GDB demasiado pequeño ({gdb_size} bytes, {gdb_size / (1024*1024):.2f} MB) para un FBK de {fbk_size / (1024*1024):.2f} MB. Probablemente incompleto.")
+                tiene_error = True
+            elif gdb_size < 500 * 1024:  # Menos de 500KB en general
+                logger.error(f"❌ Archivo GDB demasiado pequeño ({gdb_size} bytes). Probablemente incompleto.")
+                tiene_error = True
+        
+        if tiene_error or not gdb_existe:
             error_msg = resultado.stderr or resultado.stdout or "Error desconocido"
             logger.error(f"❌ Error convirtiendo backup a GDB: {error_msg}")
-            # Agregar mensaje más claro si el problema es el servidor Firebird
-            if "Unable to complete network request" in error_msg:
+            logger.error(f"📊 Estado: returncode={resultado.returncode}, GDB existe={gdb_existe}, tamaño={gdb_size}")
+            
+            # Limpiar archivo parcial si existe
+            if gdb_existe:
+                try:
+                    os.remove(temp_gdb)
+                except:
+                    pass
+            
+            # Agregar mensaje más claro según el tipo de error
+            if "Unable to complete network request" in error_msg or "Error reading data from the connection" in error_msg:
                 error_msg += "\n\n💡 NOTA: gbak -c requiere que el servidor Firebird esté corriendo. Verifica con: sudo systemctl status firebird2.5 o firebird3.0"
+                error_msg += "\n💡 Si el servidor está corriendo, puede ser un problema de timeout o buffer. Intenta aumentar el timeout o verificar los logs del servidor."
+            elif "do not recognize record type" in error_msg.lower():
+                error_msg += "\n\n💡 NOTA: Este error puede indicar que el backup FBK está corrupto, incompleto, o fue creado con una versión incompatible de Firebird."
+                error_msg += "\n💡 Verifica que el backup FBK esté completo y no corrupto. Intenta crear un nuevo backup si el problema persiste."
+            
             descarga.estado = 'expirado'
             descarga.save()
             raise Exception(f'Error al convertir backup a GDB: {error_msg}')
@@ -1008,7 +1066,7 @@ def convertir_backup_a_gdb_task(self, descarga_temporal_id: int):
         # Esta URL es pública y no requiere autenticación, solo el token
         # No expone información del backend ni frontend, solo el token seguro
         api_url = getattr(settings, 'API_PUBLIC_URL', None) or getattr(settings, 'FRONTEND_URL', 'https://api.eddeso.com')
-        download_url = f"{api_url}/api/backups/descargar/{descarga.token}/"
+        download_url = f"{api_url}/api/backups/descargar/{descarga.token}/?formato=gdb"
         
         # Enviar correo
         try:

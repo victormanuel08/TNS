@@ -12142,8 +12142,10 @@ def descargar_backup_por_token(request, token):
     import tempfile
     
     try:
+        logger.info(f"📥 Solicitud de descarga con token: {token[:8]}...")
         descarga = DescargaTemporalBackup.objects.get(token=token)
         formato = request.query_params.get('formato', 'gdb').lower()
+        logger.info(f"📦 Formato solicitado: {formato}, Estado descarga: {descarga.estado}")
         
         # Verificar que no esté expirado
         if descarga.esta_expirado():
@@ -12158,15 +12160,25 @@ def descargar_backup_por_token(request, token):
         
         if formato == 'gdb':
             # Para GDB, usar ruta temporal (ya convertido)
+            logger.info(f"🔍 Verificando GDB. Estado: {descarga.estado}, Ruta: {descarga.ruta_gdb_temporal}")
             if descarga.estado != 'listo':
+                logger.warning(f"⚠️ GDB no está listo. Estado: {descarga.estado}")
                 return Response(
                     {'error': f'El archivo aún no está listo. Estado: {descarga.estado}'},
                     status=status.HTTP_202_ACCEPTED
                 )
             
-            if not descarga.ruta_gdb_temporal or not os.path.exists(descarga.ruta_gdb_temporal):
+            if not descarga.ruta_gdb_temporal:
+                logger.error(f"❌ Ruta GDB temporal no definida para descarga {descarga.id}")
                 return Response(
                     {'error': 'El archivo no está disponible. Contacta al administrador.'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            if not os.path.exists(descarga.ruta_gdb_temporal):
+                logger.error(f"❌ Archivo GDB no existe en ruta: {descarga.ruta_gdb_temporal}")
+                return Response(
+                    {'error': f'El archivo no está disponible en el servidor. Ruta: {descarga.ruta_gdb_temporal}'},
                     status=status.HTTP_404_NOT_FOUND
                 )
             
@@ -12174,8 +12186,10 @@ def descargar_backup_por_token(request, token):
             archivo_path = descarga.ruta_gdb_temporal
         else:
             # Para FBK, descargar desde S3
+            logger.info(f"🔍 Descargando FBK desde S3. Backup ID: {backup.id}, Ruta S3: {backup.ruta_s3}")
             config_s3 = backup.configuracion_s3
             if not config_s3:
+                logger.error(f"❌ Backup {backup.id} no tiene configuración S3 asociada")
                 return Response(
                     {'error': 'Backup no tiene configuración S3 asociada'},
                     status=status.HTTP_400_BAD_REQUEST
@@ -12192,17 +12206,25 @@ def descargar_backup_por_token(request, token):
                 nombre_temp = f"backup_{empresa.nit_normalizado if empresa else 'unknown'}_{fecha_str}.fbk"
             temp_fbk = os.path.join(temp_dir, f"backup_{backup.id}_{nombre_temp}")
             
+            logger.info(f"📥 Descargando desde S3: bucket={servicio.bucket_name}, key={backup.ruta_s3}, destino={temp_fbk}")
             try:
                 servicio.s3_client.download_file(
                     servicio.bucket_name,
                     backup.ruta_s3,
                     temp_fbk
                 )
+                # Verificar que el archivo se descargó correctamente
+                if not os.path.exists(temp_fbk):
+                    raise Exception(f"El archivo no se descargó correctamente: {temp_fbk}")
+                file_size = os.path.getsize(temp_fbk)
+                logger.info(f"✅ FBK descargado exitosamente. Tamaño: {file_size / (1024*1024):.2f} MB")
                 # Usar el mismo nombre que generamos para el archivo temporal
                 nombre_archivo = nombre_temp
                 archivo_path = temp_fbk
             except Exception as e:
-                logger.error(f"Error descargando FBK desde S3: {e}", exc_info=True)
+                logger.error(f"❌ Error descargando FBK desde S3: {e}", exc_info=True)
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
                 return Response(
                     {'error': f'Error al descargar backup desde S3: {str(e)}'},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -12214,26 +12236,59 @@ def descargar_backup_por_token(request, token):
             descarga.fecha_descarga = timezone.now()
         descarga.save()
         
+        # Verificar que el archivo existe antes de abrirlo
+        if not os.path.exists(archivo_path):
+            logger.error(f"❌ Archivo no existe antes de enviar: {archivo_path}")
+            return Response(
+                {'error': f'El archivo no existe en el servidor: {archivo_path}'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Verificar permisos de lectura
+        if not os.access(archivo_path, os.R_OK):
+            logger.error(f"❌ Sin permisos de lectura: {archivo_path}")
+            return Response(
+                {'error': 'Sin permisos para leer el archivo'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
         # Devolver archivo
-        response = FileResponse(
-            open(archivo_path, 'rb'),
-            content_type='application/octet-stream'
-        )
-        response['Content-Disposition'] = f'attachment; filename="{nombre_archivo}"'
-        
-        logger.info(f"Descarga exitosa de backup {formato.upper()} con token {token[:8]}... (intento {descarga.intentos_descarga})")
-        
-        return response
+        try:
+            file_handle = open(archivo_path, 'rb')
+            response = FileResponse(
+                file_handle,
+                content_type='application/octet-stream'
+            )
+            response['Content-Disposition'] = f'attachment; filename="{nombre_archivo}"'
+            
+            logger.info(f"✅ Descarga exitosa de backup {formato.upper()} con token {token[:8]}... (intento {descarga.intentos_descarga})")
+            
+            return response
+        except Exception as e:
+            logger.error(f"❌ Error abriendo archivo {archivo_path}: {e}", exc_info=True)
+            return Response(
+                {'error': f'Error al abrir el archivo: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
         
     except DescargaTemporalBackup.DoesNotExist:
+        logger.error(f"❌ Token no encontrado: {token[:8]}...")
+        return Response(
+            {'error': 'Token inválido o link no encontrado'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except DescargaTemporalBackup.DoesNotExist:
+        logger.error(f"Token no encontrado: {token[:8]}...")
         return Response(
             {'error': 'Token inválido o link no encontrado'},
             status=status.HTTP_404_NOT_FOUND
         )
     except Exception as e:
-        logger.error(f"Error descargando backup por token: {e}", exc_info=True)
+        logger.error(f"Error descargando backup por token {token[:8] if 'token' in locals() else 'unknown'}: {e}", exc_info=True)
+        import traceback
+        logger.error(f"Traceback completo: {traceback.format_exc()}")
         return Response(
-            {'error': 'Error al descargar el archivo'},
+            {'error': f'Error al descargar el archivo: {str(e)}'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
