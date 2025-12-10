@@ -12067,7 +12067,14 @@ class BackupS3ViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
             
             # Descargar FBK desde S3 a archivo temporal
             temp_dir = tempfile.gettempdir()
-            temp_fbk = os.path.join(temp_dir, f"backup_{backup.id}_{backup.nombre_archivo}")
+            # Generar nombre de archivo temporal: usar backup.nombre_archivo si existe, sino generar uno por defecto
+            if backup.nombre_archivo:
+                nombre_temp = backup.nombre_archivo
+            else:
+                empresa = backup.empresa_servidor
+                fecha_str = backup.fecha_backup.strftime('%Y%m%d_%H%M%S') if backup.fecha_backup else 'unknown'
+                nombre_temp = f"backup_{empresa.nit_normalizado if empresa else 'unknown'}_{fecha_str}.fbk"
+            temp_fbk = os.path.join(temp_dir, f"backup_{backup.id}_{nombre_temp}")
             
             try:
                 servicio.s3_client.download_file(
@@ -12077,7 +12084,9 @@ class BackupS3ViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
                 )
                 
                 # Devolver FBK directamente
-                nombre_descarga = backup.nombre_archivo
+                # Usar el mismo nombre que generamos para el archivo temporal
+                nombre_descarga = nombre_temp
+                
                 response = FileResponse(
                     open(temp_fbk, 'rb'),
                     content_type='application/octet-stream'
@@ -12165,7 +12174,14 @@ def descargar_backup_por_token(request, token):
             
             servicio = BackupS3Service(config_s3)
             temp_dir = tempfile.gettempdir()
-            temp_fbk = os.path.join(temp_dir, f"backup_{backup.id}_{backup.nombre_archivo}")
+            # Generar nombre de archivo temporal: usar backup.nombre_archivo si existe, sino generar uno por defecto
+            if backup.nombre_archivo:
+                nombre_temp = backup.nombre_archivo
+            else:
+                empresa = backup.empresa_servidor
+                fecha_str = backup.fecha_backup.strftime('%Y%m%d_%H%M%S') if backup.fecha_backup else 'unknown'
+                nombre_temp = f"backup_{empresa.nit_normalizado if empresa else 'unknown'}_{fecha_str}.fbk"
+            temp_fbk = os.path.join(temp_dir, f"backup_{backup.id}_{nombre_temp}")
             
             try:
                 servicio.s3_client.download_file(
@@ -12173,7 +12189,8 @@ def descargar_backup_por_token(request, token):
                     backup.ruta_s3,
                     temp_fbk
                 )
-                nombre_archivo = backup.nombre_archivo
+                # Usar el mismo nombre que generamos para el archivo temporal
+                nombre_archivo = nombre_temp
                 archivo_path = temp_fbk
             except Exception as e:
                 logger.error(f"Error descargando FBK desde S3: {e}", exc_info=True)

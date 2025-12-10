@@ -720,7 +720,13 @@ def convertir_backup_a_gdb_task(self, descarga_temporal_id: int):
         
         # Descargar FBK desde S3
         temp_dir = tempfile.gettempdir()
-        temp_fbk = os.path.join(temp_dir, f"backup_{backup.id}_{backup.nombre_archivo}")
+        # Generar nombre de archivo temporal: usar backup.nombre_archivo si existe, sino generar uno por defecto
+        if backup.nombre_archivo:
+            nombre_temp = backup.nombre_archivo
+        else:
+            fecha_str = backup.fecha_backup.strftime('%Y%m%d_%H%M%S') if backup.fecha_backup else 'unknown'
+            nombre_temp = f"backup_{empresa.nit_normalizado if empresa else 'unknown'}_{fecha_str}.fbk"
+        temp_fbk = os.path.join(temp_dir, f"backup_{backup.id}_{nombre_temp}")
         
         servicio.s3_client.download_file(
             servicio.bucket_name,
@@ -899,8 +905,9 @@ def enviar_backup_fbk_por_email_task(self, descarga_temporal_id: int):
         
         # Generar URL de descarga directa usando el token
         # El endpoint descargar_backup_token ya existe y maneja la descarga con token
-        base_url = getattr(settings, 'FRONTEND_URL', 'https://api.eddeso.com')
-        download_url = f"{base_url}/api/backups/descargar/{descarga.token}/?formato=fbk"
+        # Usar la misma lógica que GDB para consistencia
+        api_url = getattr(settings, 'API_PUBLIC_URL', None) or getattr(settings, 'FRONTEND_URL', 'https://api.eddeso.com')
+        download_url = f"{api_url}/api/backups/descargar/{descarga.token}/?formato=fbk"
         
         # Enviar correo con el link
         subject = f"Descarga de Backup FBK - {empresa.nombre}"
