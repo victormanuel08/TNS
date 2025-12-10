@@ -12067,14 +12067,21 @@ class BackupS3ViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
             
             # Descargar FBK desde S3 a archivo temporal
             temp_dir = tempfile.gettempdir()
-            # Generar nombre de archivo temporal: usar backup.nombre_archivo si existe, sino generar uno por defecto
+            # Generar nombre de archivo temporal: usar backup.nombre_archivo si existe y no está vacío, sino generar uno por defecto
             if backup.nombre_archivo and backup.nombre_archivo.strip():
                 nombre_temp = backup.nombre_archivo
             else:
                 empresa = backup.empresa_servidor
                 fecha_str = backup.fecha_backup.strftime('%Y%m%d_%H%M%S') if backup.fecha_backup else 'unknown'
                 nombre_temp = f"backup_{empresa.nit_normalizado if empresa else 'unknown'}_{fecha_str}.fbk"
+            
+            # Asegurar que el nombre tenga extensión .fbk
+            if not nombre_temp.lower().endswith('.fbk'):
+                nombre_temp = f"{os.path.splitext(nombre_temp)[0]}.fbk"
+            
             temp_fbk = os.path.join(temp_dir, f"backup_{backup.id}_{nombre_temp}")
+            
+            logger.info(f"📥 Descargando backup {backup.id}: nombre_temp='{nombre_temp}', nombre_archivo='{backup.nombre_archivo}'")
             
             try:
                 servicio.s3_client.download_file(
@@ -12086,6 +12093,8 @@ class BackupS3ViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
                 # Devolver FBK directamente
                 # Usar el mismo nombre que generamos para el archivo temporal
                 nombre_descarga = nombre_temp
+                
+                logger.info(f"✅ Backup descargado: {nombre_descarga}")
                 
                 response = FileResponse(
                     open(temp_fbk, 'rb'),
