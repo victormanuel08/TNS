@@ -104,3 +104,5 @@ PS C:\Users\USUARIO\repos\TNSFULL\manu> .\env\Scripts\activate
 (env) PS C:\Users\USUARIO\repos\TNSFULL\manu> celery -A config worker -l info -P solo
 PS C:\Redis> .\redis-server.exe --port 6380
 PS C:\Users\USUARIO\repos\TNSFULL\front> npx nuxt dev --port 3001 --host
+
+ssh victus@198.7.113.19

@@ -866,6 +866,103 @@ Sistema de Backups''',
         }
 
 
+@shared_task(bind=True, name='sistema_analitico.enviar_backup_fbk_por_email')
+def enviar_backup_fbk_por_email_task(self, descarga_temporal_id: int):
+    """
+    Tarea Celery para enviar un backup FBK por correo con link de descarga seguro.
+    Similar a convertir_backup_a_gdb_task pero para FBK (no requiere conversión).
+    
+    Args:
+        descarga_temporal_id: ID del registro DescargaTemporalBackup
+        
+    Returns:
+        dict con resultado del envío
+    """
+    from .models import DescargaTemporalBackup, ConfiguracionS3
+    from .services.backup_s3_service import BackupS3Service
+    from django.core.mail import send_mail
+    from django.conf import settings
+    from django.urls import reverse
+    import tempfile
+    import os
+    
+    try:
+        descarga = DescargaTemporalBackup.objects.get(id=descarga_temporal_id)
+        backup = descarga.backup
+        empresa = backup.empresa_servidor
+        
+        # Actualizar estado
+        descarga.estado = 'listo'  # Para FBK no necesitamos conversión, está listo inmediatamente
+        descarga.save()
+        
+        logger.info(f"📧 Enviando backup FBK {backup.id} por email a {descarga.email}")
+        
+        # Generar URL de descarga directa usando el token
+        # El endpoint descargar_backup_token ya existe y maneja la descarga con token
+        base_url = getattr(settings, 'FRONTEND_URL', 'https://api.eddeso.com')
+        download_url = f"{base_url}/api/backups/descargar/{descarga.token}/?formato=fbk"
+        
+        # Enviar correo con el link
+        subject = f"Descarga de Backup FBK - {empresa.nombre}"
+        message = f"""
+Hola,
+
+Se ha solicitado la descarga del backup FBK para la empresa {empresa.nombre}.
+
+Información del backup:
+- Archivo: {backup.nombre_archivo}
+- Fecha: {backup.fecha_backup.strftime('%Y-%m-%d %H:%M:%S')}
+- Tamaño: {backup.tamano_gb:.2f} GB
+
+Link de descarga (válido por 24 horas):
+{download_url}
+
+Este link expirará el {descarga.fecha_expiracion.strftime('%Y-%m-%d %H:%M:%S')}.
+
+Saludos,
+Sistema de Backups TNS
+        """
+        
+        send_mail(
+            subject,
+            message,
+            getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@eddeso.com'),
+            [descarga.email],
+            fail_silently=False
+        )
+        
+        # Actualizar estado
+        descarga.estado = 'listo'
+        descarga.save()
+        
+        logger.info(f"✅ Email enviado exitosamente a {descarga.email} para backup {backup.id}")
+        
+        return {
+            'status': 'SUCCESS',
+            'email': descarga.email,
+            'download_url': download_url
+        }
+        
+    except DescargaTemporalBackup.DoesNotExist:
+        logger.error(f"❌ DescargaTemporalBackup {descarga_temporal_id} no encontrado")
+        return {
+            'status': 'ERROR',
+            'error': 'Descarga temporal no encontrada'
+        }
+    except Exception as e:
+        logger.error(f"❌ Error en enviar_backup_fbk_por_email_task: {e}", exc_info=True)
+        try:
+            descarga = DescargaTemporalBackup.objects.get(id=descarga_temporal_id)
+            descarga.estado = 'expirado'
+            descarga.save()
+        except:
+            pass
+        return {
+            'status': 'ERROR',
+            'error': str(e)
+        }
+
+
 @shared_task(name='sistema_analitico.procesar_backups_programados', rate_limit='10/m')  # Máximo 10 por minuto
 def procesar_backups_programados_task():
     """

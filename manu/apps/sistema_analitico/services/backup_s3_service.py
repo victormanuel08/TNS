@@ -301,8 +301,25 @@ class BackupS3Service:
         # Si el servidor no es localhost/127.0.0.1, construir ruta remota
         if servidor_host and servidor_host not in ['localhost', '127.0.0.1', '::1']:
             # Para backup remoto, gbak usa formato: host:ruta_base
-            ruta_completa = f"{servidor_host}:{empresa.ruta_base}"
-            logger.info(f"🌐 Usando ruta remota para backup: {ruta_completa}")
+            # IMPORTANTE: Para rutas de Windows con caracteres especiales (como Ñ), 
+            # usar formato TCP/IP con puerto explícito para evitar errores de transliteración
+            puerto_firebird = empresa.servidor.puerto or 3050
+            ruta_base_encoded = empresa.ruta_base
+            
+            # Si la ruta contiene caracteres especiales, usar formato host/port:ruta
+            # Esto ayuda a gbak en Linux a manejar mejor los caracteres especiales de Windows
+            # Verificar si hay caracteres no ASCII en la ruta
+            tiene_caracteres_especiales = any(ord(c) > 127 for c in ruta_base_encoded)
+            
+            if tiene_caracteres_especiales:
+                # Usar formato con puerto explícito para mejor compatibilidad con caracteres especiales
+                ruta_completa = f"{servidor_host}/{puerto_firebird}:{ruta_base_encoded}"
+                logger.info(f"🌐 Usando ruta remota con puerto explícito (caracteres especiales detectados): {ruta_completa}")
+            else:
+                # Formato estándar para rutas sin caracteres especiales
+                ruta_completa = f"{servidor_host}:{ruta_base_encoded}"
+                logger.info(f"🌐 Usando ruta remota para backup: {ruta_completa}")
+            
             logger.info(f"   Verificando conectividad con {servidor_host}...")
             
             # Verificar conectividad básica (puerto 3050) antes de intentar backup
@@ -461,11 +478,18 @@ class BackupS3Service:
             stdout_fd = open(stdout_file, 'w')
             stderr_fd = open(stderr_file, 'w')
             
+            # Configurar variables de entorno para manejar caracteres especiales
+            env = os.environ.copy()
+            # Establecer codificación UTF-8 para manejar caracteres especiales de Windows (como Ñ)
+            env['LC_ALL'] = 'C.UTF-8'
+            env['LANG'] = 'C.UTF-8'
+            
             proceso = subprocess.Popen(
                 comando,
                 stdout=stdout_fd,
                 stderr=stderr_fd,
-                text=True
+                text=True,
+                env=env  # Pasar variables de entorno
             )
             
             # Monitorear el proceso y mostrar progreso cada 30 segundos

@@ -78,6 +78,13 @@
               >
                 ⬇️ Descargar Último Backup (FBK)
               </DropdownItem>
+              <DropdownDivider v-if="empresa.ultimo_backup" />
+              <DropdownItem 
+                v-if="empresa.ultimo_backup"
+                @click="$emit('request-fbk-email', empresa.ultimo_backup.id, empresa)"
+              >
+                📧 Solicitar FBK por Email
+              </DropdownItem>
               <DropdownItem 
                 v-if="empresa.ultimo_backup"
                 @click="$emit('request-gdb', empresa.ultimo_backup.id, empresa)"
@@ -116,6 +123,7 @@ defineEmits<{
   'backup-click': [empresa: any]
   'create-backup': [empresaId: number]
   'download-fbk': [backupId: number]
+  'request-fbk-email': [backupId: number, empresa: any]
   'request-gdb': [backupId: number, empresa: any]
   'edit': [empresa: any]
   'close-backup-menu': []

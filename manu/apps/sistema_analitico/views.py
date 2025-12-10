@@ -11374,6 +11374,73 @@ class BackupS3ViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
+    @action(detail=True, methods=['post'], url_path='solicitar_descarga_fbk')
+    def solicitar_descarga_fbk(self, request, pk=None):
+        """
+        Solicita el envío de un backup FBK por correo.
+        Similar a solicitar_descarga_gdb pero para FBK (no requiere conversión).
+        
+        Body:
+            email: Email del destinatario
+        """
+        try:
+            backup = self.get_object()
+            email = request.data.get('email')
+            
+            if not email:
+                return Response(
+                    {'error': 'Se requiere un email para descargar en formato FBK'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Validar formato de email
+            import re
+            if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email):
+                return Response(
+                    {'error': 'Email inválido'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            from .models import DescargaTemporalBackup
+            from .tasks import enviar_backup_fbk_por_email_task
+            import secrets
+            from datetime import timedelta
+            
+            # Generar token único y seguro
+            token = secrets.token_urlsafe(48)
+            
+            # Crear registro de descarga temporal
+            descarga_temporal = DescargaTemporalBackup.objects.create(
+                backup=backup,
+                token=token,
+                email=email,
+                estado='pendiente',
+                fecha_expiracion=timezone.now() + timedelta(days=1)
+            )
+            
+            # Iniciar tarea Celery para enviar correo con link de descarga
+            enviar_backup_fbk_por_email_task.delay(descarga_temporal.id)
+            
+            logger.info(f"Descarga FBK solicitada para backup {backup.id}, email: {email}, token: {token[:8]}...")
+            
+            return Response({
+                'mensaje': 'Solicitud recibida. Recibirás un correo con el link de descarga en breve.',
+                'token': token,  # Solo para debugging
+                'fecha_expiracion': descarga_temporal.fecha_expiracion
+            }, status=status.HTTP_202_ACCEPTED)
+            
+        except BackupS3.DoesNotExist:
+            return Response(
+                {'error': 'Backup no encontrado'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            logger.error(f"Error solicitando descarga FBK: {e}", exc_info=True)
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
     @action(detail=True, methods=['get'])
     def descargar_backup(self, request, pk=None):
         """
@@ -11456,17 +11523,20 @@ class BackupS3ViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
 @permission_classes([AllowAny])
 def descargar_backup_por_token(request, token):
     """
-    Endpoint público para descargar un backup GDB usando un token seguro.
+    Endpoint público para descargar un backup (FBK o GDB) usando un token seguro.
     No requiere autenticación, solo el token válido.
     
-    GET /api/backups/descargar/{token}/
+    GET /api/backups-s3/descargar_backup_token/{token}/?formato=fbk|gdb
     """
     from django.http import FileResponse, Http404
-    from .models import DescargaTemporalBackup
+    from .models import DescargaTemporalBackup, ConfiguracionS3
+    from .services.backup_s3_service import BackupS3Service
     import os
+    import tempfile
     
     try:
         descarga = DescargaTemporalBackup.objects.get(token=token)
+        formato = request.query_params.get('formato', 'gdb').lower()
         
         # Verificar que no esté expirado
         if descarga.esta_expirado():
@@ -11477,22 +11547,51 @@ def descargar_backup_por_token(request, token):
                 status=status.HTTP_410_GONE
             )
         
-        # Verificar que esté listo
-        if descarga.estado != 'listo':
-            return Response(
-                {'error': f'El archivo aún no está listo. Estado: {descarga.estado}'},
-                status=status.HTTP_202_ACCEPTED
-            )
+        backup = descarga.backup
         
-        # Verificar que el archivo existe
-        if not descarga.ruta_gdb_temporal or not os.path.exists(descarga.ruta_gdb_temporal):
-            return Response(
-                {'error': 'El archivo no está disponible. Contacta al administrador.'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-        
-        # Obtener nombre del archivo
-        nombre_archivo = os.path.basename(descarga.ruta_gdb_temporal)
+        if formato == 'gdb':
+            # Para GDB, usar ruta temporal (ya convertido)
+            if descarga.estado != 'listo':
+                return Response(
+                    {'error': f'El archivo aún no está listo. Estado: {descarga.estado}'},
+                    status=status.HTTP_202_ACCEPTED
+                )
+            
+            if not descarga.ruta_gdb_temporal or not os.path.exists(descarga.ruta_gdb_temporal):
+                return Response(
+                    {'error': 'El archivo no está disponible. Contacta al administrador.'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            nombre_archivo = os.path.basename(descarga.ruta_gdb_temporal)
+            archivo_path = descarga.ruta_gdb_temporal
+        else:
+            # Para FBK, descargar desde S3
+            config_s3 = backup.configuracion_s3
+            if not config_s3:
+                return Response(
+                    {'error': 'Backup no tiene configuración S3 asociada'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            servicio = BackupS3Service(config_s3)
+            temp_dir = tempfile.gettempdir()
+            temp_fbk = os.path.join(temp_dir, f"backup_{backup.id}_{backup.nombre_archivo}")
+            
+            try:
+                servicio.s3_client.download_file(
+                    servicio.bucket_name,
+                    backup.ruta_s3,
+                    temp_fbk
+                )
+                nombre_archivo = backup.nombre_archivo
+                archivo_path = temp_fbk
+            except Exception as e:
+                logger.error(f"Error descargando FBK desde S3: {e}", exc_info=True)
+                return Response(
+                    {'error': f'Error al descargar backup desde S3: {str(e)}'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
         
         # Actualizar estadísticas
         descarga.intentos_descarga += 1
@@ -11502,12 +11601,12 @@ def descargar_backup_por_token(request, token):
         
         # Devolver archivo
         response = FileResponse(
-            open(descarga.ruta_gdb_temporal, 'rb'),
+            open(archivo_path, 'rb'),
             content_type='application/octet-stream'
         )
         response['Content-Disposition'] = f'attachment; filename="{nombre_archivo}"'
         
-        logger.info(f"Descarga exitosa de backup GDB con token {token[:8]}... (intento {descarga.intentos_descarga})")
+        logger.info(f"Descarga exitosa de backup {formato.upper()} con token {token[:8]}... (intento {descarga.intentos_descarga})")
         
         return response
         

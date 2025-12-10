@@ -157,6 +157,7 @@
                       {{ empresaSortOrder === 'asc' ? '↑' : '↓' }}
                     </span>
                   </th>
+                  <th style="width: 180px;">Último Backup</th>
                   <th>Acciones</th>
                 </tr>
               </thead>
@@ -171,6 +172,15 @@
                     <span class="status-badge" :class="empresa.estado === 'ACTIVO' ? 'status-active' : (empresa.estado === 'INACTIVO' ? 'status-inactive' : 'status-warning')">
                       {{ empresa.estado || 'ACTIVO' }}
                     </span>
+                  </td>
+                  <td>
+                    <div v-if="empresa.ultimo_backup" class="ultimo-backup-cell-simple">
+                      <div style="display: flex; flex-direction: column; gap: 4px;">
+                        <span style="font-size: 0.75rem; color: #6b7280;">{{ formatDate(empresa.ultimo_backup.fecha_backup) }}</span>
+                        <span style="font-size: 0.7rem; color: #9ca3af;">{{ formatFileSize(empresa.ultimo_backup.tamano_bytes || empresa.ultimo_backup.tamano_mb * 1024 * 1024) }}</span>
+                      </div>
+                    </div>
+                    <span v-else class="text-muted" style="font-size: 0.75rem;">Sin backup</span>
                   </td>
                   <td>
                     <DropdownMenu trigger-class="btn-menu-icon">
@@ -211,6 +221,19 @@
                       </DropdownItem>
                       <DropdownItem @click="viewEmpresaDetails(empresa.id)">
                         👁️ Ver Detalles
+                      </DropdownItem>
+                      <DropdownDivider v-if="empresa.ultimo_backup" />
+                      <DropdownItem 
+                        v-if="empresa.ultimo_backup"
+                        @click="solicitarDescargaBackup(empresa.ultimo_backup.id, 'fbk', empresa)"
+                      >
+                        📧 Solicitar FBK por Email
+                      </DropdownItem>
+                      <DropdownItem 
+                        v-if="empresa.ultimo_backup"
+                        @click="solicitarDescargaBackup(empresa.ultimo_backup.id, 'gdb', empresa)"
+                      >
+                        📧 Solicitar GDB por Email
                       </DropdownItem>
                     </DropdownMenu>
                   </td>
@@ -1207,12 +1230,26 @@
 
             <div class="actions-bar">
               <select
+                v-model="backupFilterServidor"
+                class="filter-select"
+                @change="onBackupServidorFilterChange"
+              >
+                <option value="">Todos los servidores</option>
+                <option
+                  v-for="server in servers"
+                  :key="server.id"
+                  :value="server.id"
+                >
+                  {{ server.nombre }}
+                </option>
+              </select>
+              <select
                 v-model.number="selectedBackupEmpresaId"
                 class="filter-select"
               >
                 <option :value="null">Selecciona una empresa</option>
                 <option
-                  v-for="empresa in empresas"
+                  v-for="empresa in filteredBackupEmpresas"
                   :key="empresa.id"
                   :value="empresa.id"
                 >
@@ -1239,6 +1276,23 @@
                 <span v-else>📦</span>
                 Crear Backup Ahora
               </button>
+            </div>
+
+            <!-- Tareas en ejecución -->
+            <div v-if="activeBackupTasks.length > 0" class="active-tasks-card" style="margin-bottom: 16px; padding: 16px; background: #fef3c7; border-radius: 8px; border-left: 4px solid #f59e0b;">
+              <h4 style="margin: 0 0 12px 0; color: #92400e;">⏳ Tareas de Backup en Ejecución</h4>
+              <div v-for="task in activeBackupTasks" :key="task.task_id" style="margin-bottom: 8px; padding: 8px; background: white; border-radius: 4px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                  <div>
+                    <strong>{{ task.empresa_nombre }}</strong>
+                    <br>
+                    <small style="color: #6b7280;">{{ task.status || 'Procesando...' }}</small>
+                  </div>
+                  <button class="btn-small btn-secondary" @click="checkTaskStatus(task.task_id)">
+                    🔄 Actualizar
+                  </button>
+                </div>
+              </div>
             </div>
 
             <div v-if="!selectedBackupEmpresaId" class="empty-state">
@@ -2382,6 +2436,7 @@
             @backup-click="handleBackupClick"
             @create-backup="hacerBackupEmpresa"
             @download-fbk="(id) => downloadBackupFromEmpresa(id, 'fbk')"
+            @request-fbk-email="requestFbkDownload"
             @request-gdb="requestGdbDownload"
             @edit="editEmpresa"
             @close-backup-menu="backupMenuOpen = null"
@@ -4098,10 +4153,13 @@ const savingS3Config = ref(false)
 const backupsS3 = ref<any[]>([])
 const loadingBackupsS3 = ref(false)
 const selectedBackupEmpresaId = ref<number | null>(null)
+const backupFilterServidor = ref<string>('')
 const backupStats = ref<any | null>(null)
 const triggeringBackup = ref(false)
 const deletingBackupId = ref<number | null>(null)
 const downloadingBackupId = ref<number | null>(null)
+const activeBackupTasks = ref<any[]>([])
+const backupTaskCheckInterval = ref<any>(null)
 const showServerEmpresasModal = ref(false)
 const selectedServerForEmpresas = ref<number | null>(null)
 const serverEmpresasList = ref<any[]>([])
@@ -5392,13 +5450,13 @@ const downloadBackupFromEmpresa = async (backupId: number, formato: 'fbk' | 'gdb
   }
 }
 
-const requestGdbDownload = async (backupId: number, empresa: any | null) => {
-  backupMenuOpen.value = null
+const solicitarDescargaBackup = async (backupId: number, formato: 'fbk' | 'gdb', empresa: any | null) => {
   const Swal = (await import('sweetalert2')).default
   
+  const formatoNombre = formato.toUpperCase()
   const emailResult = await Swal.fire({
-    title: 'Email para descarga GDB',
-    text: 'Ingresa tu email para recibir el link de descarga seguro',
+    title: `Email para descarga ${formatoNombre}`,
+    text: 'Ingresa tu email para recibir el link de descarga seguro (válido por 24 horas)',
     input: 'email',
     inputPlaceholder: 'tu@email.com',
     inputValidator: (value) => {
@@ -5419,9 +5477,47 @@ const requestGdbDownload = async (backupId: number, empresa: any | null) => {
   if (emailResult.isDismissed || !emailResult.value) return
   
   try {
-    await api.post(`/api/backups-s3/${backupId}/solicitar_descarga_gdb/`, {
-      email: emailResult.value
+    if (formato === 'gdb') {
+      await api.post(`/api/backups-s3/${backupId}/solicitar_descarga_gdb/`, {
+        email: emailResult.value
+      })
+    } else {
+      // Para FBK, usar el mismo endpoint pero con formato fbk
+      await api.post(`/api/backups-s3/${backupId}/solicitar_descarga_fbk/`, {
+        email: emailResult.value
+      })
+    }
+    
+    await Swal.fire({
+      title: 'Solicitud recibida',
+      html: `
+        <p>Se está procesando la descarga en formato ${formatoNombre}.</p>
+        <p>Recibirás un correo en <strong>${emailResult.value}</strong> con el link de descarga en breve.</p>
+        <p><small>El link será válido por 24 horas.</small></p>
+      `,
+      icon: 'success',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
     })
+  } catch (error: any) {
+    console.error(`Error solicitando descarga ${formato}:`, error)
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || `Error al solicitar descarga ${formatoNombre}`,
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  }
+}
+
+const requestGdbDownload = async (backupId: number, empresa: any | null) => {
+  await solicitarDescargaBackup(backupId, 'gdb', empresa)
+}
+
+const requestFbkDownload = async (backupId: number, empresa: any | null) => {
+  await solicitarDescargaBackup(backupId, 'fbk', empresa)
+}
     
     await Swal.fire({
       title: 'Solicitud recibida',
@@ -6159,6 +6255,7 @@ watch(activeSection, (newSection) => {
     }
     loadS3Config()
     reloadBackupsAndStats()
+    checkActiveBackupTasks() // Verificar tareas activas al entrar
   } else if (newSection === 'terminal') {
     // Enfocar el input del terminal cuando se cambia a esa pestaña
     setTimeout(() => {
@@ -7819,6 +7916,86 @@ const reloadBackupsAndStats = async () => {
   ])
 }
 
+const filteredBackupEmpresas = computed(() => {
+  if (!backupFilterServidor.value) return empresas.value
+  return empresas.value.filter(e => e.servidor === Number(backupFilterServidor.value))
+})
+
+const onBackupServidorFilterChange = () => {
+  selectedBackupEmpresaId.value = null
+}
+
+const checkTaskStatus = async (taskId: string) => {
+  try {
+    const response = await api.get<any>(`/api/celery/task-status/${taskId}/`)
+    const taskIndex = activeBackupTasks.value.findIndex(t => t.task_id === taskId)
+    if (taskIndex >= 0) {
+      if (response.state === 'SUCCESS' || response.state === 'FAILURE') {
+        // Tarea completada, remover de la lista
+        activeBackupTasks.value.splice(taskIndex, 1)
+        await reloadBackupsAndStats()
+      } else {
+        // Actualizar estado
+        activeBackupTasks.value[taskIndex].status = response.meta?.status || response.state
+      }
+    }
+  } catch (error: any) {
+    console.error('Error consultando estado de tarea:', error)
+  }
+}
+
+const checkActiveBackupTasks = async () => {
+  // Consultar tareas activas de Celery
+  try {
+    const response = await api.get<any>('/api/server/celery_active_tasks/')
+    const activeTasks = response.active_tasks || []
+    
+    // Filtrar solo tareas de backup
+    const backupTasks = activeTasks.filter((t: any) => 
+      t.task_name === 'sistema_analitico.realizar_backup_empresa'
+    )
+    
+    // Obtener información de cada tarea
+    const tasksWithInfo = await Promise.all(
+      backupTasks.map(async (task: any) => {
+        try {
+          const statusResponse = await api.get<any>(`/api/celery/task-status/${task.task_id}/`)
+          return {
+            task_id: task.task_id,
+            empresa_nombre: statusResponse.meta?.empresa_nombre || 'Desconocida',
+            status: statusResponse.meta?.status || statusResponse.state || 'Procesando...',
+            empresa_id: statusResponse.meta?.empresa_id
+          }
+        } catch {
+          return {
+            task_id: task.task_id,
+            empresa_nombre: 'Desconocida',
+            status: 'Procesando...',
+            empresa_id: null
+          }
+        }
+      })
+    )
+    
+    activeBackupTasks.value = tasksWithInfo
+    
+    // Si hay tareas activas, programar siguiente verificación
+    if (tasksWithInfo.length > 0) {
+      if (!backupTaskCheckInterval.value) {
+        backupTaskCheckInterval.value = setInterval(checkActiveBackupTasks, 5000) // Cada 5 segundos
+      }
+    } else {
+      // No hay tareas activas, limpiar intervalo
+      if (backupTaskCheckInterval.value) {
+        clearInterval(backupTaskCheckInterval.value)
+        backupTaskCheckInterval.value = null
+      }
+    }
+  } catch (error: any) {
+    console.error('Error consultando tareas activas:', error)
+  }
+}
+
 const triggerBackupForSelectedEmpresa = async () => {
   if (!selectedBackupEmpresaId.value) return
   triggeringBackup.value = true
@@ -7836,10 +8013,25 @@ const triggerBackupForSelectedEmpresa = async () => {
     }
 
     const empresaId = selectedBackupEmpresaId.value
+    const empresa = empresas.value.find(e => e.id === empresaId)
     const response = await api.post<any>('/api/backups-s3/realizar_backup/', {
       empresa_id: empresaId,
       configuracion_s3_id: activeS3Config.value.id
     })
+
+    // Agregar a lista de tareas activas
+    activeBackupTasks.value.push({
+      task_id: response.task_id,
+      empresa_nombre: empresa?.nombre || 'Desconocida',
+      status: 'Paso 1/3: Creando backup local con gbak...',
+      empresa_id: empresaId
+    })
+    
+    // Iniciar verificación periódica si no está activa
+    if (!backupTaskCheckInterval.value) {
+      checkActiveBackupTasks()
+      backupTaskCheckInterval.value = setInterval(checkActiveBackupTasks, 5000)
+    }
 
     const Swal = (await import('sweetalert2')).default
     await Swal.fire({
@@ -10822,5 +11014,12 @@ onMounted(async () => {
   background: #1f2937;
   border-color: #1f2937;
   color: white;
+}
+
+.ultimo-backup-cell-simple {
+  padding: 0.5rem;
+  border-radius: 0.375rem;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
 }
 </style>
