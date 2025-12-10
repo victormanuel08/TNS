@@ -1210,6 +1210,84 @@ Sistema de Scraping DIAN'''
                 'statusMessage': 'Error interno del servidor'
             }, status=500)
 
+    @action(detail=False, methods=['get'], url_path='nits-disponibles')
+    def nits_disponibles(self, request):
+        """
+        Lista los NITs disponibles para scraping según la API Key.
+        - Si permite_scraping_total=True: retorna todos los NITs de RUTs
+        - Si no: retorna solo NITs de empresas asociadas
+        """
+        # Verificar autenticación: API Key o superusuario
+        tiene_api_key = hasattr(request, 'cliente_api') and request.cliente_api
+        es_superusuario = request.user.is_authenticated and request.user.is_superuser
+        
+        if not tiene_api_key and not es_superusuario:
+            return Response(
+                {
+                    'error': 'Se requiere API Key válida o autenticación de superusuario',
+                    'info': 'Si tienes una API Key, envíala en el header: Api-Key: <tu_api_key>'
+                },
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        nits_list = []
+        
+        if tiene_api_key:
+            cliente_api = request.cliente_api
+            
+            # Si es API Key maestra (permite_scraping_total=True), listar todos los NITs de RUTs
+            # Es como si tuviera todos los NITs asociados
+            if cliente_api.permite_scraping_total:
+                from apps.sistema_analitico.models import RUT
+                ruts = RUT.objects.all().values('nit_normalizado', 'nit', 'razon_social', 'dv').distinct()
+                
+                for rut in ruts:
+                    nits_list.append({
+                        'nit_normalizado': rut['nit_normalizado'],
+                        'nit': rut['nit'] or rut['nit_normalizado'],
+                        'razon_social': rut['razon_social'] or 'N/A',
+                        'dv': rut.get('dv', '')
+                    })
+            else:
+                # API Key normal: solo NITs de empresas asociadas
+                empresas_autorizadas = request.empresas_autorizadas
+                nits_empresas = set(empresas_autorizadas.values_list('nit_normalizado', flat=True).distinct())
+                
+                # Obtener razones sociales desde RUTs si están disponibles
+                from apps.sistema_analitico.models import RUT
+                ruts = RUT.objects.filter(nit_normalizado__in=nits_empresas).values(
+                    'nit_normalizado', 'nit', 'razon_social', 'dv'
+                )
+                ruts_dict = {rut['nit_normalizado']: rut for rut in ruts}
+                
+                # Construir lista de NITs con razón social
+                for nit_norm in sorted(nits_empresas):
+                    rut_info = ruts_dict.get(nit_norm, {})
+                    nits_list.append({
+                        'nit_normalizado': nit_norm,
+                        'nit': rut_info.get('nit', nit_norm),
+                        'razon_social': rut_info.get('razon_social', 'N/A'),
+                        'dv': rut_info.get('dv', '')
+                    })
+        else:
+            # Superusuario: todos los NITs de RUTs
+            from apps.sistema_analitico.models import RUT
+            ruts = RUT.objects.all().values('nit_normalizado', 'nit', 'razon_social', 'dv').distinct()
+            
+            for rut in ruts:
+                nits_list.append({
+                    'nit_normalizado': rut['nit_normalizado'],
+                    'nit': rut['nit'] or rut['nit_normalizado'],
+                    'razon_social': rut['razon_social'] or 'N/A',
+                    'dv': rut.get('dv', '')
+                })
+        
+        return Response({
+            'nits': nits_list,
+            'total': len(nits_list),
+            'es_api_key_maestra': tiene_api_key and request.cliente_api.permite_scraping_total if tiene_api_key else False
+        }, status=status.HTTP_200_OK)
+    
     @action(detail=False, methods=['post'], authentication_classes=[], permission_classes=[AllowAny])
     def quick_scrape(self, request):
         """Endpoint rapido para iniciar scraping (acceso sin autenticacion)"""
