@@ -791,7 +791,7 @@ class BackupS3Service:
             Lista de diccionarios con información de empresas que necesitan backup, ordenadas por prioridad
         """
         from datetime import timedelta
-        from .models import EmpresaServidor, BackupS3
+        from ..models import EmpresaServidor, BackupS3
         
         fecha_actual = timezone.now()
         anio_actual = date.today().year
