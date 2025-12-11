@@ -12291,6 +12291,219 @@ def descargar_backup_por_token(request, token):
             {'error': f'Error al descargar el archivo: {str(e)}'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+    
+    @action(detail=False, methods=['get'], url_path='informe-backups')
+    def informe_backups(self, request):
+        """
+        Genera un informe completo del estado de backups de todas las empresas.
+        Incluye:
+        - Total de empresas con backups habilitados
+        - Empresas con backup (con fecha del último)
+        - Empresas sin backup
+        - Empresas con backups fallidos
+        """
+        from .models import EmpresaServidor
+        from django.db.models import Max, Q
+        
+        try:
+            # Obtener todas las empresas con backups habilitados
+            empresas = EmpresaServidor.objects.filter(backups_habilitados=True)
+            total_empresas = empresas.count()
+            
+            # Obtener el último backup de cada empresa (agrupado por empresa)
+            empresas_con_backup = BackupS3.objects.filter(
+                empresa_servidor__backups_habilitados=True,
+                estado='completado'
+            ).values('empresa_servidor_id').annotate(
+                ultimo_backup=Max('fecha_backup')
+            )
+            
+            # Crear un diccionario con empresa_id -> fecha último backup
+            empresas_backup_dict = {
+                item['empresa_servidor_id']: item['ultimo_backup']
+                for item in empresas_con_backup
+            }
+            
+            # Obtener empresas con backups fallidos (último backup con estado 'fallido')
+            empresas_fallidas_ids = set()
+            backups_fallidos = BackupS3.objects.filter(
+                empresa_servidor__backups_habilitados=True,
+                estado='fallido'
+            ).values('empresa_servidor_id').annotate(
+                ultimo_fallo=Max('fecha_backup')
+            )
+            
+            # Para cada empresa, verificar si su último backup es fallido
+            for empresa in empresas:
+                ultimo_backup = BackupS3.objects.filter(
+                    empresa_servidor_id=empresa.id
+                ).order_by('-fecha_backup').first()
+                
+                if ultimo_backup and ultimo_backup.estado == 'fallido':
+                    empresas_fallidas_ids.add(empresa.id)
+            
+            # Clasificar empresas
+            empresas_con_backup_list = []
+            empresas_sin_backup_list = []
+            empresas_fallidas_list = []
+            
+            for empresa in empresas.select_related('servidor'):
+                ultimo_backup_fecha = empresas_backup_dict.get(empresa.id)
+                
+                if empresa.id in empresas_fallidas_ids:
+                    # Empresa con backup fallido
+                    ultimo_backup_obj = BackupS3.objects.filter(
+                        empresa_servidor_id=empresa.id,
+                        estado='fallido'
+                    ).order_by('-fecha_backup').first()
+                    
+                    empresas_fallidas_list.append({
+                        'id': empresa.id,
+                        'nombre': empresa.nombre,
+                        'nit': empresa.nit_normalizado,
+                        'servidor': empresa.servidor.nombre if empresa.servidor else 'N/A',
+                        'anio_fiscal': empresa.anio_fiscal,
+                        'fecha_ultimo_fallo': ultimo_backup_obj.fecha_backup.strftime('%Y-%m-%d %H:%M:%S') if ultimo_backup_obj else None,
+                        'mensaje_error': ultimo_backup_obj.mensaje_error if ultimo_backup_obj else None,
+                    })
+                elif ultimo_backup_fecha:
+                    # Empresa con backup exitoso
+                    empresas_con_backup_list.append({
+                        'id': empresa.id,
+                        'nombre': empresa.nombre,
+                        'nit': empresa.nit_normalizado,
+                        'servidor': empresa.servidor.nombre if empresa.servidor else 'N/A',
+                        'anio_fiscal': empresa.anio_fiscal,
+                        'fecha_ultimo_backup': ultimo_backup_fecha.strftime('%Y-%m-%d %H:%M:%S'),
+                        'dias_desde_backup': (timezone.now().date() - ultimo_backup_fecha.date()).days,
+                    })
+                else:
+                    # Empresa sin backup
+                    empresas_sin_backup_list.append({
+                        'id': empresa.id,
+                        'nombre': empresa.nombre,
+                        'nit': empresa.nit_normalizado,
+                        'servidor': empresa.servidor.nombre if empresa.servidor else 'N/A',
+                        'anio_fiscal': empresa.anio_fiscal,
+                    })
+            
+            # Ordenar listas
+            empresas_con_backup_list.sort(key=lambda x: x['fecha_ultimo_backup'], reverse=True)
+            empresas_sin_backup_list.sort(key=lambda x: x['nombre'])
+            empresas_fallidas_list.sort(key=lambda x: x['fecha_ultimo_fallo'] if x['fecha_ultimo_fallo'] else '', reverse=True)
+            
+            # Generar reporte en texto plano
+            reporte_txt = self._generar_reporte_txt(
+                total_empresas,
+                empresas_con_backup_list,
+                empresas_sin_backup_list,
+                empresas_fallidas_list
+            )
+            
+            return Response({
+                'resumen': {
+                    'total_empresas': total_empresas,
+                    'con_backup': len(empresas_con_backup_list),
+                    'sin_backup': len(empresas_sin_backup_list),
+                    'con_fallos': len(empresas_fallidas_list),
+                },
+                'empresas_con_backup': empresas_con_backup_list,
+                'empresas_sin_backup': empresas_sin_backup_list,
+                'empresas_fallidas': empresas_fallidas_list,
+                'reporte_txt': reporte_txt,
+            })
+            
+        except Exception as e:
+            logger.error(f"Error generando informe de backups: {e}", exc_info=True)
+            return Response(
+                {'error': f'Error generando informe: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    def _generar_reporte_txt(self, total_empresas, empresas_con_backup, empresas_sin_backup, empresas_fallidas):
+        """
+        Genera un reporte en texto plano del estado de backups.
+        """
+        from datetime import datetime
+        
+        reporte = []
+        reporte.append("=" * 80)
+        reporte.append("INFORME DE BACKUPS - SISTEMA TNS")
+        reporte.append(f"Fecha de generación: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        reporte.append("=" * 80)
+        reporte.append("")
+        
+        # Resumen
+        reporte.append("RESUMEN")
+        reporte.append("-" * 80)
+        reporte.append(f"Total de empresas con backups habilitados: {total_empresas}")
+        reporte.append(f"Empresas con backup exitoso: {len(empresas_con_backup)}")
+        reporte.append(f"Empresas sin backup: {len(empresas_sin_backup)}")
+        reporte.append(f"Empresas con backups fallidos: {len(empresas_fallidas)}")
+        reporte.append("")
+        
+        # Empresas con backup
+        reporte.append("=" * 80)
+        reporte.append(f"EMPRESAS CON BACKUP ({len(empresas_con_backup)})")
+        reporte.append("=" * 80)
+        if empresas_con_backup:
+            reporte.append(f"{'NIT':<15} {'Nombre':<40} {'Servidor':<15} {'Último Backup':<20} {'Días':<6}")
+            reporte.append("-" * 80)
+            for emp in empresas_con_backup:
+                reporte.append(
+                    f"{emp['nit']:<15} "
+                    f"{emp['nombre'][:38]:<40} "
+                    f"{emp['servidor'][:13]:<15} "
+                    f"{emp['fecha_ultimo_backup']:<20} "
+                    f"{emp['dias_desde_backup']:<6}"
+                )
+        else:
+            reporte.append("No hay empresas con backup.")
+        reporte.append("")
+        
+        # Empresas sin backup
+        reporte.append("=" * 80)
+        reporte.append(f"EMPRESAS SIN BACKUP ({len(empresas_sin_backup)})")
+        reporte.append("=" * 80)
+        if empresas_sin_backup:
+            reporte.append(f"{'NIT':<15} {'Nombre':<40} {'Servidor':<15} {'Año Fiscal':<12}")
+            reporte.append("-" * 80)
+            for emp in empresas_sin_backup:
+                reporte.append(
+                    f"{emp['nit']:<15} "
+                    f"{emp['nombre'][:38]:<40} "
+                    f"{emp['servidor'][:13]:<15} "
+                    f"{emp['anio_fiscal']:<12}"
+                )
+        else:
+            reporte.append("Todas las empresas tienen backup.")
+        reporte.append("")
+        
+        # Empresas con fallos
+        reporte.append("=" * 80)
+        reporte.append(f"EMPRESAS CON BACKUPS FALLIDOS ({len(empresas_fallidas)})")
+        reporte.append("=" * 80)
+        if empresas_fallidas:
+            reporte.append(f"{'NIT':<15} {'Nombre':<40} {'Servidor':<15} {'Último Fallo':<20}")
+            reporte.append("-" * 80)
+            for emp in empresas_fallidas:
+                reporte.append(
+                    f"{emp['nit']:<15} "
+                    f"{emp['nombre'][:38]:<40} "
+                    f"{emp['servidor'][:13]:<15} "
+                    f"{emp['fecha_ultimo_fallo'] or 'N/A':<20}"
+                )
+                if emp['mensaje_error']:
+                    reporte.append(f"  Error: {emp['mensaje_error'][:100]}")
+        else:
+            reporte.append("No hay empresas con backups fallidos.")
+        reporte.append("")
+        
+        reporte.append("=" * 80)
+        reporte.append("FIN DEL REPORTE")
+        reporte.append("=" * 80)
+        
+        return "\n".join(reporte)
 
 
 # ==================== ViewSet para Comunicación (SMS y Llamadas) ====================

@@ -1598,15 +1598,16 @@ def enviar_backup_fbk_por_email_task(self, descarga_temporal_id: int):
         }
 
 
-@shared_task(name='sistema_analitico.procesar_backups_programados', rate_limit='10/m')  # Máximo 10 por minuto
+@shared_task(name='sistema_analitico.procesar_backups_programados', rate_limit='20/m')  # Máximo 20 por minuto (aumentado de 10)
 def procesar_backups_programados_task():
     """
     Tarea Celery programada para procesar backups de todas las empresas.
     
-    Estrategia para evitar sobrecargar el servidor:
+    Estrategia optimizada para aprovechar recursos (18GB RAM):
     - A las 1:00 AM: Procesa empresas del año fiscal actual (prioridad alta)
-    - Durante el día: Procesa empresas de años anteriores que necesitan backup (más de 230 días)
-    - Procesa en lotes pequeños con rate limiting
+    - Durante el día (7am-7pm): Procesa empresas de años anteriores (más de 30 días) - 10 por hora
+    - Horas nocturnas (7pm-6am): Procesa más empresas de años anteriores - 30 por hora
+    - Procesa en lotes con rate limiting adaptativo según hora del día
     
     Esta tarea debe ejecutarse cada hora.
     """
@@ -1667,7 +1668,21 @@ def procesar_backups_programados_task():
                         realizar_backup_empresa_task.delay(empresa.id, config_s3.id)
         
         # PRIORIDAD 2: Empresas de años anteriores que necesitan backup (más de 30 días)
-        # Procesar solo 10 empresas por hora para no sobrecargar
+        # Estrategia adaptativa según hora del día:
+        # - Horas diurnas (7am-7pm): 10 empresas por hora (bajo consumo)
+        # - Horas nocturnas (7pm-6am): 30 empresas por hora (aprovecha recursos)
+        hora_actual_num = hora_actual.hour
+        es_hora_nocturna = hora_actual_num >= 19 or hora_actual_num < 6  # 7pm a 6am
+        
+        if es_hora_nocturna:
+            max_verificar = 150  # Verificar más empresas en horas nocturnas
+            max_procesar = 30   # Procesar más en horas nocturnas
+            logger.info("🌙 Horas nocturnas: procesando más backups (30 por hora)")
+        else:
+            max_verificar = 50  # Verificar menos empresas en horas diurnas
+            max_procesar = 10   # Procesar menos en horas diurnas
+            logger.info("☀️ Horas diurnas: procesando backups moderados (10 por hora)")
+        
         logger.info("🔄 Verificando empresas de años anteriores que necesitan backup")
         empresas_anios_anteriores_list = EmpresaServidor.objects.filter(
             backups_habilitados=True,
@@ -1675,13 +1690,13 @@ def procesar_backups_programados_task():
         ).order_by('anio_fiscal', 'id')  # Ordenar para procesar de forma consistente
         
         empresas_que_necesitan_backup = []
-        for empresa in empresas_anios_anteriores_list[:50]:  # Verificar máximo 50 por hora
+        for empresa in empresas_anios_anteriores_list[:max_verificar]:
             necesita, anio = servicio_backup.necesita_backup_anio_anterior(empresa)
             if necesita:
                 empresas_que_necesitan_backup.append(empresa)
         
-        # Procesar máximo 10 empresas de años anteriores por hora
-        for empresa in empresas_que_necesitan_backup[:10]:
+        # Procesar según estrategia adaptativa
+        for empresa in empresas_que_necesitan_backup[:max_procesar]:
             empresas_anios_anteriores += 1
             empresas_procesadas += 1
             logger.info(f"🔄 Backup necesario para {empresa.nombre} (año {empresa.anio_fiscal}, >30 días)")

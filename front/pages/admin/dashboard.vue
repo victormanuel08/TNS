@@ -1107,6 +1107,15 @@
       <section v-if="activeSection === 'backups-s3'" class="section">
         <div class="section-header">
           <h2>Backups S3 por Empresa (NIT)</h2>
+          <button
+            class="btn-secondary"
+            @click="mostrarInformeBackups"
+            :disabled="cargandoInformeBackups"
+          >
+            <span v-if="cargandoInformeBackups">⏳</span>
+            <span v-else>📊</span>
+            Informe de Backups
+          </button>
         </div>
 
         <div class="two-column-layout">
@@ -1406,6 +1415,138 @@
           </div>
         </div>
       </section>
+
+      <!-- Modal Informe de Backups -->
+      <Teleport to="body">
+        <div
+          v-if="mostrarModalInforme"
+          class="modal-overlay"
+          @click.self="mostrarModalInforme = false"
+        >
+          <div class="modal-content modal-large">
+            <div class="modal-header">
+              <h2>📊 Informe de Backups</h2>
+              <button class="modal-close" @click="mostrarModalInforme = false">×</button>
+            </div>
+            
+            <div class="modal-body" v-if="informeBackups">
+              <!-- Resumen -->
+              <div class="informe-resumen" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px;">
+                <div class="stat-card" style="background: #dbeafe; padding: 16px; border-radius: 8px; border-left: 4px solid #3b82f6;">
+                  <div class="stat-label">Total Empresas</div>
+                  <div class="stat-value">{{ informeBackups.resumen.total_empresas }}</div>
+                </div>
+                <div class="stat-card" style="background: #d1fae5; padding: 16px; border-radius: 8px; border-left: 4px solid #10b981;">
+                  <div class="stat-label">Con Backup</div>
+                  <div class="stat-value">{{ informeBackups.resumen.con_backup }}</div>
+                </div>
+                <div class="stat-card" style="background: #fef3c7; padding: 16px; border-radius: 8px; border-left: 4px solid #f59e0b;">
+                  <div class="stat-label">Sin Backup</div>
+                  <div class="stat-value">{{ informeBackups.resumen.sin_backup }}</div>
+                </div>
+                <div class="stat-card" style="background: #fee2e2; padding: 16px; border-radius: 8px; border-left: 4px solid #ef4444;">
+                  <div class="stat-label">Con Fallos</div>
+                  <div class="stat-value">{{ informeBackups.resumen.con_fallos }}</div>
+                </div>
+              </div>
+
+              <!-- Botón Exportar -->
+              <div style="margin-bottom: 24px;">
+                <button class="btn-primary" @click="exportarInformeTXT">
+                  📄 Exportar a TXT
+                </button>
+              </div>
+
+              <!-- Empresas con Backup -->
+              <div v-if="informeBackups.empresas_con_backup.length > 0" style="margin-bottom: 24px;">
+                <h3 style="color: #10b981; margin-bottom: 12px;">
+                  ✅ Empresas con Backup ({{ informeBackups.empresas_con_backup.length }})
+                </h3>
+                <div class="table-container" style="max-height: 300px; overflow-y: auto;">
+                  <table class="data-table">
+                    <thead>
+                      <tr>
+                        <th>NIT</th>
+                        <th>Nombre</th>
+                        <th>Servidor</th>
+                        <th>Último Backup</th>
+                        <th>Días</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="emp in informeBackups.empresas_con_backup" :key="emp.id">
+                        <td>{{ emp.nit }}</td>
+                        <td>{{ emp.nombre }}</td>
+                        <td>{{ emp.servidor }}</td>
+                        <td>{{ emp.fecha_ultimo_backup }}</td>
+                        <td>{{ emp.dias_desde_backup }}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <!-- Empresas sin Backup -->
+              <div v-if="informeBackups.empresas_sin_backup.length > 0" style="margin-bottom: 24px;">
+                <h3 style="color: #f59e0b; margin-bottom: 12px;">
+                  ⚠️ Empresas sin Backup ({{ informeBackups.empresas_sin_backup.length }})
+                </h3>
+                <div class="table-container" style="max-height: 300px; overflow-y: auto;">
+                  <table class="data-table">
+                    <thead>
+                      <tr>
+                        <th>NIT</th>
+                        <th>Nombre</th>
+                        <th>Servidor</th>
+                        <th>Año Fiscal</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="emp in informeBackups.empresas_sin_backup" :key="emp.id">
+                        <td>{{ emp.nit }}</td>
+                        <td>{{ emp.nombre }}</td>
+                        <td>{{ emp.servidor }}</td>
+                        <td>{{ emp.anio_fiscal }}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <!-- Empresas con Fallos -->
+              <div v-if="informeBackups.empresas_fallidas.length > 0">
+                <h3 style="color: #ef4444; margin-bottom: 12px;">
+                  ❌ Empresas con Backups Fallidos ({{ informeBackups.empresas_fallidas.length }})
+                </h3>
+                <div class="table-container" style="max-height: 300px; overflow-y: auto;">
+                  <table class="data-table">
+                    <thead>
+                      <tr>
+                        <th>NIT</th>
+                        <th>Nombre</th>
+                        <th>Servidor</th>
+                        <th>Último Fallo</th>
+                        <th>Error</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="emp in informeBackups.empresas_fallidas" :key="emp.id">
+                        <td>{{ emp.nit }}</td>
+                        <td>{{ emp.nombre }}</td>
+                        <td>{{ emp.servidor }}</td>
+                        <td>{{ emp.fecha_ultimo_fallo || 'N/A' }}</td>
+                        <td style="max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                          {{ emp.mensaje_error || 'N/A' }}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Teleport>
 
       <!-- Scrapers -->
       <section v-if="activeSection === 'scrapers'" class="section">
@@ -4171,6 +4312,9 @@ const deletingBackupId = ref<number | null>(null)
 const downloadingBackupId = ref<number | null>(null)
 const activeBackupTasks = ref<any[]>([])
 const backupTaskCheckInterval = ref<any>(null)
+const cargandoInformeBackups = ref(false)
+const informeBackups = ref<any | null>(null)
+const mostrarModalInforme = ref(false)
 const showServerEmpresasModal = ref(false)
 const selectedServerForEmpresas = ref<number | null>(null)
 const serverEmpresasList = ref<any[]>([])
@@ -7911,6 +8055,43 @@ const filteredBackupEmpresas = computed(() => {
 
 const onBackupServidorFilterChange = () => {
   selectedBackupEmpresaId.value = null
+}
+
+const mostrarInformeBackups = async () => {
+  cargandoInformeBackups.value = true
+  try {
+    const response = await api.get<any>('/api/backups-s3/informe-backups/')
+    informeBackups.value = response
+    mostrarModalInforme.value = true
+  } catch (error: any) {
+    console.error('Error cargando informe de backups:', error)
+    const Swal = (await import('sweetalert2')).default
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al cargar informe de backups',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  } finally {
+    cargandoInformeBackups.value = false
+  }
+}
+
+const exportarInformeTXT = () => {
+  if (!informeBackups.value?.reporte_txt) {
+    return
+  }
+  
+  const blob = new Blob([informeBackups.value.reporte_txt], { type: 'text/plain' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `informe_backups_${new Date().toISOString().split('T')[0]}.txt`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
 }
 
 const checkTaskStatus = async (taskId: string) => {
