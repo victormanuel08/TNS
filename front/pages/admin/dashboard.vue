@@ -72,6 +72,7 @@
             @view-empresas="viewServerEmpresas"
             @edit="editServer"
             @details="viewServerDetails"
+            @create-backups-pending="crearBackupsPendientes"
             @delete="deleteServer"
           />
         </div>
@@ -1542,6 +1543,115 @@
                     </tbody>
                   </table>
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Teleport>
+
+      <!-- Modal: Progreso de Backups Pendientes -->
+      <Teleport to="body">
+        <div
+          v-if="showBackupPendientesModal"
+          class="modal-overlay"
+          @click.self="cerrarModalBackupsPendientes"
+        >
+          <div class="modal-content modal-large">
+            <div class="modal-header">
+              <h2>📦 Crear Backups Pendientes</h2>
+              <button class="modal-close" @click="cerrarModalBackupsPendientes">×</button>
+            </div>
+            
+            <div class="modal-body" v-if="backupPendientesProgress">
+              <!-- Estado de la tarea -->
+              <div class="progress-section" style="margin-bottom: 24px;">
+                <div class="status-badge" :class="{
+                  'status-active': backupPendientesProgress.status === 'PROCESSING',
+                  'status-success': backupPendientesProgress.status === 'SUCCESS',
+                  'status-error': backupPendientesProgress.status === 'ERROR',
+                  'status-warning': backupPendientesProgress.status === 'CANCELLED'
+                }">
+                  {{ backupPendientesProgress.status === 'PROCESSING' ? 'En Progreso' : 
+                     backupPendientesProgress.status === 'SUCCESS' ? 'Completado' :
+                     backupPendientesProgress.status === 'ERROR' ? 'Error' :
+                     backupPendientesProgress.status === 'CANCELLED' ? 'Cancelado' : backupPendientesProgress.status }}
+                </div>
+              </div>
+
+              <!-- Barra de progreso -->
+              <div v-if="backupPendientesProgress.status === 'PROCESSING'" style="margin-bottom: 24px;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                  <span>Progreso</span>
+                  <span>{{ backupPendientesProgress.meta?.progreso || 0 }}%</span>
+                </div>
+                <div class="progress-bar" style="width: 100%; height: 24px; background: #e5e7eb; border-radius: 12px; overflow: hidden;">
+                  <div 
+                    class="progress-fill" 
+                    :style="{ 
+                      width: `${backupPendientesProgress.meta?.progreso || 0}%`, 
+                      height: '100%', 
+                      background: 'linear-gradient(90deg, #667eea 0%, #764ba2 100%)',
+                      transition: 'width 0.3s ease'
+                    }"
+                  ></div>
+                </div>
+              </div>
+
+              <!-- Información del progreso -->
+              <div class="info-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px;">
+                <div class="info-card" style="padding: 16px; background: #f9fafb; border-radius: 8px;">
+                  <div class="info-label" style="font-size: 0.875rem; color: #6b7280; margin-bottom: 4px;">Total Empresas</div>
+                  <div class="info-value" style="font-size: 1.5rem; font-weight: 600; color: #1f2937;">{{ backupPendientesProgress.meta?.total_empresas || backupPendientesProgress.total_empresas || 0 }}</div>
+                </div>
+                <div class="info-card" style="padding: 16px; background: #f9fafb; border-radius: 8px;">
+                  <div class="info-label" style="font-size: 0.875rem; color: #6b7280; margin-bottom: 4px;">Procesadas</div>
+                  <div class="info-value" style="font-size: 1.5rem; font-weight: 600; color: #1f2937;">{{ backupPendientesProgress.meta?.procesadas || backupPendientesProgress.procesadas || 0 }}</div>
+                </div>
+                <div class="info-card" style="padding: 16px; background: #f9fafb; border-radius: 8px;">
+                  <div class="info-label" style="font-size: 0.875rem; color: #6b7280; margin-bottom: 4px;">Exitosas</div>
+                  <div class="info-value" style="font-size: 1.5rem; font-weight: 600; color: #10b981;">{{ backupPendientesProgress.meta?.exitosas || backupPendientesProgress.exitosas || 0 }}</div>
+                </div>
+                <div class="info-card" style="padding: 16px; background: #f9fafb; border-radius: 8px;">
+                  <div class="info-label" style="font-size: 0.875rem; color: #6b7280; margin-bottom: 4px;">Fallidas</div>
+                  <div class="info-value" style="font-size: 1.5rem; font-weight: 600; color: #ef4444;">{{ backupPendientesProgress.meta?.fallidas || backupPendientesProgress.fallidas || 0 }}</div>
+                </div>
+              </div>
+
+              <!-- Empresa actual -->
+              <div v-if="backupPendientesProgress.meta?.empresa_actual" style="margin-bottom: 24px; padding: 16px; background: #f9fafb; border-radius: 8px; border-left: 4px solid #667eea;">
+                <div style="font-weight: 600; margin-bottom: 4px;">Procesando:</div>
+                <div>{{ backupPendientesProgress.meta.empresa_actual }}</div>
+                <div v-if="backupPendientesProgress.meta.razon" style="font-size: 0.875rem; color: #6b7280; margin-top: 4px;">
+                  Razón: {{ backupPendientesProgress.meta.razon }}
+                </div>
+              </div>
+
+              <!-- Mensaje final -->
+              <div v-if="backupPendientesProgress.mensaje" style="padding: 16px; background: #f0f9ff; border-radius: 8px; border-left: 4px solid #3b82f6;">
+                {{ backupPendientesProgress.mensaje }}
+              </div>
+
+              <!-- Botones de acción -->
+              <div style="display: flex; gap: 12px; margin-top: 24px;">
+                <button
+                  v-if="backupPendientesProgress.status === 'PROCESSING'"
+                  class="btn-secondary"
+                  @click="cancelarBackupsPendientes"
+                >
+                  ⏸️ Pausar/Cancelar
+                </button>
+                <button
+                  class="btn-primary"
+                  @click="cerrarModalBackupsPendientes"
+                >
+                  {{ backupPendientesProgress.status === 'PROCESSING' ? 'Cerrar (continuar en segundo plano)' : 'Cerrar' }}
+                </button>
+              </div>
+            </div>
+            
+            <div v-else class="modal-body">
+              <div class="loading-state">
+                <p>Iniciando procesamiento...</p>
               </div>
             </div>
           </div>
@@ -4312,6 +4422,11 @@ const deletingBackupId = ref<number | null>(null)
 const downloadingBackupId = ref<number | null>(null)
 const activeBackupTasks = ref<any[]>([])
 const backupTaskCheckInterval = ref<any>(null)
+const backupPendientesTaskId = ref<string | null>(null)
+const backupPendientesProgress = ref<any>(null)
+const backupPendientesInterval = ref<any>(null)
+const showBackupPendientesModal = ref(false)
+const servidorBackupPendientes = ref<number | null>(null)
 const cargandoInformeBackups = ref(false)
 const informeBackups = ref<any | null>(null)
 const mostrarModalInforme = ref(false)
@@ -9106,6 +9221,118 @@ const updateServer = async () => {
   } finally {
     creatingServer.value = false
   }
+}
+
+const crearBackupsPendientes = async (serverId: number) => {
+  const Swal = (await import('sweetalert2')).default
+  
+  try {
+    const response = await api.post<any>(`/api/servidores/${serverId}/crear-backups-pendientes/`)
+    
+    if (response.task_id) {
+      backupPendientesTaskId.value = response.task_id
+      servidorBackupPendientes.value = serverId
+      showBackupPendientesModal.value = true
+      
+      // Iniciar verificación de progreso
+      checkBackupPendientesProgress()
+      if (!backupPendientesInterval.value) {
+        backupPendientesInterval.value = setInterval(checkBackupPendientesProgress, 2000) // Cada 2 segundos
+      }
+    }
+  } catch (error: any) {
+    console.error('Error iniciando backups pendientes:', error)
+    await Swal.fire({
+      title: 'Error',
+      text: error?.data?.error || error?.message || 'Error al iniciar backups pendientes',
+      icon: 'error',
+      confirmButtonText: 'Aceptar',
+      customClass: { container: 'swal-z-index-fix' }
+    })
+  }
+}
+
+const checkBackupPendientesProgress = async () => {
+  if (!backupPendientesTaskId.value) return
+  
+  try {
+    const response = await api.get<any>(`/api/celery/task-status/${backupPendientesTaskId.value}/`)
+    
+    if (response.status === 'SUCCESS' || response.status === 'ERROR' || response.status === 'CANCELLED') {
+      // Tarea completada
+      backupPendientesProgress.value = response
+      if (backupPendientesInterval.value) {
+        clearInterval(backupPendientesInterval.value)
+        backupPendientesInterval.value = null
+      }
+    } else {
+      // Tarea en progreso
+      backupPendientesProgress.value = response
+    }
+  } catch (error: any) {
+    console.error('Error consultando progreso de backups pendientes:', error)
+  }
+}
+
+const cancelarBackupsPendientes = async () => {
+  if (!backupPendientesTaskId.value) return
+  
+  const Swal = (await import('sweetalert2')).default
+  const result = await Swal.fire({
+    title: '¿Cancelar procesamiento?',
+    text: 'Se cancelará el procesamiento de backups pendientes. Los backups ya iniciados continuarán.',
+    icon: 'warning',
+    showCancelButton: true,
+    confirmButtonText: 'Sí, cancelar',
+    cancelButtonText: 'Continuar',
+    confirmButtonColor: '#d32f2f',
+    customClass: { container: 'swal-z-index-fix' }
+  })
+  
+  if (result.isConfirmed) {
+    try {
+      await api.post(`/api/celery/cancel-task/${backupPendientesTaskId.value}/`)
+      
+      if (backupPendientesInterval.value) {
+        clearInterval(backupPendientesInterval.value)
+        backupPendientesInterval.value = null
+      }
+      
+      backupPendientesProgress.value = {
+        status: 'CANCELLED',
+        mensaje: 'Procesamiento cancelado por el usuario'
+      }
+      
+      await Swal.fire({
+        title: 'Cancelado',
+        text: 'El procesamiento ha sido cancelado',
+        icon: 'info',
+        timer: 2000,
+        showConfirmButton: false,
+        customClass: { container: 'swal-z-index-fix' }
+      })
+    } catch (error: any) {
+      console.error('Error cancelando tarea:', error)
+      await Swal.fire({
+        title: 'Error',
+        text: 'No se pudo cancelar la tarea',
+        icon: 'error',
+        confirmButtonText: 'Aceptar',
+        customClass: { container: 'swal-z-index-fix' }
+      })
+    }
+  }
+}
+
+const cerrarModalBackupsPendientes = () => {
+  showBackupPendientesModal.value = false
+  if (backupPendientesInterval.value) {
+    clearInterval(backupPendientesInterval.value)
+    backupPendientesInterval.value = null
+  }
+  backupPendientesTaskId.value = null
+  backupPendientesProgress.value = null
+  servidorBackupPendientes.value = null
 }
 
 const deleteServer = async (serverId: number) => {

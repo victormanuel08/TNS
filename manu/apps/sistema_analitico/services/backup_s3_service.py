@@ -777,6 +777,98 @@ class BackupS3Service:
         
         return False, None
     
+    def identificar_empresas_backups_pendientes(self, servidor_id: int = None) -> List[Dict]:
+        """
+        Identifica empresas que necesitan backup según las reglas:
+        - Años anteriores: si el backup tiene más de 1 mes, crear/reemplazar. Si tiene menos de 1 mes, dejarlo.
+        - Año 2025: que tengan un mínimo del día anterior
+        - Prioridad: empezar con los que no tienen ningún backup
+        
+        Args:
+            servidor_id: ID del servidor (opcional, si se proporciona solo busca empresas de ese servidor)
+            
+        Returns:
+            Lista de diccionarios con información de empresas que necesitan backup, ordenadas por prioridad
+        """
+        from datetime import timedelta
+        from .models import EmpresaServidor, BackupS3
+        
+        fecha_actual = timezone.now()
+        anio_actual = date.today().year
+        un_mes_atras = fecha_actual - timedelta(days=30)
+        un_dia_atras = fecha_actual - timedelta(days=1)
+        
+        # Filtrar empresas con backups habilitados
+        empresas_query = EmpresaServidor.objects.filter(backups_habilitados=True)
+        if servidor_id:
+            empresas_query = empresas_query.filter(servidor_id=servidor_id)
+        
+        empresas_pendientes = []
+        
+        for empresa in empresas_query.select_related('servidor'):
+            # Obtener todos los backups de la empresa
+            backups = BackupS3.objects.filter(
+                empresa_servidor=empresa,
+                estado='completado'
+            ).order_by('-fecha_backup')
+            
+            tiene_backup = backups.exists()
+            ultimo_backup = backups.first() if tiene_backup else None
+            
+            necesita_backup = False
+            razon = ""
+            prioridad = 0  # Mayor número = mayor prioridad
+            
+            if empresa.anio_fiscal < anio_actual:
+                # AÑOS ANTERIORES: Si tiene más de 1 mes, crear/reemplazar. Si tiene menos de 1 mes, dejarlo.
+                if not tiene_backup:
+                    necesita_backup = True
+                    razon = "Sin backup"
+                    prioridad = 100  # Máxima prioridad: sin backup
+                elif ultimo_backup.fecha_backup.replace(tzinfo=None) < un_mes_atras.replace(tzinfo=None):
+                    necesita_backup = True
+                    razon = f"Backup tiene más de 1 mes ({ultimo_backup.fecha_backup.strftime('%Y-%m-%d')})"
+                    prioridad = 50  # Prioridad media: backup antiguo
+                else:
+                    necesita_backup = False
+                    razon = f"Backup reciente ({ultimo_backup.fecha_backup.strftime('%Y-%m-%d')})"
+            elif empresa.anio_fiscal == anio_actual:
+                # AÑO 2025: Que tengan un mínimo del día anterior
+                if not tiene_backup:
+                    necesita_backup = True
+                    razon = "Sin backup"
+                    prioridad = 100  # Máxima prioridad: sin backup
+                elif ultimo_backup.fecha_backup.replace(tzinfo=None) < un_dia_atras.replace(tzinfo=None):
+                    necesita_backup = True
+                    razon = f"Backup anterior a ayer ({ultimo_backup.fecha_backup.strftime('%Y-%m-%d %H:%M')})"
+                    prioridad = 80  # Alta prioridad: backup del año actual pero antiguo
+                else:
+                    necesita_backup = False
+                    razon = f"Backup reciente ({ultimo_backup.fecha_backup.strftime('%Y-%m-%d %H:%M')})"
+            else:
+                # Años futuros (no debería pasar, pero por si acaso)
+                necesita_backup = False
+                razon = "Año fiscal futuro"
+            
+            if necesita_backup:
+                empresas_pendientes.append({
+                    'empresa_id': empresa.id,
+                    'empresa_nombre': empresa.nombre,
+                    'nit': empresa.nit_normalizado,
+                    'servidor_id': empresa.servidor_id,
+                    'servidor_nombre': empresa.servidor.nombre if empresa.servidor else 'N/A',
+                    'anio_fiscal': empresa.anio_fiscal,
+                    'tiene_backup': tiene_backup,
+                    'ultimo_backup_fecha': ultimo_backup.fecha_backup.strftime('%Y-%m-%d %H:%M:%S') if ultimo_backup else None,
+                    'razon': razon,
+                    'prioridad': prioridad,
+                })
+        
+        # Ordenar por prioridad (mayor primero) y luego por nombre
+        empresas_pendientes.sort(key=lambda x: (-x['prioridad'], x['empresa_nombre']))
+        
+        return empresas_pendientes
+    
     def aplicar_politica_retencion(self, empresa: EmpresaServidor) -> Dict[str, int]:
         """
         Aplica la política de retención de backups:

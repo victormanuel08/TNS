@@ -1719,3 +1719,153 @@ def procesar_backups_programados_task():
             'status': 'ERROR',
             'error': str(e)
         }
+
+
+@shared_task(bind=True, name='sistema_analitico.procesar_backups_pendientes')
+def procesar_backups_pendientes_task(self, servidor_id: int, configuracion_s3_id: int):
+    """
+    Tarea Celery para procesar backups pendientes de todas las empresas de un servidor.
+    
+    Reglas:
+    - Años anteriores: si el backup tiene más de 1 mes, crear/reemplazar. Si tiene menos de 1 mes, dejarlo.
+    - Año 2025: que tengan un mínimo del día anterior
+    - Prioridad: empezar con los que no tienen ningún backup
+    
+    Args:
+        servidor_id: ID del servidor
+        configuracion_s3_id: ID de la configuración S3 a utilizar
+        
+    Returns:
+        dict con resultado del procesamiento
+    """
+    from .models import Servidor, ConfiguracionS3
+    from .services.backup_s3_service import BackupS3Service
+    
+    try:
+        servidor = Servidor.objects.get(id=servidor_id)
+        config_s3 = ConfiguracionS3.objects.get(id=configuracion_s3_id, activo=True)
+        servicio_backup = BackupS3Service(config_s3)
+        
+        logger.info(f"📦 Iniciando procesamiento de backups pendientes para servidor {servidor.nombre} (ID: {servidor_id})")
+        
+        # Identificar empresas que necesitan backup
+        empresas_pendientes = servicio_backup.identificar_empresas_backups_pendientes(servidor_id=servidor_id)
+        total_empresas = len(empresas_pendientes)
+        
+        logger.info(f"📊 Empresas que necesitan backup: {total_empresas}")
+        
+        if total_empresas == 0:
+            return {
+                'status': 'SUCCESS',
+                'mensaje': 'No hay empresas que necesiten backup en este servidor',
+                'total_empresas': 0,
+                'procesadas': 0,
+                'exitosas': 0,
+                'fallidas': 0,
+            }
+        
+        # Actualizar estado inicial
+        self.update_state(
+            state='PROCESSING',
+            meta={
+                'servidor_id': servidor_id,
+                'servidor_nombre': servidor.nombre,
+                'total_empresas': total_empresas,
+                'procesadas': 0,
+                'exitosas': 0,
+                'fallidas': 0,
+                'empresa_actual': None,
+                'progreso': 0,
+                'cancelado': False
+            }
+        )
+        
+        empresas_procesadas = 0
+        empresas_exitosas = 0
+        empresas_fallidas = 0
+        
+        # Procesar empresas según prioridad
+        for idx, empresa_info in enumerate(empresas_pendientes):
+            # Verificar si la tarea fue cancelada (revocada)
+            # Celery marca las tareas revocadas, verificamos el estado
+            try:
+                from celery.result import AsyncResult
+                task_result = AsyncResult(self.request.id)
+                if task_result.state in ('REVOKED', 'REJECTED'):
+                    logger.info(f"⚠️ Tarea cancelada por el usuario. Procesadas: {empresas_procesadas}/{total_empresas}")
+                    return {
+                        'status': 'CANCELLED',
+                        'mensaje': 'Procesamiento cancelado por el usuario',
+                        'total_empresas': total_empresas,
+                        'procesadas': empresas_procesadas,
+                        'exitosas': empresas_exitosas,
+                        'fallidas': empresas_fallidas,
+                    }
+            except Exception:
+                # Si hay error verificando, continuar
+                pass
+            
+            empresa_id = empresa_info['empresa_id']
+            empresa_nombre = empresa_info['empresa_nombre']
+            
+            # Actualizar progreso
+            progreso = int((idx + 1) / total_empresas * 100)
+            self.update_state(
+                state='PROCESSING',
+                meta={
+                    'servidor_id': servidor_id,
+                    'servidor_nombre': servidor.nombre,
+                    'total_empresas': total_empresas,
+                    'procesadas': empresas_procesadas,
+                    'exitosas': empresas_exitosas,
+                    'fallidas': empresas_fallidas,
+                    'empresa_actual': empresa_nombre,
+                    'empresa_actual_id': empresa_id,
+                    'razon': empresa_info['razon'],
+                    'progreso': progreso,
+                    'cancelado': False
+                }
+            )
+            
+            logger.info(f"📦 [{idx + 1}/{total_empresas}] Procesando backup para {empresa_nombre} (ID: {empresa_id}) - {empresa_info['razon']}")
+            
+            # Lanzar tarea de backup para esta empresa
+            try:
+                realizar_backup_empresa_task.delay(empresa_id, configuracion_s3_id)
+                empresas_procesadas += 1
+                empresas_exitosas += 1  # Asumimos éxito al iniciar, se actualizará después
+                logger.info(f"✅ Backup iniciado para {empresa_nombre}")
+            except Exception as e:
+                empresas_procesadas += 1
+                empresas_fallidas += 1
+                logger.error(f"❌ Error iniciando backup para {empresa_nombre}: {e}")
+        
+        logger.info(f"✅ Procesamiento completado: {empresas_procesadas} empresas procesadas ({empresas_exitosas} exitosas, {empresas_fallidas} fallidas)")
+        
+        return {
+            'status': 'SUCCESS',
+            'mensaje': f'Procesamiento completado: {empresas_procesadas} empresas procesadas',
+            'total_empresas': total_empresas,
+            'procesadas': empresas_procesadas,
+            'exitosas': empresas_exitosas,
+            'fallidas': empresas_fallidas,
+        }
+        
+    except Servidor.DoesNotExist:
+        logger.error(f"❌ Servidor {servidor_id} no encontrado")
+        return {
+            'status': 'ERROR',
+            'error': f'Servidor {servidor_id} no encontrado'
+        }
+    except ConfiguracionS3.DoesNotExist:
+        logger.error(f"❌ Configuración S3 {configuracion_s3_id} no encontrada o inactiva")
+        return {
+            'status': 'ERROR',
+            'error': f'Configuración S3 {configuracion_s3_id} no encontrada o inactiva'
+        }
+    except Exception as e:
+        logger.error(f"❌ Error en procesar_backups_pendientes_task: {e}", exc_info=True)
+        return {
+            'status': 'ERROR',
+            'error': str(e)
+        }

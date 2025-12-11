@@ -59,6 +59,10 @@
           ℹ️ Detalles
         </DropdownItem>
         <DropdownDivider />
+        <DropdownItem @click="$emit('create-backups-pending', server.id)">
+          📦 Crear Backups Pendientes
+        </DropdownItem>
+        <DropdownDivider />
         <DropdownItem danger @click="$emit('delete', server.id)">
           🗑️ Eliminar
         </DropdownItem>
@@ -86,6 +90,7 @@ defineEmits<{
   'view-empresas': [serverId: number]
   edit: [server: Servidor]
   details: [serverId: number]
+  'create-backups-pending': [serverId: number]
   delete: [serverId: number]
 }>()
 </script>

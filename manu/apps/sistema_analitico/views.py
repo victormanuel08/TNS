@@ -486,6 +486,52 @@ class APIKeyAwareViewSet:
 class ServidorViewSet(viewsets.ModelViewSet):
     queryset = Servidor.objects.all()
     serializer_class = ServidorSerializer
+    
+    @action(detail=True, methods=['post'], url_path='crear-backups-pendientes')
+    def crear_backups_pendientes(self, request, pk=None):
+        """
+        Identifica y crea backups pendientes para todas las empresas del servidor.
+        Reglas:
+        - Años anteriores: si el backup tiene más de 1 mes, crear/reemplazar. Si tiene menos de 1 mes, dejarlo.
+        - Año 2025: que tengan un mínimo del día anterior
+        - Prioridad: empezar con los que no tienen ningún backup
+        
+        Returns:
+            task_id: ID de la tarea Celery para seguir el progreso
+        """
+        from .models import ConfiguracionS3
+        from .tasks import procesar_backups_pendientes_task
+        
+        try:
+            servidor = self.get_object()
+            
+            # Verificar que hay configuración S3 activa
+            config_s3 = ConfiguracionS3.objects.filter(activo=True).first()
+            if not config_s3:
+                return Response(
+                    {'error': 'No hay configuración S3 activa. Configura S3 antes de crear backups.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Iniciar tarea Celery para procesar backups pendientes
+            task = procesar_backups_pendientes_task.delay(servidor.id, config_s3.id)
+            
+            logger.info(f"📦 Iniciando procesamiento de backups pendientes para servidor {servidor.id} (task: {task.id})")
+            
+            return Response({
+                'status': 'started',
+                'task_id': task.id,
+                'servidor_id': servidor.id,
+                'servidor_nombre': servidor.nombre,
+                'mensaje': 'Procesamiento de backups pendientes iniciado. Consulta el progreso con el task_id.'
+            }, status=status.HTTP_202_ACCEPTED)
+            
+        except Exception as e:
+            logger.error(f"Error iniciando backups pendientes: {e}", exc_info=True)
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 class EmpresaServidorViewSet(viewsets.ModelViewSet):
     queryset = EmpresaServidor.objects.all()
@@ -11377,6 +11423,36 @@ def pasarela_response_view(request):
 
 @api_view(['GET'])
 @permission_classes([AllowAny])  # Permitir API Key o JWT
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def celery_cancel_task_view(request, task_id):
+    """
+    Cancela una tarea Celery en ejecución.
+    
+    POST /api/celery/cancel-task/{task_id}/
+    """
+    from celery import current_app
+    
+    try:
+        # Revocar la tarea
+        current_app.control.revoke(task_id, terminate=True)
+        
+        logger.info(f"✅ Tarea Celery {task_id} cancelada")
+        
+        return Response({
+            'status': 'success',
+            'mensaje': 'Tarea cancelada exitosamente'
+        })
+    except Exception as e:
+        logger.error(f"Error cancelando tarea {task_id}: {e}", exc_info=True)
+        return Response(
+            {'error': f'Error al cancelar tarea: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def celery_task_status_view(request, task_id):
     """
     Consulta el estado de una tarea Celery por su ID.

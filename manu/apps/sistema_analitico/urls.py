@@ -49,5 +49,6 @@ urlpatterns = [
     path('api/procesar-pago-ecommerce/', views.procesar_pago_ecommerce_view, name='procesar-pago-ecommerce'),
     path('api/pasarela-response/', views.pasarela_response_view, name='pasarela-response'),
     path('api/celery/task-status/<str:task_id>/', views.celery_task_status_view, name='celery-task-status'),
+    path('api/celery/cancel-task/<str:task_id>/', views.celery_cancel_task_view, name='celery-cancel-task'),
     path('api/backups/descargar/<str:token>/', views.descargar_backup_por_token, name='descargar-backup-token'),
 ]
