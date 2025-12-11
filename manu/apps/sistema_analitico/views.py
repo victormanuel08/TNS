@@ -12139,11 +12139,15 @@ class BackupS3ViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
         from django.db.models import Max, Q
         
         try:
-            # Obtener todas las empresas con backups habilitados
-            empresas = EmpresaServidor.objects.filter(backups_habilitados=True)
+            logger.info("📊 Iniciando generación de informe de backups...")
+            
+            # Obtener todas las empresas con backups habilitados (con select_related para optimizar)
+            empresas = EmpresaServidor.objects.filter(backups_habilitados=True).select_related('servidor')
             total_empresas = empresas.count()
+            logger.info(f"📊 Total empresas con backups habilitados: {total_empresas}")
             
             # Obtener el último backup de cada empresa (agrupado por empresa)
+            logger.info("📊 Consultando últimos backups exitosos...")
             empresas_con_backup = BackupS3.objects.filter(
                 empresa_servidor__backups_habilitados=True,
                 estado='completado'
@@ -12156,33 +12160,45 @@ class BackupS3ViewSet(APIKeyAwareViewSet, viewsets.ModelViewSet):
                 item['empresa_servidor_id']: item['ultimo_backup']
                 for item in empresas_con_backup
             }
+            logger.info(f"📊 Empresas con backup exitoso: {len(empresas_backup_dict)}")
             
             # Obtener empresas con backups fallidos (último backup con estado 'fallido')
+            # Optimizar: obtener todos los últimos backups fallidos de una vez
+            logger.info("📊 Consultando backups fallidos...")
             empresas_fallidas_ids = set()
+            backups_fallidos_dict = {}
             
-            # Para cada empresa, verificar si su último backup es fallido
-            for empresa in empresas:
-                ultimo_backup = BackupS3.objects.filter(
-                    empresa_servidor_id=empresa.id
-                ).order_by('-fecha_backup').first()
+            # Obtener todos los backups fallidos de empresas con backups habilitados
+            empresa_ids = list(empresas.values_list('id', flat=True))
+            if empresa_ids:
+                # Obtener el último backup fallido de cada empresa
+                backups_fallidos = BackupS3.objects.filter(
+                    empresa_servidor_id__in=empresa_ids,
+                    estado='fallido'
+                ).order_by('empresa_servidor_id', '-fecha_backup').distinct('empresa_servidor_id')
                 
-                if ultimo_backup and ultimo_backup.estado == 'fallido':
-                    empresas_fallidas_ids.add(empresa.id)
+                for backup in backups_fallidos:
+                    empresas_fallidas_ids.add(backup.empresa_servidor_id)
+                    if backup.empresa_servidor_id not in backups_fallidos_dict:
+                        backups_fallidos_dict[backup.empresa_servidor_id] = backup
+            
+            logger.info(f"📊 Empresas con backups fallidos: {len(empresas_fallidas_ids)}")
             
             # Clasificar empresas
+            logger.info("📊 Clasificando empresas...")
             empresas_con_backup_list = []
             empresas_sin_backup_list = []
             empresas_fallidas_list = []
             
-            for empresa in empresas.select_related('servidor'):
+            # Convertir a lista para evitar múltiples consultas
+            empresas_list = list(empresas.select_related('servidor'))
+            
+            for empresa in empresas_list:
                 ultimo_backup_fecha = empresas_backup_dict.get(empresa.id)
                 
                 if empresa.id in empresas_fallidas_ids:
                     # Empresa con backup fallido
-                    ultimo_backup_obj = BackupS3.objects.filter(
-                        empresa_servidor_id=empresa.id,
-                        estado='fallido'
-                    ).order_by('-fecha_backup').first()
+                    ultimo_backup_obj = backups_fallidos_dict.get(empresa.id)
                     
                     empresas_fallidas_list.append({
                         'id': empresa.id,
