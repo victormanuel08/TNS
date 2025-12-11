@@ -521,7 +521,7 @@ def procesar_codigos_ciiu_masivo_task(self, codigos_ciiu: list):
         }
 
 
-@shared_task(bind=True, name='sistema_analitico.realizar_backup_empresa')
+@shared_task(bind=True, name='sistema_analitico.realizar_backup_empresa', rate_limit='4/m')  # Máximo 4 backups simultáneos por minuto
 def realizar_backup_empresa_task(self, empresa_id: int, configuracion_s3_id: int):
     """
     Tarea Celery para realizar backup de una empresa específica a S3.
