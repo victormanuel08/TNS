@@ -9272,16 +9272,62 @@ const checkBackupPendientesProgress = async () => {
   try {
     const response = await api.get<any>(`/api/celery/task-status/${backupPendientesTaskId.value}/`)
     
-    if (response.status === 'SUCCESS' || response.status === 'ERROR' || response.status === 'CANCELLED') {
-      // Tarea completada
-      backupPendientesProgress.value = response
+    // El endpoint devuelve: { state, ready, result: { status, lanzadas, ... }, meta: { ... } }
+    if (response.ready && response.state === 'SUCCESS') {
+      // Tarea completada - usar result
+      backupPendientesProgress.value = {
+        status: response.result?.status || response.state,
+        mensaje: response.result?.mensaje || 'Tarea completada',
+        total_empresas: response.result?.total_empresas || 0,
+        procesadas: response.result?.procesadas || 0,
+        lanzadas: response.result?.lanzadas || 0,
+        fallidas: response.result?.fallidas || 0,
+        tareas_backup_ids: response.result?.tareas_backup_ids || [],
+        nota: response.result?.nota,
+        meta: {
+          total_empresas: response.result?.total_empresas || 0,
+          procesadas: response.result?.procesadas || 0,
+          lanzadas: response.result?.lanzadas || 0,
+          fallidas: response.result?.fallidas || 0,
+          tareas_backup_ids: response.result?.tareas_backup_ids || [],
+          progreso: 100
+        }
+      }
+      if (backupPendientesInterval.value) {
+        clearInterval(backupPendientesInterval.value)
+        backupPendientesInterval.value = null
+      }
+    } else if (response.ready && (response.state === 'FAILURE' || response.failed)) {
+      // Tarea fallida
+      backupPendientesProgress.value = {
+        status: 'ERROR',
+        mensaje: response.error || response.result?.error || 'Error en la tarea',
+        meta: response.meta || {}
+      }
       if (backupPendientesInterval.value) {
         clearInterval(backupPendientesInterval.value)
         backupPendientesInterval.value = null
       }
     } else {
-      // Tarea en progreso
-      backupPendientesProgress.value = response
+      // Tarea en progreso - usar meta
+      backupPendientesProgress.value = {
+        status: response.state === 'PROCESSING' ? 'PROCESSING' : response.state,
+        mensaje: response.meta?.mensaje || 'Procesando...',
+        total_empresas: response.meta?.total_empresas || 0,
+        procesadas: response.meta?.procesadas || 0,
+        lanzadas: response.meta?.lanzadas || 0,
+        fallidas: response.meta?.fallidas || 0,
+        tareas_backup_ids: response.meta?.tareas_backup_ids || [],
+        meta: {
+          ...response.meta,
+          progreso: response.meta?.progreso || 0,
+          empresa_actual: response.meta?.empresa_actual,
+          empresa_actual_id: response.meta?.empresa_actual_id,
+          razon: response.meta?.razon,
+          servidor_id: response.meta?.servidor_id,
+          servidor_nombre: response.meta?.servidor_nombre
+        }
+      }
     }
   } catch (error: any) {
     console.error('Error consultando progreso de backups pendientes:', error)
