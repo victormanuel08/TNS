@@ -1781,8 +1781,9 @@ def procesar_backups_pendientes_task(self, servidor_id: int, configuracion_s3_id
         )
         
         empresas_procesadas = 0
-        empresas_exitosas = 0
+        empresas_lanzadas = 0
         empresas_fallidas = 0
+        tareas_backup_ids = []  # Guardar IDs de tareas lanzadas para monitoreo
         
         # Procesar empresas según prioridad
         for idx, empresa_info in enumerate(empresas_pendientes):
@@ -1798,8 +1799,9 @@ def procesar_backups_pendientes_task(self, servidor_id: int, configuracion_s3_id
                         'mensaje': 'Procesamiento cancelado por el usuario',
                         'total_empresas': total_empresas,
                         'procesadas': empresas_procesadas,
-                        'exitosas': empresas_exitosas,
+                        'lanzadas': empresas_lanzadas,
                         'fallidas': empresas_fallidas,
+                        'tareas_backup_ids': tareas_backup_ids,
                     }
             except Exception:
                 # Si hay error verificando, continuar
@@ -1817,38 +1819,48 @@ def procesar_backups_pendientes_task(self, servidor_id: int, configuracion_s3_id
                     'servidor_nombre': servidor.nombre,
                     'total_empresas': total_empresas,
                     'procesadas': empresas_procesadas,
-                    'exitosas': empresas_exitosas,
+                    'lanzadas': empresas_lanzadas,
                     'fallidas': empresas_fallidas,
                     'empresa_actual': empresa_nombre,
                     'empresa_actual_id': empresa_id,
                     'razon': empresa_info['razon'],
                     'progreso': progreso,
-                    'cancelado': False
+                    'cancelado': False,
+                    'tareas_backup_ids': tareas_backup_ids,  # IDs de tareas lanzadas
+                    'mensaje': f'Lanzando backups: {empresas_lanzadas}/{total_empresas} tareas iniciadas'
                 }
             )
             
-            logger.info(f"📦 [{idx + 1}/{total_empresas}] Procesando backup para {empresa_nombre} (ID: {empresa_id}) - {empresa_info['razon']}")
+            logger.info(f"📦 [{idx + 1}/{total_empresas}] Lanzando backup para {empresa_nombre} (ID: {empresa_id}) - {empresa_info['razon']}")
             
             # Lanzar tarea de backup para esta empresa
             try:
-                realizar_backup_empresa_task.delay(empresa_id, configuracion_s3_id)
+                backup_task = realizar_backup_empresa_task.delay(empresa_id, configuracion_s3_id)
+                tareas_backup_ids.append({
+                    'task_id': backup_task.id,
+                    'empresa_id': empresa_id,
+                    'empresa_nombre': empresa_nombre
+                })
                 empresas_procesadas += 1
-                empresas_exitosas += 1  # Asumimos éxito al iniciar, se actualizará después
-                logger.info(f"✅ Backup iniciado para {empresa_nombre}")
+                empresas_lanzadas += 1
+                logger.info(f"✅ Backup iniciado para {empresa_nombre} (Task ID: {backup_task.id})")
             except Exception as e:
                 empresas_procesadas += 1
                 empresas_fallidas += 1
                 logger.error(f"❌ Error iniciando backup para {empresa_nombre}: {e}")
         
-        logger.info(f"✅ Procesamiento completado: {empresas_procesadas} empresas procesadas ({empresas_exitosas} exitosas, {empresas_fallidas} fallidas)")
+        logger.info(f"✅ Procesamiento completado: {empresas_lanzadas} tareas de backup lanzadas ({empresas_fallidas} fallos al lanzar)")
+        logger.info(f"📋 IDs de tareas lanzadas: {[t['task_id'] for t in tareas_backup_ids]}")
         
         return {
             'status': 'SUCCESS',
-            'mensaje': f'Procesamiento completado: {empresas_procesadas} empresas procesadas',
+            'mensaje': f'Se lanzaron {empresas_lanzadas} tareas de backup. Los backups se están ejecutando en segundo plano.',
             'total_empresas': total_empresas,
             'procesadas': empresas_procesadas,
-            'exitosas': empresas_exitosas,
+            'lanzadas': empresas_lanzadas,
             'fallidas': empresas_fallidas,
+            'tareas_backup_ids': tareas_backup_ids,  # IDs para monitoreo
+            'nota': 'Los contadores "lanzadas" indican tareas iniciadas. Verifica el estado real de cada backup consultando las tareas activas de Celery.'
         }
         
     except Servidor.DoesNotExist:

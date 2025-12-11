@@ -1608,8 +1608,8 @@
                   <div class="info-value" style="font-size: 1.5rem; font-weight: 600; color: #1f2937;">{{ backupPendientesProgress.meta?.procesadas || backupPendientesProgress.procesadas || 0 }}</div>
                 </div>
                 <div class="info-card" style="padding: 16px; background: #f9fafb; border-radius: 8px;">
-                  <div class="info-label" style="font-size: 0.875rem; color: #6b7280; margin-bottom: 4px;">Exitosas</div>
-                  <div class="info-value" style="font-size: 1.5rem; font-weight: 600; color: #10b981;">{{ backupPendientesProgress.meta?.exitosas || backupPendientesProgress.exitosas || 0 }}</div>
+                  <div class="info-label" style="font-size: 0.875rem; color: #6b7280; margin-bottom: 4px;">Tareas Lanzadas</div>
+                  <div class="info-value" style="font-size: 1.5rem; font-weight: 600; color: #10b981;">{{ backupPendientesProgress.meta?.lanzadas || backupPendientesProgress.lanzadas || 0 }}</div>
                 </div>
                 <div class="info-card" style="padding: 16px; background: #f9fafb; border-radius: 8px;">
                   <div class="info-label" style="font-size: 0.875rem; color: #6b7280; margin-bottom: 4px;">Fallidas</div>
@@ -1629,6 +1629,20 @@
               <!-- Mensaje final -->
               <div v-if="backupPendientesProgress.mensaje" style="padding: 16px; background: #f0f9ff; border-radius: 8px; border-left: 4px solid #3b82f6;">
                 {{ backupPendientesProgress.mensaje }}
+              </div>
+
+              <!-- IDs de tareas lanzadas (para monitoreo) -->
+              <div v-if="backupPendientesProgress.meta?.tareas_backup_ids && backupPendientesProgress.meta.tareas_backup_ids.length > 0" style="margin-top: 24px; padding: 16px; background: #f9fafb; border-radius: 8px; border-left: 4px solid #10b981;">
+                <div style="font-weight: 600; margin-bottom: 8px;">📋 Tareas de Backup Lanzadas ({{ backupPendientesProgress.meta.tareas_backup_ids.length }})</div>
+                <div style="font-size: 0.875rem; color: #6b7280; margin-bottom: 12px;">
+                  Estas tareas se están ejecutando en segundo plano. Puedes monitorearlas consultando las tareas activas de Celery.
+                </div>
+                <div style="max-height: 200px; overflow-y: auto;">
+                  <div v-for="(tarea, idx) in backupPendientesProgress.meta.tareas_backup_ids" :key="tarea.task_id" style="padding: 8px; margin-bottom: 4px; background: white; border-radius: 4px; font-size: 0.875rem;">
+                    <div><strong>Empresa:</strong> {{ tarea.empresa_nombre }}</div>
+                    <div style="font-family: monospace; color: #667eea;"><strong>Task ID:</strong> {{ tarea.task_id }}</div>
+                  </div>
+                </div>
               </div>
 
               <!-- Botones de acción -->
