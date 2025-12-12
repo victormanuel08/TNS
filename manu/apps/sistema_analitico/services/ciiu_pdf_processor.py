@@ -143,6 +143,64 @@ class CIIUPDFProcessor:
         logger.info(f"Extraídos {len(codigos_encontrados)} códigos CIUU del PDF")
         return codigos_encontrados
     
+    def _intentar_reparar_json_truncado(self, contenido: str) -> str:
+        """
+        Intenta reparar un JSON truncado cerrando objetos/arrays abiertos.
+        """
+        contenido = contenido.strip()
+        
+        # Si termina abruptamente en medio de una cadena, intentar cerrarla
+        if contenido.count('"') % 2 != 0:
+            # Hay comillas sin cerrar, buscar la última comilla abierta
+            ultima_comilla = contenido.rfind('"')
+            if ultima_comilla > 0:
+                # Verificar si está dentro de una cadena (no escapada)
+                antes_comilla = contenido[:ultima_comilla]
+                if antes_comilla.count('\\"') % 2 == 0:  # Número par de comillas escapadas antes
+                    contenido = contenido + '"'
+        
+        # Cerrar objetos/arrays abiertos
+        abrir_obj = contenido.count('{')
+        cerrar_obj = contenido.count('}')
+        abrir_arr = contenido.count('[')
+        cerrar_arr = contenido.count(']')
+        
+        # Agregar cierres faltantes
+        contenido += '}' * (abrir_obj - cerrar_obj)
+        contenido += ']' * (abrir_arr - cerrar_arr)
+        
+        return contenido
+    
+    def _guardar_respuesta_cruda(self, contenido: str, error: Exception, intento: int):
+        """
+        Guarda la respuesta cruda en un archivo para debugging.
+        """
+        import os
+        from django.conf import settings
+        
+        try:
+            logs_dir = os.path.join(settings.BASE_DIR, 'logs')
+            os.makedirs(logs_dir, exist_ok=True)
+            
+            timestamp = timezone.now().strftime('%Y%m%d_%H%M%S')
+            filename = os.path.join(logs_dir, f'deepseek_error_response_{timestamp}_intento{intento}.txt')
+            
+            with open(filename, 'w', encoding='utf-8') as f:
+                f.write(f"Error: {error}\n")
+                if hasattr(error, 'lineno'):
+                    f.write(f"Posición: línea {error.lineno}, columna {error.colno}\n")
+                if hasattr(error, 'pos'):
+                    f.write(f"Posición (char): {error.pos}\n")
+                f.write(f"Longitud: {len(contenido)} caracteres\n")
+                f.write("\n" + "="*80 + "\n")
+                f.write("RESPUESTA CRUDA:\n")
+                f.write("="*80 + "\n")
+                f.write(contenido)
+            
+            logger.warning(f"   💾 Respuesta cruda guardada en: {filename}")
+        except Exception as e:
+            logger.error(f"   ❌ Error guardando respuesta cruda: {e}")
+    
     def procesar_lote_con_deepseek(self, codigos_lote: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Procesa un lote de códigos CIUU con DeepSeek.
@@ -283,7 +341,7 @@ Responde SOLO con JSON válido (array de objetos, uno por código)."""
                     {"role": "user", "content": user_prompt}
                 ],
                 "temperature": 0.1,  # Baja temperatura para respuestas más consistentes
-                "max_tokens": 6000  # Aumentado para soportar más códigos y texto completo
+                "max_tokens": 12000  # Aumentado para evitar truncamiento de JSON
             }
             
             try:
@@ -348,6 +406,7 @@ Responde SOLO con JSON válido (array de objetos, uno por código)."""
                 logger.info(f"💰 Costo: ${costo_info['costo_usd']:.6f} USD (${costo_info['costo_cop']:,.2f} COP)")
                 
                 # Limpiar respuesta (puede tener markdown code blocks)
+                contenido_original = contenido
                 contenido = contenido.strip()
                 if contenido.startswith('```json'):
                     contenido = contenido[7:]
@@ -357,8 +416,38 @@ Responde SOLO con JSON válido (array de objetos, uno por código)."""
                     contenido = contenido[:-3]
                 contenido = contenido.strip()
                 
-                # Parsear JSON
-                datos_estructurados = json.loads(contenido)
+                # Intentar parsear JSON con manejo mejorado de errores
+                try:
+                    datos_estructurados = json.loads(contenido)
+                except json.JSONDecodeError as json_err:
+                    # Log detallado del error
+                    logger.error(f"❌ Error parseando JSON (intento {intento + 1}/{max_retries}): {json_err}")
+                    logger.error(f"   Posición del error: línea {json_err.lineno}, columna {json_err.colno}")
+                    logger.error(f"   Longitud del contenido: {len(contenido)} caracteres")
+                    
+                    # Mostrar contexto alrededor del error
+                    if json_err.pos:
+                        inicio = max(0, json_err.pos - 100)
+                        fin = min(len(contenido), json_err.pos + 100)
+                        contexto = contenido[inicio:fin]
+                        logger.error(f"   Contexto del error (pos {json_err.pos}): ...{contexto}...")
+                    
+                    # Intentar reparar JSON truncado (si termina abruptamente)
+                    contenido_reparado = self._intentar_reparar_json_truncado(contenido)
+                    if contenido_reparado != contenido:
+                        logger.warning("   🔧 Intentando reparar JSON truncado...")
+                        try:
+                            datos_estructurados = json.loads(contenido_reparado)
+                            logger.info("   ✅ JSON reparado exitosamente")
+                        except json.JSONDecodeError as err2:
+                            logger.error(f"   ❌ No se pudo reparar: {err2}")
+                            # Guardar respuesta cruda para debugging
+                            self._guardar_respuesta_cruda(contenido_original, json_err, intento)
+                            raise json_err  # Re-lanzar el error original
+                    else:
+                        # Guardar respuesta cruda para debugging
+                        self._guardar_respuesta_cruda(contenido_original, json_err, intento)
+                        raise json_err
                 
                 # Si es un solo objeto, convertirlo a lista
                 if isinstance(datos_estructurados, dict):
