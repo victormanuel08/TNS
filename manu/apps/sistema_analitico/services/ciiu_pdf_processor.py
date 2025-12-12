@@ -205,26 +205,12 @@ class CIIUPDFProcessor:
         """
         Calcula el tamaño aproximado del prompt que se enviará a DeepSeek.
         Retorna el tamaño en caracteres.
+        IMPORTANTE: NO trunca el contenido - usa el texto completo de cada código.
         """
         prompt_codigos = ""
         for codigo_info in codigos_lote:
+            # USAR TEXTO COMPLETO - NO TRUNCAR
             texto_completo = codigo_info.get('texto_completo', '')
-            # Aplicar el mismo truncamiento que se usa en procesar_lote_con_deepseek
-            if len(texto_completo) > 5000:
-                idx_excluye = texto_completo.find('Esta clase excluye:')
-                if idx_excluye > 0:
-                    siguiente_codigo = re.search(r'\n(\d{4})\s+', texto_completo[idx_excluye + 100:])
-                    if siguiente_codigo:
-                        fin_excluye = idx_excluye + 100 + siguiente_codigo.start()
-                        texto_completo = texto_completo[:fin_excluye]
-                    else:
-                        texto_completo = texto_completo[:idx_excluye + 2000]
-                else:
-                    idx_incluye = texto_completo.find('Esta clase incluye:')
-                    if idx_incluye > 0:
-                        texto_completo = texto_completo[:idx_incluye + 4000]
-                    else:
-                        texto_completo = texto_completo[:5000]
             
             prompt_codigos += f"""
 CÓDIGO CIUU: {codigo_info['codigo']}
@@ -244,9 +230,38 @@ Responde SOLO con JSON válido (array de objetos, uno por código)."""
         # Tamaño total aproximado (system + user)
         return len(system_prompt) + len(user_prompt)
     
+    def _generar_combinaciones(self, n: int) -> List[List[int]]:
+        """
+        Genera todas las combinaciones posibles para dividir n códigos en grupos.
+        Ejemplo para n=5: [[1,1,1,1,1], [2,2,1], [2,1,2], [3,2], [3,1,1], [4,1], [5]]
+        """
+        if n <= 0:
+            return [[]]
+        if n == 1:
+            return [[1]]
+        
+        combinaciones = []
+        
+        # Generar todas las particiones posibles
+        def generar_particiones(restante: int, actual: List[int], max_grupo: int):
+            if restante == 0:
+                combinaciones.append(actual[:])
+                return
+            
+            for i in range(1, min(restante, max_grupo) + 1):
+                generar_particiones(restante - i, actual + [i], i)
+        
+        # Limitar el tamaño máximo de grupo para evitar demasiadas combinaciones
+        max_grupo = min(n, 5)  # Máximo 5 códigos por grupo
+        generar_particiones(n, [], max_grupo)
+        
+        return combinaciones
+    
     def _dividir_lote_inteligente(self, codigos_lote: List[Dict[str, Any]], system_prompt: str, limite_caracteres: int = 80000) -> List[List[Dict[str, Any]]]:
         """
         Divide un lote de códigos en sub-lotes más pequeños si el tamaño total excede el límite.
+        Prueba diferentes combinaciones (1-1-1-1-1, 2-2-1, 2-1-2, etc.) y elige la mejor.
+        IMPORTANTE: NO trunca el contenido - cada código va completo.
         Retorna lista de sub-lotes.
         """
         if not codigos_lote:
@@ -259,43 +274,51 @@ Responde SOLO con JSON válido (array de objetos, uno por código)."""
             # Cabe todo, retornar como está
             return [codigos_lote]
         
-        # No cabe, dividir en sub-lotes
-        logger.warning(f"⚠️  El lote de {len(codigos_lote)} códigos es muy grande ({tamanio_actual:,} caracteres). Dividiendo...")
+        # No cabe, necesitamos dividir
+        n = len(codigos_lote)
+        logger.warning(f"⚠️  El lote de {n} códigos es muy grande ({tamanio_actual:,} caracteres). Buscando mejor combinación...")
         
-        sub_lotes = []
-        lote_actual = []
-        tamanio_lote_actual = len(system_prompt)  # Empezar con el system prompt
+        # Generar todas las combinaciones posibles
+        combinaciones = self._generar_combinaciones(n)
+        logger.info(f"   🔍 Probando {len(combinaciones)} combinaciones posibles...")
         
-        for codigo_info in codigos_lote:
-            # Calcular tamaño aproximado de este código
-            texto_completo = codigo_info.get('texto_completo', '')
-            if len(texto_completo) > 5000:
-                texto_completo = texto_completo[:5000]  # Aproximación
+        mejor_combinacion = None
+        mejor_score = float('inf')  # Menor número de sub-lotes que quepa en el límite
+        
+        for combinacion in combinaciones:
+            # Construir los sub-lotes según esta combinación
+            sub_lotes = []
+            idx = 0
+            todos_caben = True
+            total_sub_lotes = 0
             
-            tamanio_codigo = len(f"""
-CÓDIGO CIUU: {codigo_info['codigo']}
-DESCRIPCIÓN: {codigo_info['descripcion']}
-TEXTO COMPLETO (incluye secciones "Esta clase incluye:" y "Esta clase excluye:"):
-{texto_completo}
-
----
-""")
+            for tam_grupo in combinacion:
+                sub_lote = codigos_lote[idx:idx + tam_grupo]
+                tamanio_sub_lote = self._calcular_tamanio_prompt(sub_lote, system_prompt)
+                
+                if tamanio_sub_lote > limite_caracteres:
+                    # Este sub-lote no cabe, descartar esta combinación
+                    todos_caben = False
+                    break
+                
+                sub_lotes.append(sub_lote)
+                total_sub_lotes += 1
+                idx += tam_grupo
             
-            # Si agregar este código excedería el límite, guardar el lote actual y empezar uno nuevo
-            if lote_actual and (tamanio_lote_actual + tamanio_codigo) > limite_caracteres:
-                sub_lotes.append(lote_actual)
-                lote_actual = [codigo_info]
-                tamanio_lote_actual = len(system_prompt) + tamanio_codigo
-            else:
-                lote_actual.append(codigo_info)
-                tamanio_lote_actual += tamanio_codigo
+            # Si todos los sub-lotes caben, esta es una combinación válida
+            if todos_caben:
+                # Preferir combinaciones con menos sub-lotes (menos llamadas a la API)
+                if total_sub_lotes < mejor_score:
+                    mejor_score = total_sub_lotes
+                    mejor_combinacion = sub_lotes
         
-        # Agregar el último lote si tiene elementos
-        if lote_actual:
-            sub_lotes.append(lote_actual)
-        
-        logger.info(f"   📦 Lote dividido en {len(sub_lotes)} sub-lotes: {[len(sl) for sl in sub_lotes]}")
-        return sub_lotes
+        if mejor_combinacion:
+            logger.info(f"   ✅ Mejor combinación encontrada: {[len(sl) for sl in mejor_combinacion]} ({len(mejor_combinacion)} sub-lotes)")
+            return mejor_combinacion
+        else:
+            # Si ninguna combinación funciona, dividir en grupos de 1 (cada código por separado)
+            logger.warning(f"   ⚠️  Ninguna combinación cabe. Dividiendo en grupos de 1 (cada código por separado)...")
+            return [[codigo] for codigo in codigos_lote]
     
     def procesar_lote_con_deepseek(self, codigos_lote: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -376,35 +399,11 @@ Si hay múltiples códigos, retorna un array de objetos JSON."""
         Retorna lista de diccionarios con información estructurada.
         """
         # Construir prompt con todos los códigos del lote
+        # IMPORTANTE: NO truncar - usar el texto completo de cada código
         prompt_codigos = ""
         for codigo_info in codigos_lote:
-            # Asegurar que enviamos TODO el texto completo, incluyendo "Esta clase incluye:" y "Esta clase excluye:"
+            # USAR TEXTO COMPLETO - NO TRUNCAR NADA
             texto_completo = codigo_info['texto_completo']
-            
-            # Truncamiento inteligente: NO cortar en medio de secciones importantes
-            # Límite más generoso: 5000 chars por código (vs 3000 anterior)
-            # Priorizar mantener las secciones "incluye" y "excluye" COMPLETAS
-            if len(texto_completo) > 5000:
-                # Buscar "Esta clase excluye:" para asegurar que esté completo
-                idx_excluye = texto_completo.find('Esta clase excluye:')
-                if idx_excluye > 0:
-                    # Buscar el final de la sección excluye (hasta el siguiente código de 4 dígitos o fin)
-                    siguiente_codigo = re.search(r'\n(\d{4})\s+', texto_completo[idx_excluye + 100:])
-                    if siguiente_codigo:
-                        # Cortar justo antes del siguiente código
-                        fin_excluye = idx_excluye + 100 + siguiente_codigo.start()
-                        texto_completo = texto_completo[:fin_excluye]
-                    else:
-                        # Si no hay siguiente código, tomar hasta 2000 chars después de "excluye:"
-                        texto_completo = texto_completo[:idx_excluye + 2000]
-                else:
-                    # Si no tiene "excluye:", buscar "incluye:" y tomar hasta 4000 chars después
-                    idx_incluye = texto_completo.find('Esta clase incluye:')
-                    if idx_incluye > 0:
-                        texto_completo = texto_completo[:idx_incluye + 4000]
-                    else:
-                        # Fallback: truncar a 5000 chars
-                        texto_completo = texto_completo[:5000]
             
             prompt_codigos += f"""
 CÓDIGO CIUU: {codigo_info['codigo']}
