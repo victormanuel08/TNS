@@ -2749,77 +2749,89 @@ class AIAnalyticsAPIKey(models.Model):
     """
     Modelo para gestionar múltiples API keys de servicios de IA/Analytics con tracking de uso y costos.
     Permite rotación automática de API keys para distribuir la carga y evitar rate limits.
+    
+    Campos requeridos: nombre, api_key
+    Todos los demás campos tienen valores por defecto (0 para números, fechas automáticas).
     """
+    # ========== CAMPOS REQUERIDOS ==========
     nombre = models.CharField(
         max_length=100,
         unique=True,
-        help_text='Nombre identificador de la API key (ej: "AIAnalytics-Prod-1")'
+        help_text='Nombre identificador de la API key (ej: "AIAnalytics-Prod-1") - REQUERIDO'
     )
     api_key = models.CharField(
         max_length=255,
-        help_text='API key del servicio de IA/Analytics (encriptada o en texto plano según configuración)'
+        help_text='API key del servicio de IA/Analytics (encriptada o en texto plano según configuración) - REQUERIDO'
     )
+    
+    # ========== CONFIGURACIÓN (con defaults) ==========
     activa = models.BooleanField(
         default=True,
-        help_text='Si está activa, se usará en la rotación'
+        help_text='Si está activa, se usará en la rotación (default: True)'
     )
-    fecha_creacion = models.DateTimeField(auto_now_add=True)
-    fecha_actualizacion = models.DateTimeField(auto_now=True)
     
-    # Tracking de uso
+    # ========== FECHAS (automáticas) ==========
+    fecha_creacion = models.DateTimeField(
+        auto_now_add=True,
+        help_text='Fecha y hora de creación (automática)'
+    )
+    fecha_actualizacion = models.DateTimeField(
+        auto_now=True,
+        help_text='Fecha y hora de última actualización (automática)'
+    )
+    ultima_vez_usada = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text='Última vez que se usó esta API key (opcional, default: None/null)'
+    )
+    
+    # ========== TRACKING DE USO (default: 0) ==========
     total_peticiones = models.IntegerField(
         default=0,
-        help_text='Total de peticiones realizadas con esta API key'
+        help_text='Total de peticiones realizadas con esta API key (default: 0)'
     )
     total_peticiones_exitosas = models.IntegerField(
         default=0,
-        help_text='Total de peticiones exitosas'
+        help_text='Total de peticiones exitosas (default: 0)'
     )
     total_peticiones_fallidas = models.IntegerField(
         default=0,
-        help_text='Total de peticiones fallidas'
+        help_text='Total de peticiones fallidas (default: 0)'
     )
     total_errores_rate_limit = models.IntegerField(
         default=0,
-        help_text='Total de errores 429 (rate limit)'
+        help_text='Total de errores 429 (rate limit) (default: 0)'
     )
     
-    # Tracking de costos (en USD)
+    # ========== TRACKING DE COSTOS (default: 0) ==========
     costo_total_usd = models.DecimalField(
         max_digits=12,
         decimal_places=6,
         default=0,
-        help_text='Costo total acumulado en USD'
+        help_text='Costo total acumulado en USD (default: 0)'
     )
     tokens_input_total = models.BigIntegerField(
         default=0,
-        help_text='Total de tokens de entrada consumidos'
+        help_text='Total de tokens de entrada consumidos (default: 0)'
     )
     tokens_output_total = models.BigIntegerField(
         default=0,
-        help_text='Total de tokens de salida generados'
+        help_text='Total de tokens de salida generados (default: 0)'
     )
     tokens_cache_hit_total = models.BigIntegerField(
         default=0,
-        help_text='Total de tokens con cache hit'
+        help_text='Total de tokens con cache hit (default: 0)'
     )
     tokens_cache_miss_total = models.BigIntegerField(
         default=0,
-        help_text='Total de tokens con cache miss'
+        help_text='Total de tokens con cache miss (default: 0)'
     )
     
-    # Última vez que se usó
-    ultima_vez_usada = models.DateTimeField(
-        null=True,
-        blank=True,
-        help_text='Última vez que se usó esta API key'
-    )
-    
-    # Notas
+    # ========== OPCIONALES ==========
     notas = models.TextField(
         blank=True,
         null=True,
-        help_text='Notas adicionales sobre esta API key'
+        help_text='Notas adicionales sobre esta API key (opcional, default: None/null)'
     )
     
     class Meta:

@@ -105,4 +105,4 @@ PS C:\Users\USUARIO\repos\TNSFULL\manu> .\env\Scripts\activate
 PS C:\Redis> .\redis-server.exe --port 6380
 PS C:\Users\USUARIO\repos\TNSFULL\front> npx nuxt dev --port 3001 --host
 
-ssh victus@198.7.113.19
+ssh victus@198.7.113.197
