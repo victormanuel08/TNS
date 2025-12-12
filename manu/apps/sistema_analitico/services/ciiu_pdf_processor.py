@@ -341,7 +341,7 @@ Responde SOLO con JSON válido (array de objetos, uno por código)."""
                     {"role": "user", "content": user_prompt}
                 ],
                 "temperature": 0.1,  # Baja temperatura para respuestas más consistentes
-                "max_tokens": 12000  # Aumentado para evitar truncamiento de JSON
+                "max_tokens": 8192  # Máximo permitido por DeepSeek (rango válido: [1, 8192])
             }
             
             try:
