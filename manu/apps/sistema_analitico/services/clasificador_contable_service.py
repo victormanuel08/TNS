@@ -268,6 +268,87 @@ PROMPTS = {
 }
 
 
+def precargar_ciuu_en_cache():
+    """
+    Precarga todos los códigos CIUU de la base de datos en cache.
+    Útil después de reiniciar el servidor o cuando el cache está vacío.
+    Esto agiliza las clasificaciones al tener todos los CIUU en memoria.
+    """
+    try:
+        from django.core.cache import cache
+        from ..models import ActividadEconomica
+        
+        logger.info("🔄 Precargando todos los códigos CIUU en cache...")
+        
+        # Obtener todos los códigos CIUU de la BD que estén completos
+        actividades = ActividadEconomica.objects.all()
+        
+        contador = 0
+        contador_incompletos = 0
+        
+        for actividad in actividades:
+            # Validar si el registro está COMPLETO (misma lógica que en obtener_contexto_ciuu_inteligente)
+            descripcion = actividad.descripcion or actividad.titulo or ""
+            es_descripcion_generica = (
+                not descripcion or 
+                descripcion.strip().lower() in [f"actividad {actividad.codigo}", f"ciuu {actividad.codigo}", f"actividad {actividad.codigo.lower()}", ""] or
+                descripcion.strip() == f"Actividad {actividad.codigo}"
+            )
+            
+            incluye_list = actividad.incluye if actividad.incluye else []
+            excluye_list = actividad.excluye if actividad.excluye else []
+            tiene_incluye_o_excluye = len(incluye_list) > 0 or len(excluye_list) > 0
+            
+            # Solo precargar si está completo
+            registro_incompleto = es_descripcion_generica and not tiene_incluye_o_excluye
+            
+            if registro_incompleto:
+                contador_incompletos += 1
+                continue
+            
+            # Formatear incluye/excluye
+            def formatear_actividades(lista):
+                if not lista:
+                    return ""
+                textos = []
+                for item in lista:
+                    if isinstance(item, dict):
+                        desc = item.get('actDescripcion', item.get('descripcion', str(item)))
+                        textos.append(desc)
+                    else:
+                        textos.append(str(item))
+                return "\n• ".join(textos) if textos else ""
+            
+            incluye_texto = formatear_actividades(incluye_list)
+            excluye_texto = formatear_actividades(excluye_list)
+            
+            if not descripcion:
+                descripcion = f"CIUU {actividad.codigo}"
+            
+            resultado = {
+                "codigo": actividad.codigo,
+                "descripcion": descripcion,
+                "incluye": incluye_texto,
+                "excluye": excluye_texto,
+                "incluye_raw": incluye_list,
+                "excluye_raw": excluye_list,
+                "contexto_completo": f"{descripcion}. INCLUYE: {incluye_texto}. EXCLUYE: {excluye_texto}",
+                "fuente": "base_datos"
+            }
+            
+            # Guardar en cache con TTL de 7 días
+            cache_key = f"ciuu_{actividad.codigo}"
+            cache.set(cache_key, resultado, timeout=86400 * 7)
+            contador += 1
+        
+        logger.info(f"✅ Precargados {contador} códigos CIUU en cache (omitidos {contador_incompletos} incompletos)")
+        return contador
+        
+    except Exception as e:
+        logger.error(f"❌ Error precargando CIUU en cache: {e}")
+        return 0
+
+
 def obtener_contexto_ciuu_inteligente(ciuu_code: str) -> Dict[str, Any]:
     """
     Obtener información completa del CIUU con fallback inteligente.

@@ -13033,12 +13033,21 @@ class ClasificacionContableViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
             print(f"🔍 [CLASIFICACION] Headers: {dict(request.headers)}")
             
             from .serializers import ClasificarFacturaSerializer
-            from .services.clasificador_contable_service import ClasificadorContableService
+            from .services.clasificador_contable_service import ClasificadorContableService, precargar_ciuu_en_cache
             from .tasks import clasificar_factura_contable_task
             from celery import group
             import time
             
             print(f"🔍 [CLASIFICACION] Imports completados")
+            
+            # Precargar todos los CIUU en cache para agilizar la clasificación
+            logger.info("🔄 Precargando CIUU en cache antes de clasificar...")
+            try:
+                cantidad_precargados = precargar_ciuu_en_cache()
+                logger.info(f"✅ {cantidad_precargados} códigos CIUU precargados en cache")
+            except Exception as e:
+                logger.warning(f"⚠️ Error precargando CIUU en cache (continuando de todas formas): {e}")
+            
             serializer = ClasificarFacturaSerializer(data=request.data)
             if not serializer.is_valid():
                 print(f"❌ [CLASIFICACION] Errores de validación: {serializer.errors}")
@@ -13627,12 +13636,20 @@ class ClasificacionContableViewSet(APIKeyAwareViewSet, viewsets.ViewSet):
             Resultado de la nueva clasificación
         """
         from .models import ClasificacionContable
-        from .services.clasificador_contable_service import ClasificadorContableService
+        from .services.clasificador_contable_service import ClasificadorContableService, precargar_ciuu_en_cache
         from apps.dian_scraper.models import DocumentProcessed
         
         print(f"\n{'='*80}")
         print(f"🔄 [RECLASIFICAR_FACTURA] Iniciando reclasificación")
         print(f"{'='*80}")
+        
+        # Precargar todos los CIUU en cache para agilizar la reclasificación
+        logger.info("🔄 Precargando CIUU en cache antes de reclasificar...")
+        try:
+            cantidad_precargados = precargar_ciuu_en_cache()
+            logger.info(f"✅ {cantidad_precargados} códigos CIUU precargados en cache")
+        except Exception as e:
+            logger.warning(f"⚠️ Error precargando CIUU en cache (continuando de todas formas): {e}")
         
         clasificacion_id = request.data.get('clasificacion_id')
         factura_numero = request.data.get('factura_numero')
