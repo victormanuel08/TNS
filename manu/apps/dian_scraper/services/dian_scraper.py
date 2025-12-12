@@ -151,27 +151,50 @@ class DianScraperService:
             rows = await self.page.query_selector_all("table#tableDocuments tbody tr")
             print(f"🔍 {len(rows)} filas encontradas")
             
-            # Obtener botones de descarga de cada fila individualmente para asegurar correspondencia
-            download_buttons = []
-            for row in rows:
-                button = await row.query_selector("button")
-                if button:
-                    download_buttons.append(button)
+            # Guardar solo el número de filas, NO las referencias a los elementos
+            # porque el DOM puede cambiar después de cada descarga
+            num_rows = len(rows)
             
-            print(f"🔍 {len(download_buttons)} botones de descarga encontrados")
-            
-            # Verificar que hay la misma cantidad de filas y botones
-            if len(rows) != len(download_buttons):
-                print(f"⚠️ ADVERTENCIA: Número de filas ({len(rows)}) no coincide con botones ({len(download_buttons)})")
+            print(f"🔍 {num_rows} botones de descarga esperados")
 
             # Descargar SECUENCIALMENTE para evitar que Playwright asocie descargas incorrectas
             # Cuando se hacen clicks en paralelo, todos los expect_download pueden capturar la misma descarga
-            print(f"📥 Descargando {len(download_buttons)} archivos secuencialmente...")
+            print(f"📥 Descargando {num_rows} archivos secuencialmente...")
             
-            for index, button in enumerate(download_buttons):
+            for index in range(num_rows):
                 try:
+                    # Re-obtener las filas y el botón JUSTO ANTES de interactuar
+                    # Esto evita el error "Element is not attached to the DOM"
+                    rows_current = await self.page.query_selector_all("table#tableDocuments tbody tr")
+                    
+                    if index >= len(rows_current):
+                        print(f"⚠️ [{index+1}/{num_rows}] Fila {index} ya no existe en el DOM, saltando...")
+                        continue
+                    
+                    row = rows_current[index]
+                    button = await row.query_selector("button")
+                    
+                    if not button:
+                        print(f"⚠️ [{index+1}/{num_rows}] Botón no encontrado en fila {index}, saltando...")
+                        continue
+                    
                     # Esperar a que el botón sea visible y clickeable
-                    await button.wait_for_element_state("visible", timeout=5000)
+                    # Usar un timeout más corto y manejar el error si el elemento se desvincula
+                    try:
+                        await button.wait_for_element_state("visible", timeout=3000)
+                    except Exception as wait_error:
+                        # Si el elemento se desvinculó, intentar re-obtenerlo una vez más
+                        print(f"⚠️ [{index+1}/{num_rows}] Elemento desvinculado, reintentando...")
+                        rows_current = await self.page.query_selector_all("table#tableDocuments tbody tr")
+                        if index >= len(rows_current):
+                            print(f"⚠️ [{index+1}/{num_rows}] Fila {index} ya no existe después del reintento, saltando...")
+                            continue
+                        row = rows_current[index]
+                        button = await row.query_selector("button")
+                        if not button:
+                            print(f"⚠️ [{index+1}/{num_rows}] Botón no encontrado después del reintento, saltando...")
+                            continue
+                        await button.wait_for_element_state("visible", timeout=3000)
                     
                     # Registrar el evento de descarga ANTES del click
                     async with self.page.expect_download(timeout=30_000) as download_info:
@@ -206,18 +229,21 @@ class DianScraperService:
                     # Verificar que el archivo se guardó correctamente
                     if file_path.exists():
                         file_size = file_path.stat().st_size
-                        print(f"⬇️ [{index+1}/{len(download_buttons)}] Archivo descargado: {original_filename} -> {unique_filename} ({file_size} bytes)")
+                        print(f"⬇️ [{index+1}/{num_rows}] Archivo descargado: {original_filename} -> {unique_filename} ({file_size} bytes)")
                         total_documents += 1
                     else:
-                        print(f"⚠️ [{index+1}/{len(download_buttons)}] ERROR: Archivo no se guardó: {unique_filename}")
+                        print(f"⚠️ [{index+1}/{num_rows}] ERROR: Archivo no se guardó: {unique_filename}")
                     
                     # Pequeña pausa entre descargas para asegurar que cada una se complete
-                    await asyncio.sleep(0.5)
+                    # y dar tiempo a que el DOM se estabilice
+                    await asyncio.sleep(1.0)
                     
                 except Exception as exc:
-                    print(f"⚠️ [{index+1}/{len(download_buttons)}] Error descargando archivo: {exc}")
+                    print(f"⚠️ [{index+1}/{num_rows}] Error descargando archivo: {exc}")
                     import traceback
                     traceback.print_exc()
+                    # Pequeña pausa antes de continuar con el siguiente archivo
+                    await asyncio.sleep(0.5)
                     continue
 
             next_button = await self.page.query_selector("#tableDocuments_next")
