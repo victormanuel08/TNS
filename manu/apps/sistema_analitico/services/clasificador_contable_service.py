@@ -96,11 +96,11 @@ PROMPTS = {
 - Empresa CIUU 5611 (Restaurantes) compra "Bombillo" → NO está en INCLUYE → 515015 (Reparaciones locativas) - GASTO
 - Empresa CIUU 4651 (Ferreterías) compra "Bombillo" → SÍ está en INCLUYE (herramientas) → 143501 (Inventario) - INVENTARIO
 - Empresa CIUU 4100 (Construcción) compra "Cemento" → SÍ está en INCLUYE (materiales construcción) → 141001 (Materias primas) - INVENTARIO
-- Empresa CIUU 4100 (Construcción) compra "Servicio contable" → NO está en INCLUYE → 530520 (Honorarios contadores) - GASTO
+- Empresa CIUU 4100 (Construcción) compra "Servicio contable" → NO está en INCLUYE → 521025 (Asesoría jurídica) o 521035 (Asesoría técnica) - GASTO
 
 ## FORMATO DE CUENTAS (OBLIGATORIO):
-- **6 dígitos (xxxxxx)**: SIEMPRE cuando PUC define subcuentas (ej: 510503, 515015, 530505, 143501, 220501)
-- **4 dígitos (xxxx)**: SOLO cuando NO hay subcuenta (ej: 5205, 5405, 5505)
+- **6 dígitos (xxxxxx)**: SIEMPRE cuando PUC define subcuentas (ej: 510503, 515015, 521005, 143501, 220501)
+- **4 dígitos (xxxx)**: SOLO cuando NO hay subcuenta (ej: 5220, 5230, 5235)
 - **Rangos**: Si PUC indica "xxxx01-xxxx98" → usar xxxxxx dentro del rango
 - **NUNCA inventar**: Usar SOLO cuentas que existen en el PUC
 
@@ -124,9 +124,11 @@ PROMPTS = {
 
 ### 3. ¿ES PARA CONSUMO INMEDIATO? (COSTO)
 **ANALIZA el CIUU de la empresa:**
-- Si el artículo está en el "INCLUYE" pero se CONSUME inmediatamente (no se almacena) → 6135 (Costo de ventas)
-- Si el artículo NO está en el "INCLUYE" del CIUU → Probablemente 6135 (Costo) o 51xx/54xx/55xx (Gasto)
-- **Cuenta**: 6135 (4 dígitos - sin subcuentas específicas)
+- Si el artículo está en el "INCLUYE" pero se CONSUME inmediatamente (no se almacena) → 61 (Costo de ventas y de prestación de servicios) o específicamente según actividad:
+  - **Comercio** → 6135 (Comercio al por mayor y al por menor)
+  - **Agricultura** → 6105 | **Pesca** → 6110 | **Minería** → 6115 | **Manufactura** → 6120
+- Si el artículo NO está en el "INCLUYE" del CIUU → Probablemente 61 (Costo) o 51xx/52xx/53xx (Gasto)
+- **Cuenta**: 61 (nivel 2) o subcuentas específicas según actividad económica
 
 ### 4. ¿ES MATERIAL/REPUESTO COMPRADO? (GASTO/INVENTARIO según contexto)
 **ANALIZA el CIUU de la empresa:**
@@ -144,13 +146,17 @@ PROMPTS = {
 **Si es SERVICIO según tipo:**
 - **Reparación locativa** → 515015 (Reparaciones locativas)
 - **Instalación eléctrica** → 515005 (Instalaciones eléctricas)
-- **Honorarios directores** → 530505 | **Auditores** → 530510 | **Abogados** → 530515 | **Contadores** → 530520 | **Otros** → 530525
-- **Servicios públicos** → 5205 (Energía, agua, gas, internet, telefonía)
-- **Arrendamientos** → 5420 (Oficinas, locales, vehículos)
-- **Seguros** → 5425 (Vida, salud, vehículos, inmuebles)
-- **Vigilancia/seguridad** → 5475
-- **Aseo/limpieza** → 5480
-- **Publicidad** → 5505
+- **Honorarios profesionales** → 5210 (Honorarios - cuenta principal) o específicamente:
+  - **Junta directiva** → 521005 | **Revisoría fiscal** → 521010 | **Auditoría externa** → 521015 | **Avalúos** → 521020
+  - **Asesoría jurídica** → 521025 (para abogados) | **Asesoría técnica** → 521035 | **Otros honorarios** → 521095
+- **Servicios públicos** → 5235 (Servicios - cuenta principal) o específicamente:
+  - **Acueducto y alcantarillado** → 523525 | **Energía eléctrica** → 523530 | **Teléfono** → 523535 | **Correo, portes y telegramas** → 523540
+- **Arrendamientos** → 5220 (Arrendamientos - cuenta principal) o específicamente:
+  - **Arrendamientos de bienes inmuebles** → 415505 o 615505 según contexto
+- **Seguros** → 5230 (Seguros - cuenta principal)
+- **Vigilancia/seguridad** → 513505 o 523505 (Aseo y vigilancia)
+- **Aseo/limpieza** → 513505 o 523505 (Aseo y vigilancia)
+- **Publicidad** → 523560 (Publicidad, propaganda y promoción)
 
 ### 6. ¿ES GASTO DE PERSONAL? (GASTO OPERACIONAL)
 **Si es relacionado con personal:**
@@ -178,8 +184,8 @@ PROMPTS = {
 - **CRÉDITO** → 220501 (Proveedores nacionales - rango 220501-220598)
 - **CONTADO EFECTIVO** → 110505 (Caja general)
 - **CONTADO TRANSFERENCIA** → 111005 (Bancos - moneda nacional)
-- **CONTADO TARJETA** → 110510 (Anticipos) o 111005 (Bancos)
-- **CONTADO CHEQUE** → 110515 (Cheques por cobrar)
+- **CONTADO TARJETA** → 111005 (Bancos - moneda nacional) o 110510 (Cajas menores) si es efectivo en caja menor
+- **CONTADO CHEQUE** → 111005 (Bancos - moneda nacional) - Los cheques se depositan en bancos
 
 ## VALIDACIONES:
 1. **Agrupar por factura** (campo 'ref')
@@ -224,7 +230,7 @@ PROMPTS = {
 2. **LEE el "EXCLUYE" del CIUU de la empresa** para evitar errores
 3. **COMPARA el artículo con el "INCLUYE"**:
    - Si el artículo está relacionado con actividades del "INCLUYE" → Probablemente INVENTARIO (1435 o 1410)
-   - Si el artículo NO está relacionado con el "INCLUYE" → Probablemente GASTO/COSTO (51xx, 54xx, 55xx, 61xx)
+   - Si el artículo NO está relacionado con el "INCLUYE" → Probablemente GASTO/COSTO (51xx, 52xx, 53xx, 61xx)
 4. **USA el CIUU del proveedor** para validar coherencia (si proveedor vende algo atípico, confianza BAJA)
 5. **APLICA esta lógica para CUALQUIER tipo de empresa**: construcción, seguros, tiendas, servicios, manufactura, etc.
 
@@ -232,7 +238,7 @@ PROMPTS = {
 - Empresa CIUU 5611 (Restaurantes) compra "Bombillo" → NO está en INCLUYE → 515015 (Reparaciones locativas) - GASTO
 - Empresa CIUU 4651 (Ferreterías) compra "Bombillo" → SÍ está en INCLUYE → 143501 (Inventario) - INVENTARIO
 - Empresa CIUU 4100 (Construcción) compra "Cemento" → SÍ está en INCLUYE → 141001 (Materias primas) - INVENTARIO
-- Empresa CIUU 4100 (Construcción) compra "Servicio contable" → NO está en INCLUYE → 530520 (Honorarios contadores) - GASTO
+- Empresa CIUU 4100 (Construcción) compra "Servicio contable" → NO está en INCLUYE → 521025 (Asesoría jurídica) o 521035 (Asesoría técnica) - GASTO
 - Empresa CIUU 6201 (Servicios) compra "Software" → NO está en INCLUYE (es activo) → 161005 (Software adquirido) - ACTIVO
 - Cualquier empresa compra "Servicio reparación" → NO está en INCLUYE → 515015 (Reparaciones locativas) - GASTO""",
         
@@ -260,7 +266,7 @@ PROMPTS = {
 2. **CLASIFICA** usando los IMPUESTOS YA CALCULADOS proporcionados
 3. **APLICA RETENCIONES** como CRÉDITO contable (cuenta 240805)
 4. **CALCULA NETO A PAGAR** = Total artículo + IVA - Retención
-5. **RESPETA MODALIDAD Y FORMA DE PAGO** → Crédito (110505) vs Contado (110101/111005/110510/110515)
+5. **RESPETA MODALIDAD Y FORMA DE PAGO** → Crédito (220501) vs Contado (110505/111005/110510)
 6. **USA LA DESCRIPCIÓN DE FORMA DE PAGO** para determinar nombre de banco si está disponible
 7. **GENERA** asiento contable completo
 8. **DEVUELVE** SOLO JSON válido sin explicaciones adicionales"""
