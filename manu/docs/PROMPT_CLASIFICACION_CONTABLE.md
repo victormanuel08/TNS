@@ -12,7 +12,7 @@
 
 ## 🎯 Resumen Ejecutivo
 
-El sistema de clasificación contable utiliza **Inteligencia Artificial (DeepSeek)** para clasificar automáticamente los artículos de facturas electrónicas según el **Plan Único de Cuentas (PUC) colombiano**.
+El sistema de clasificación contable utiliza **Inteligencia Artificial (Manu)** para clasificar automáticamente los artículos de facturas electrónicas según el **Plan Único de Cuentas (PUC) colombiano**.
 
 ### Características Principales:
 - ✅ **Clasificación Contextual**: El mismo artículo se clasifica diferente según el giro de la empresa (CIUU)
@@ -24,10 +24,10 @@ El sistema de clasificación contable utiliza **Inteligencia Artificial (DeepSee
 
 ## 📐 Estructura del Prompt
 
-El prompt se divide en **2 partes**:
+El proceso se divide en **2 partes**:
 
-### 1. **SYSTEM PROMPT** (Instrucciones Generales)
-- Define el rol del AI (contador público experto)
+### 1. **SYSTEM** (Instrucciones Generales)
+- Definimos a MANU AI como un contador público senior 1 (medio-experto)
 - Establece las reglas de clasificación
 - Proporciona ejemplos contextuales
 - Define el formato de salida (JSON)
