@@ -1,0 +1,3 @@
+# Esta carpeta contiene el PDF del Plan Único de Cuentas (PUC)
+# El archivo PUC.pdf debe estar en esta ubicación para que el comando cargar_puc_desde_pdf funcione
+

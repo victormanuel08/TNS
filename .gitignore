@@ -90,10 +90,11 @@ venv.bak/
 manu/modelos_ml/*.joblib
 
 # PDFs de entrenamiento y procesamiento (no versionar archivos grandes)
-# Excepción: CIIU.pdf es necesario para el procesamiento y se versiona
+# Excepción: CIIU.pdf y PUC.pdf son necesarios para el procesamiento y se versionan
 manu/data/**/*.pdf
 !manu/data/.gitkeep
 !manu/data/ciiu/CIIU.pdf
+!manu/data/puc/PUC.pdf
 
 # Carpetas/archivos antiguos o sensibles que no deben ir al VPS
 OLDDATAFONO/

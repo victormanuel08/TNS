@@ -2894,6 +2894,135 @@ class AIAnalyticsAPIKey(models.Model):
         return cls.objects.filter(activa=True).order_by('ultima_vez_usada', 'total_peticiones')
 
 
+class CuentaPUC(models.Model):
+    """
+    Modelo para almacenar el Plan Único de Cuentas (PUC) colombiano.
+    Soporta cuentas de 1, 2, 4 y 6 dígitos con jerarquía.
+    """
+    codigo = models.CharField(
+        max_length=6,
+        unique=True,
+        db_index=True,
+        help_text='Código de la cuenta PUC (1, 2, 4 o 6 dígitos) - Índice único'
+    )
+    denominacion = models.CharField(
+        max_length=500,
+        help_text='Denominación/nombre de la cuenta'
+    )
+    nivel = models.IntegerField(
+        choices=[
+            (1, 'Clase (1 dígito)'),
+            (2, 'Grupo (2 dígitos)'),
+            (4, 'Cuenta (4 dígitos)'),
+            (6, 'Subcuenta (6 dígitos)')
+        ],
+        help_text='Nivel jerárquico de la cuenta'
+    )
+    # Campos para establecer jerarquía
+    clase = models.CharField(
+        max_length=1,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text='Clase (primer dígito)'
+    )
+    grupo = models.CharField(
+        max_length=2,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text='Grupo (primeros 2 dígitos)'
+    )
+    cuenta_principal = models.CharField(
+        max_length=4,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text='Cuenta principal (primeros 4 dígitos)'
+    )
+    # Para rangos: si es inicio o fin de rango
+    es_rango = models.BooleanField(
+        default=False,
+        help_text='Si es True, esta cuenta es parte de un rango (ej: "141001 a 141098")'
+    )
+    rango_inicio = models.CharField(
+        max_length=6,
+        null=True,
+        blank=True,
+        help_text='Código de inicio del rango (si es parte de un rango)'
+    )
+    rango_fin = models.CharField(
+        max_length=6,
+        null=True,
+        blank=True,
+        help_text='Código de fin del rango (si es parte de un rango)'
+    )
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'cuentas_puc'
+        verbose_name = 'Cuenta PUC'
+        verbose_name_plural = 'Cuentas PUC'
+        indexes = [
+            models.Index(fields=['codigo']),
+            models.Index(fields=['nivel']),
+            models.Index(fields=['clase']),
+            models.Index(fields=['grupo']),
+            models.Index(fields=['cuenta_principal']),
+            models.Index(fields=['es_rango']),
+        ]
+        ordering = ['codigo']
+    
+    def __str__(self):
+        return f"{self.codigo} - {self.denominacion}"
+    
+    def es_cuenta_valida_en_rango(self, codigo_a_validar: str) -> bool:
+        """
+        Valida si un código está dentro del rango de esta cuenta.
+        Ejemplo: Si esta cuenta es "141001" con rango "141001-141098",
+        valida que "141005" esté en el rango.
+        """
+        if not self.es_rango or not self.rango_inicio or not self.rango_fin:
+            return False
+        
+        try:
+            inicio = int(self.rango_inicio)
+            fin = int(self.rango_fin)
+            codigo = int(codigo_a_validar)
+            return inicio <= codigo <= fin
+        except (ValueError, TypeError):
+            return False
+    
+    @classmethod
+    def validar_cuenta_existe(cls, codigo: str) -> bool:
+        """
+        Valida si una cuenta existe en el PUC (directamente o dentro de un rango).
+        """
+        # Buscar cuenta exacta
+        if cls.objects.filter(codigo=codigo).exists():
+            return True
+        
+        # Buscar si está dentro de algún rango
+        # Para cuentas de 6 dígitos, buscar rangos que la contengan
+        if len(codigo) == 6:
+            try:
+                codigo_int = int(codigo)
+                # Buscar rangos donde el código esté dentro
+                rangos = cls.objects.filter(
+                    es_rango=True,
+                    nivel=6
+                ).exclude(rango_inicio__isnull=True).exclude(rango_fin__isnull=True)
+                
+                for rango in rangos:
+                    if rango.es_cuenta_valida_en_rango(codigo):
+                        return True
+            except ValueError:
+                pass
+        
+        return False
+
+
 # Extender el modelo User
 User.add_to_class('puede_gestionar_api_keys', user_puede_gestionar_api_keys)
 User.add_to_class('has_empresa_permission', user_has_empresa_permission)
