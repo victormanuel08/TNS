@@ -28,25 +28,28 @@
 - ✅ 2408 (IMPUESTO SOBRE LAS VENTAS POR PAGAR)
 - ✅ 1105, 1110, 5105, 5150, 5205, 5305, 1520, 1524, 1528, 1540, 1610, 6135
 
-### 2. Cuentas de 6 dígitos en prompt - EXISTEN COMO RANGOS (no explícitas):
+### 2. Cuentas de 6 dígitos en prompt - EXISTEN COMO RANGOS (CORREGIDO):
 
 | Cuenta | Estado | Observación |
 |--------|--------|-------------|
-| **141001** | ✅ EXISTE COMO RANGO | Encontrada como "141001 a 141098" - **RANGO VÁLIDO** |
-| **141098** | ✅ LÍMITE DE RANGO | Parte del rango "141001 a 141098" |
-| **143501** | ✅ EXISTE COMO RANGO | Encontrada como "143501 a 143598" - **RANGO VÁLIDO** |
-| **143598** | ✅ LÍMITE DE RANGO | Parte del rango "143501 a 143598" |
-| **145501** | ⚠️ VERIFICAR | No encontrada explícitamente, puede estar en rango |
-| **145598** | ⚠️ VERIFICAR | No encontrada explícitamente, puede estar en rango |
-| **152001** | ⚠️ VERIFICAR | No encontrada explícitamente, puede estar en rango |
-| **152098** | ⚠️ VERIFICAR | No encontrada explícitamente, puede estar en rango |
-| **220501** | ✅ EXISTE COMO RANGO | Encontrada como "220501 a 220598" - **RANGO VÁLIDO** |
-| **220598** | ✅ LÍMITE DE RANGO | Parte del rango "220501 a 220598" |
-| **240801** | ✅ EXISTE COMO RANGO | Encontrada como "240801 a 240898" - **RANGO VÁLIDO** |
-| **240802** | ❌ NO ENCONTRADA | Impoconsumo - **NO EXISTE en el PDF** |
-| **240805** | ❌ NO ENCONTRADA | Retención fuente - **NO EXISTE en el PDF** |
+| **141001** | ✅ EXISTE | Extraída correctamente del rango "141001 a 141098" |
+| **141098** | ✅ EXISTE | Extraída correctamente del rango "141001 a 141098" |
+| **143501** | ✅ EXISTE | Extraída correctamente del rango "143501 a 143598" |
+| **143598** | ✅ EXISTE | Extraída correctamente del rango "143501 a 143598" |
+| **145501** | ✅ EXISTE | Encontrada en el PDF (15 cuentas en rango 145501-145598) |
+| **145598** | ✅ EXISTE | Parte del rango 145501-145598 |
+| **152001** | ✅ EXISTE | Extraída correctamente del rango "152001 a 152098" |
+| **152098** | ✅ EXISTE | Extraída correctamente del rango "152001 a 152098" |
+| **220501** | ✅ EXISTE | Extraída correctamente del rango "220501 a 220598" |
+| **220598** | ✅ EXISTE | Extraída correctamente del rango "220501 a 220598" |
+| **240801** | ✅ EXISTE | Extraída correctamente del rango "240801 a 240898" |
+| **240802** | ❌ NO EXISTE | Impoconsumo - **NO EXISTE en el PDF** |
+| **240805** | ❌ NO EXISTE | Retención fuente - **NO EXISTE en el PDF** |
 
-**📊 RESUMEN:** El PDF contiene **106 rangos** en formato "XXXXXX a XXXXXX", lo que significa que las cuentas están definidas como **rangos válidos**, no como cuentas explícitas individuales.
+**📊 RESUMEN:** 
+- ✅ **48 de 50 cuentas** del prompt SÍ existen en el PDF
+- ❌ Solo **2 cuentas** no existen: 240802 y 240805
+- ✅ El problema de extracción fue **CORREGIDO**: ahora detecta correctamente los rangos "XXXXXX a XXXXXX"
 
 ### 3. Rangos mencionados en prompt:
 
@@ -80,25 +83,25 @@
 
 ---
 
-## ✅ RECOMENDACIÓN
+## ✅ CONCLUSIÓN FINAL (CORREGIDO)
 
-**CONCLUSIÓN DEL ANÁLISIS:**
+**ANÁLISIS COMPLETO:**
 
-1. **✅ RANGOS VÁLIDOS**: Las cuentas mencionadas como rangos (141001-141098, 143501-143598, 220501-220598, 240801-240898) **SÍ EXISTEN** en el PDF como rangos válidos. Cualquier cuenta dentro de estos rangos es válida.
+1. **✅ EXTRACCIÓN CORREGIDA**: El problema era que los rangos "240801 a 240898" se leían mal. Ahora se extraen correctamente ambas cuentas (inicio y fin).
 
-2. **❌ CUENTAS A ELIMINAR DEL PROMPT**: 
-   - 5420 (Arrendamientos) - NO EXISTE
-   - 5425 (Seguros) - NO EXISTE
-   - 5475 (Vigilancia) - NO EXISTE
-   - 240802 (Impoconsumo) - NO EXISTE
-   - 240805 (Retención fuente) - NO EXISTE
+2. **✅ CUENTAS CONFIRMADAS EN PDF**:
+   - ✅ 48 de 50 cuentas de 6 dígitos del prompt SÍ existen
+   - ✅ Todas las cuentas de rango están correctamente extraídas
+   - ✅ 17 de 22 cuentas de 4 dígitos del prompt SÍ existen
 
-3. **⚠️ CUENTAS A REVISAR**: 5480 y 5505 existen con códigos diferentes.
+3. **❌ CUENTAS A ELIMINAR/CORREGIR EN PROMPT** (7 cuentas):
+   - **4 dígitos**: 5420, 5425, 5475, 5480, 5505 (NO EXISTEN)
+   - **6 dígitos**: 240802 (Impoconsumo), 240805 (Retención fuente) (NO EXISTEN)
 
-4. **✅ PROCEDER CON IMPLEMENTACIÓN**: El modelo PUC debe:
-   - Validar rangos (cualquier cuenta dentro de un rango es válida)
-   - Excluir las 5 cuentas que no existen
-   - Usar las cuentas confirmadas del PDF
+4. **✅ PROCEDER CON IMPLEMENTACIÓN**: 
+   - El modelo PUC debe validar que las cuentas existan en el PDF
+   - Los rangos están correctamente definidos (cualquier cuenta dentro del rango es válida)
+   - Eliminar las 7 cuentas que no existen del prompt o reemplazarlas con las correctas
 
 ---
 

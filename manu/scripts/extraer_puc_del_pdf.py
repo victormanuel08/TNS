@@ -41,8 +41,37 @@ def extraer_cuentas_puc(pdf_path='PUC.pdf', pagina_inicio=4, pagina_fin=113):
                     codigo_str = str(row[0]).strip() if row[0] else ""
                     denominacion = str(row[1]).strip() if len(row) > 1 and row[1] else ""
                     
-                    if not codigo_str or not codigo_str.isdigit():
+                    if not codigo_str:
                         continue
+                    
+                    # Detectar formato de rango: "240801 a 240898" o "240801-240898"
+                    patron_rango = re.compile(r'(\d{4,6})\s*(?:a|-)\s*(\d{4,6})', re.IGNORECASE)
+                    match_rango = patron_rango.search(codigo_str)
+                    
+                    if match_rango:
+                        # Es un rango: extraer inicio y fin
+                        inicio = match_rango.group(1)
+                        fin = match_rango.group(2)
+                        
+                        # Agregar ambas cuentas (inicio y fin del rango)
+                        if len(inicio) == 6:
+                            cuentas['6_digitos'].add(inicio)
+                            cuentas['6_digitos'].add(fin)
+                            descripciones[inicio] = f"{denominacion} (inicio rango)"
+                            descripciones[fin] = f"{denominacion} (fin rango)"
+                        elif len(inicio) == 4:
+                            cuentas['4_digitos'].add(inicio)
+                            cuentas['4_digitos'].add(fin)
+                            descripciones[inicio] = f"{denominacion} (inicio rango)"
+                            descripciones[fin] = f"{denominacion} (fin rango)"
+                        continue
+                    
+                    # Si no es rango, verificar si es solo número
+                    if not codigo_str.replace(' ', '').isdigit():
+                        continue
+                    
+                    # Limpiar espacios del código
+                    codigo_str = codigo_str.replace(' ', '')
                     
                     # Determinar nivel de la cuenta
                     if len(codigo_str) == 1 and codigo_str[0] in '123456789':
