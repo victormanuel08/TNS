@@ -311,6 +311,9 @@ class BackupS3Service:
             # Verificar si hay caracteres no ASCII en la ruta
             tiene_caracteres_especiales = any(ord(c) > 127 for c in ruta_base_encoded)
             
+            # Verificar si la ruta tiene espacios (necesita comillas para gbak)
+            tiene_espacios = ' ' in ruta_base_encoded
+            
             if tiene_caracteres_especiales:
                 # Usar formato con puerto explícito para mejor compatibilidad con caracteres especiales
                 ruta_completa = f"{servidor_host}/{puerto_firebird}:{ruta_base_encoded}"
@@ -319,6 +322,10 @@ class BackupS3Service:
                 # Formato estándar para rutas sin caracteres especiales
                 ruta_completa = f"{servidor_host}:{ruta_base_encoded}"
                 logger.info(f"🌐 Usando ruta remota para backup: {ruta_completa}")
+            
+            # Nota: Las comillas se manejarán al construir el comando si tiene espacios
+            if tiene_espacios:
+                logger.info(f"📝 Ruta con espacios detectada: {ruta_completa}")
             
             logger.info(f"   Verificando conectividad con {servidor_host}...")
             
@@ -444,18 +451,31 @@ class BackupS3Service:
         ruta_temporal = os.path.join(temp_dir, f"backup_{empresa.nit_normalizado}_{nombre_archivo}")
         
         try:
+            # Verificar si la ruta tiene espacios (necesita comillas para gbak)
+            tiene_espacios_en_ruta = ' ' in ruta_completa
+            
             # Ejecutar gbak
             # Si es servidor remoto, usar formato host:ruta_base
             # Si es local, usar ruta_base directamente
-            comando = [
-                gbak_path,
-                '-user', usuario,
-                '-pass', contrasena,
-                '-b',  # Backup
-                '-v',  # Verbose
-                ruta_completa,  # Usa ruta_completa (puede ser host:ruta o ruta local)
-                ruta_temporal  # Siempre guardar localmente
-            ]
+            # Si la ruta tiene espacios, usar shell=True con comillas alrededor de la ruta
+            if tiene_espacios_en_ruta:
+                # Construir comando como string con comillas para rutas con espacios
+                comando_str = f'{gbak_path} -user {usuario} -pass {contrasena} -b -v "{ruta_completa}" "{ruta_temporal}"'
+                comando = comando_str
+                usar_shell = True
+                logger.info(f"📝 Ruta con espacios detectada, usando shell=True con comillas")
+            else:
+                # Construir comando como lista (más seguro, maneja espacios automáticamente)
+                comando = [
+                    gbak_path,
+                    '-user', usuario,
+                    '-pass', contrasena,
+                    '-b',  # Backup
+                    '-v',  # Verbose
+                    ruta_completa,  # Usa ruta_completa (puede ser host:ruta o ruta local)
+                    ruta_temporal  # Siempre guardar localmente
+                ]
+                usar_shell = False
             
             logger.info(f"Ejecutando gbak desde: {gbak_path}")
             logger.info(f"Origen: {ruta_completa}")
@@ -489,6 +509,7 @@ class BackupS3Service:
                 stdout=stdout_fd,
                 stderr=stderr_fd,
                 text=True,
+                shell=usar_shell,  # Usar shell solo cuando hay espacios
                 env=env  # Pasar variables de entorno
             )
             
