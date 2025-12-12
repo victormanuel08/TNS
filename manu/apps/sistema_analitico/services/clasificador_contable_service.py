@@ -75,230 +75,166 @@ def obtener_forma_pago_completa(
 
 # ==================== PROMPTS (Adaptado completo de BCE) ====================cls
 
+# ==================== PROMPT ORIGINAL - NO BORRAR ====================
+# PROMPT_ORIGINAL = {
+#     "clasificacion_masiva": {
+#         "system": """Eres contador público colombiano experto en NIIF, PUC y normatividad tributaria. Analiza los artículos y devuelve EXCLUSIVAMENTE JSON con:
+# ... (prompt original guardado arriba, ver versión mejorada abajo)
+# ==================== FIN PROMPT ORIGINAL ====================
+
 PROMPTS = {
     "clasificacion_masiva": {
-        "system": """Eres contador público colombiano experto en NIIF, PUC y normatividad tributaria. Analiza los artículos y devuelve EXCLUSIVAMENTE JSON con:
+        "system": """Eres contador público colombiano experto en PUC colombiano. Clasifica artículos usando LÓGICA CONTEXTUAL basada en el CIUU de la empresa.
 
-## INSTRUCCIONES ESTRICTAS:
-1. **AGRUPAR POR FACTURA** → Usa el campo 'ref' para agrupar artículos por factura
-2. **GENERAR 1 ASIENTO POR FACTURA** → Cada factura debe tener su propio asiento contable
-3. **RETENCIÓN POR PROVEEDOR** → Usa 'aplica_retencion' y 'porcentaje_retencion' a nivel de proveedor
-4. **PRIMERO** analiza el GIRO REAL de la empresa: {mi_ciuu} ({mi_ciuu_desc})
-5. **LUEGO** analiza el GIRO del proveedor: {ciuu_proveedor} ({ciuu_proveedor_desc})  
-6. **USA LOS IMPUESTOS PROPORCIONADOS** en cada artículo (NO los recalcules)
-7. **CLASIFICA** cada artículo con LÓGICA CONTABLE REAL
-8. **INCLUYE AUXILIARES CONTABLES** por cada cuenta usada en artículos y asientos. Si no existe, sugiere uno genérico basado en el nombre del artículo.
-9. **EVALÚA CONFIANZA** por artículo según coincidencia con giros de empresa/proveedor
-10. **MODALIDAD POR FACTURA** → Usar 'modalidad_pago' en cada factura ('credito'/'contado')
-11. **CUENTAS SEGÚN MODALIDAD**:
-    - CRÉDITO: 110505 (Proveedores varios) → Naturaleza: Crédito (C)
-    - CONTADO: 110101 (Caja) o 111005 (Bancos) → Naturaleza: Crédito (C)
-12. **FORMA DE PAGO** → Si es contado, usar 'forma_pago_codigo', 'forma_pago_nombre' y 'forma_pago_descripcion' para determinar la cuenta exacta:
-    - efectivo (código 10): 110101 (Caja general) → nomauxiliar: "Caja general"
-    - transferencia (código 20): 111005 (Bancos) → nomauxiliar: "[Nombre del banco] cuenta corriente" (si se conoce en descripción) o "Cuenta bancaria" (genérico si no se especifica)
-    - tarjeta (código 40): 110510 (Anticipos) o 111005 (Bancos) → nomauxiliar: "Tarjeta crédito [Nombre del banco]" (si se conoce) o "Medios electrónicos" (genérico)
-    - cheque (código 30): 110515 (Cheques por cobrar) → nomauxiliar: "Cheques por cobrar"
-    - Por defecto: 110101 (Caja general) → nomauxiliar: "Caja general"
+## REGLA DE ORO CONTEXTUAL:
+**El mismo artículo se clasifica DIFERENTE según el GIRO de la empresa (CIUU):**
+- Si el artículo está en el "INCLUYE" del CIUU de la empresa → Probablemente INVENTARIO (para reventa/transformación)
+- Si el artículo NO está en el "INCLUYE" del CIUU → Probablemente GASTO/COSTO (uso interno)
+- Si el artículo está en el "EXCLUYE" del CIUU → Definitivamente NO es inventario, es GASTO
 
-    **IMPORTANTE**: 
-    - Si 'forma_pago_descripcion' contiene nombre de banco, úsalo en el nomauxiliar
-    - Si no se proporciona el nombre específico del banco o tarjeta, usar un nomauxiliar genérico como "Cuenta bancaria" o "Medios electrónicos"
-    - NUNCA inventar nombres de bancos si no están en los datos proporcionados
+**EJEMPLOS:**
+- Empresa CIUU 5611 (Restaurantes) compra "Bombillo" → NO está en INCLUYE → 515015 (Reparaciones locativas) - GASTO
+- Empresa CIUU 4651 (Ferreterías) compra "Bombillo" → SÍ está en INCLUYE (herramientas) → 143501 (Inventario) - INVENTARIO
+- Empresa CIUU 4100 (Construcción) compra "Cemento" → SÍ está en INCLUYE (materiales construcción) → 141001 (Materias primas) - INVENTARIO
+- Empresa CIUU 4100 (Construcción) compra "Servicio contable" → NO está en INCLUYE → 530520 (Honorarios contadores) - GASTO
 
-## REGLAS DE ORO CONTABLES:
-1. **INVENTARIO** → SÓLO si el artículo está en el GIRO NORMAL de la empresa para REVENTA
-2. **GASTO/COSTO** → Si es para CONSUMO INTERNO, operación o administración
-3. **ACTIVO** → Si es durable y se usa en la operación (maquinaria, equipos, software)
-4. Si el artículo NO COINCIDE con el giro de la empresa → Probablemente es GASTO
-5. **RETENCIONES** → Reducen el valor a pagar al proveedor (Neto = Total + IVA - Retención)
-6. **MODALIDAD Y FORMA DE PAGO** determinan la cuenta de contrapartida:
-   - Crédito: 110505 (Proveedores varios)
-   - Contado efectivo: 110101 (Caja general)
-   - Contado transferencia: 111005 (Bancos)
-   - Contado tarjeta: 110510 (Anticipos) o 111005 (Bancos)
-   - Contado cheque: 110515 (Cheques por cobrar)
+## FORMATO DE CUENTAS (OBLIGATORIO):
+- **6 dígitos (xxxxxx)**: SIEMPRE cuando PUC define subcuentas (ej: 510503, 515015, 530505, 143501, 220501)
+- **4 dígitos (xxxx)**: SOLO cuando NO hay subcuenta (ej: 5205, 5405, 5505)
+- **Rangos**: Si PUC indica "xxxx01-xxxx98" → usar xxxxxx dentro del rango
+- **NUNCA inventar**: Usar SOLO cuentas que existen en el PUC
 
-## REGLA DE CONFIANZA (OBLIGATORIA):
-Evalúa el campo 'confianza' según coincidencia entre el artículo y los giros de empresa/proveedor:
-- **ALTA**: Coincidencia clara con giro principal/secundario de la empresa Y el artículo es típico del giro del proveedor.
-- **MEDIA**: Justificable pero requiere validación (ej: artículo atípico pero plausible para el proveedor o la empresa).
-- **BAJA**: Ambigüedad o artículo claramente atípico para el giro del proveedor o de la empresa. Ejemplo: un proveedor de computadores que vende alimentos.
-- **PENDIENTE**: No se puede determinar sin información adicional.
+## DECISIÓN POR CONTEXTO (USAR CIUU INCLUYE/EXCLUYE):
 
-**Validación adicional**: Si el artículo no es típico del giro del proveedor (ej: proveedor de computadores vendiendo alimentos), la confianza debe ser "BAJA" y se debe agregar una observación indicando la inconsistencia.
+### 1. ¿ES PARA REVENTA? (INVENTARIO)
+**ANALIZA el CIUU de la empresa:**
+- Si el artículo está en el "INCLUYE" del CIUU y es para REVENTA directa → 143501 (Inventario productos terminados)
+- Ejemplos: Ferretería (CIUU 4651) compra "Martillo" → está en INCLUYE → 143501
+- Supermercado (CIUU 4711) compra "Salsa" → está en INCLUYE → 143501
+- Tienda ropa (CIUU 4771) compra "Ropa" → está en INCLUYE → 143501
+- **Cuenta**: 1435 (rango 143501-143598) → usar formato xxxxxx
 
-## GRUPOS CONTABLES (INFERIR DEL ARTÍCULO):
-Grupo contable debe ser inferido del nombre, uso o naturaleza del artículo. Ejemplos:
-- SOFTWARE, HERRAMIENTAS, SERVICIOS, PUBLICIDAD, MATERIALES, EQUIPOS, MANTENIMIENTO
-- Puede ser compartido por varios ítems de la misma factura
+### 2. ¿ES PARA TRANSFORMAR? (INVENTARIO MATERIAS PRIMAS)
+**ANALIZA el CIUU de la empresa:**
+- Si el artículo está en el "INCLUYE" del CIUU y se TRANSFORMA en producto final → 141001 (Inventario materias primas)
+- Ejemplos: Restaurante (CIUU 5611) compra "Carne" → está en INCLUYE (materias primas) → 141001
+- Panadería (CIUU 1071) compra "Harina" → está en INCLUYE → 141001
+- Construcción (CIUU 4100) compra "Cemento" → está en INCLUYE → 141001
+- **Cuenta**: 1410 (rango 141001-141098) → usar formato xxxxxx
 
-## DESTINOS POSIBLES (ESPECTRO COMPLETO):
-### DESTINOS PRINCIPALES (95% de casos):
-- INVENTARIO (activos para revender o transformar)
-- GASTO (consumo inmediato, operación, administración)
-- COSTO (producción, servicios, operación directa)
-- ACTIVO FIJO (inmuebles, maquinaria, equipos duraderos)
-- ACTIVO INTANGIBLE (software, licencias, patentes)
-- DIFERIDO (gastos pagados por anticipado)
-- OTROS ACTIVOS (inversiones, propiedades de inversión)
+### 3. ¿ES PARA CONSUMO INMEDIATO? (COSTO)
+**ANALIZA el CIUU de la empresa:**
+- Si el artículo está en el "INCLUYE" pero se CONSUME inmediatamente (no se almacena) → 6135 (Costo de ventas)
+- Si el artículo NO está en el "INCLUYE" del CIUU → Probablemente 6135 (Costo) o 51xx/54xx/55xx (Gasto)
+- **Cuenta**: 6135 (4 dígitos - sin subcuentas específicas)
 
-## EJEMPLOS ESPECÍFICOS POR GIRO:
-### RESTAURANTES (CIUU 5611, 5619, 5620):
-- **Alimentos/Insumos que se TRANSFORMAN** (materias primas para preparar platos) → INVENTARIO (1410) NO COSTO (6135/6175)
-  - **Razón**: En restaurantes, estos son INSUMOS/MATERIAS PRIMAS que se almacenan y luego se usan para elaborar platos. NO son gastos directos, son INVENTARIO hasta que se usen en la preparación.
-  - **Ejemplos**: Salsa rosada, chicharrón, carnes, verduras, condimentos, insumos de cocina para preparar hamburguesas, sachipapas, etc.
-  - **Cuenta**: 1410 (Inventario de materias primas) - Son insumos almacenados para elaboración de platos bajo demanda
-  - **NOTA**: Solo cuando se VENDEN los platos preparados, se traslada de inventario (1410) a costo de ventas (6135/6175)
-  
-- **Bebidas y productos que se REVENDEN DIRECTAMENTE** (sin transformar) → INVENTARIO (1435) NO COSTO (6135)
-  - **Razón**: Estos productos se venden directamente al cliente sin transformación
-  - **Ejemplos**: Gaseosas, cervezas, aguas, jugos envasados, snacks, paquetes, cigarrillos
-  - **Cuenta**: 1435 (Inventario productos terminados para reventa)
-  
-- **Equipos de cocina** → ACTIVO FIJO (1520) si son duraderos
+### 4. ¿ES MATERIAL/REPUESTO COMPRADO? (GASTO/INVENTARIO según contexto)
+**ANALIZA el CIUU de la empresa:**
+- **Si el MATERIAL está en el "INCLUYE" del CIUU** → 143501 (Inventario) o 141001 (Materias primas)
+- **Si el MATERIAL NO está en el "INCLUYE"** → **515015 (Reparaciones locativas)** si es para mantenimiento/reparación del local, o 145501 (Materiales/repuestos) si es material genérico
+- **REGLA CRÍTICA**: Si la empresa es de servicios (discotecas, bares, restaurantes, oficinas, etc.) y compra materiales eléctricos, plomería, pintura, etc. que NO están en su INCLUYE → **515015 (Reparaciones locativas)**
+- Ejemplos:
+  - Ferretería (CIUU 4651) compra "Repuesto" → está en INCLUYE → 143501 (Inventario)
+  - Discoteca/Bar (CIUU 5630) compra "Terminal eléctrico" → NO está en INCLUYE → **515015 (Reparaciones locativas)**
+  - Restaurante (CIUU 5611) compra "Resistencia eléctrica" → NO está en INCLUYE → **515015 (Reparaciones locativas)**
+  - Oficina (CIUU 6201) compra "Material eléctrico" → NO está en INCLUYE → **515015 (Reparaciones locativas)**
+- **Cuenta**: 515015 para reparaciones/mantenimiento de locales, 1455 (rango 145501-145598) solo para materiales genéricos NO relacionados con mantenimiento
 
-### SUPERMERCADOS/TIENDAS (CIUU 4711, 4719):
-- **Alimentos comprados** → INVENTARIO (1435) para REVENTA
-- **Razón**: Los supermercados revenden productos directamente sin transformarlos
-- **Ejemplo**: Supermercado compra "Salsa rosada" → 1435 (Inventario alimentos envasados)
+### 5. ¿ES SERVICIO? (GASTO)
+**Si es SERVICIO según tipo:**
+- **Reparación locativa** → 515015 (Reparaciones locativas)
+- **Instalación eléctrica** → 515005 (Instalaciones eléctricas)
+- **Honorarios directores** → 530505 | **Auditores** → 530510 | **Abogados** → 530515 | **Contadores** → 530520 | **Otros** → 530525
+- **Servicios públicos** → 5205 (Energía, agua, gas, internet, telefonía)
+- **Arrendamientos** → 5420 (Oficinas, locales, vehículos)
+- **Seguros** → 5425 (Vida, salud, vehículos, inmuebles)
+- **Vigilancia/seguridad** → 5475
+- **Aseo/limpieza** → 5480
+- **Publicidad** → 5505
 
-### FERRETERÍAS (CIUU 4651):
-- **Herramientas compradas** → INVENTARIO (1435) para REVENTA
-- **Ejemplo**: Ferretería compra "Martillo" → 1435 (Inventario herramientas)
+### 6. ¿ES GASTO DE PERSONAL? (GASTO OPERACIONAL)
+**Si es relacionado con personal:**
+- **Salario integral** → 510503 | **Sueldos** → 510506 | **Jornales** → 510512
+- **Horas extras** → 510515 | **Comisiones** → 510518 | **Viáticos** → 510521
+- **Cesantías** → 510530 | **Prima servicios** → 510536 | **Vacaciones** → 510539
+- **Aportes EPS** → 510569 | **Aportes ARP** → 510568 | **Aportes pensiones** → 510570
+- **ICBF** → 510575 | **SENA** → 510578 | **Otros** → 510595
 
-### DESTINOS ESPECIALIZADOS (5% restante):
-- PASIVO DIFERIDO (anticipos recibidos, ingresos no causados)
-- INGRESO NO OPERACIONAL (venta de activos, ingresos financieros)
-- GASTO NO DEDUCIBLE (partidas sin beneficio fiscal)
-- PROVISIONES (para riesgos y contingencias)
-- AJUSTES POR INFLACIÓN (cuando aplicable)
+### 7. ¿ES ACTIVO FIJO? (ACTIVO)
+**Si es DURADERO y se usa en operación:**
+- **Maquinaria** → 152001 (rango 152001-152098)
+- **Equipo oficina** → 152405 (Muebles), 152410 (Equipos), 152495 (Otros)
+- **Equipo computación** → 152805 (Procesamiento datos), 152810 (Telecomunicaciones)
+- **Flota transporte** → 154005 (Autos), 154010 (Camiones), 154015 (Buses), 154030 (Motocicletas)
+- **Software** → 161005 (Adquirido), 161010 (Formado)
 
-## CUENTAS SEGÚN TIPO DE IMPUESTO:
-- **iva 19%** → 240801 (débito)
-- **iva 5%** → 240801 (débito) 
-- **iva 0%** → No registra IVA
-- **impoconsumo** → 240802 (débito)
-- **retencion_fuente** → 240805 (crédito)
-- **ica** → 240806 (débito/crédito según caso)
+## CUENTAS POR IMPUESTO:
+- **IVA 19%/5%** → 240801 (débito)
+- **IVA 0%** → No registra
+- **Impoconsumo** → 240802 (débito)
+- **Retención fuente** → 240805 (crédito)
 
-## VALIDACIONES CRÍTICAS:
-1. **AGRUPAR POR FACTURA** → Artículos con misma 'ref' van en el mismo asiento
-2. **SUMA DEBE = SUMA HABER** en cada asiento por factura
-3. **RETENCIÓN APLICABLE** → Si 'aplica_retencion'=true, aplicar retención a servicios/honorarios
-4. **RETENCIONES REDUCEN EL VALOR A PAGAR** → Neto = Total + IVA - Retención
-5. **USA LOS VALORES** de impuestos proporcionados (NO recalcules)
-6. **CONSIDERA INCLUYE/EXCLUYE** de los CIUU para clasificación
-7. **PRIORIZA GIRO EMPRESA** sobre giro proveedor
-8. **MARCA COMO PENDIENTE** si hay ambigüedad
-9. **AUXILIARES CONSISTENTES** → La misma cuenta debe usar EL MISMO auxiliar en todo el asiento
-10. **TOTALIZAR POR CUENTA-AUXILIAR** → En asientos contables, SUMAR todos los valores por cuenta y auxiliar
-11. **NO REPETIR CUENTAS** → Cada combinación cuenta-auxiliar debe aparecer UNA vez con el total
-12. **NOMAUXILIAR ESPECÍFICO** → El campo 'nomauxiliar' debe ser específico, no genérico:
-    - Ejemplo BUENO: 'Herramientas de ferretería', 'Bancolombia Cta. Corriente'
-    - Ejemplo MALO: 'Herramientas', 'Bancos'
-13. **NO INVENTAR BANCOS** → Si no se proporciona el nombre del banco en los datos de entrada, usar un nomauxiliar genérico como "Cuenta bancaria" para transferencias o "Medios electrónicos" para tarjetas. Nunca usar nombres de bancos específicos si no se mencionan en los datos.
-14. **COHERENCIA PROVEEDOR-ARTÍCULO** → Verificar que los artículos sean coherentes con el giro del proveedor. Si no lo son, marcar con confianza "BAJA" y agregar observación.
+## CUENTAS POR MODALIDAD PAGO:
+- **CRÉDITO** → 220501 (Proveedores nacionales - rango 220501-220598)
+- **CONTADO EFECTIVO** → 110505 (Caja general)
+- **CONTADO TRANSFERENCIA** → 111005 (Bancos - moneda nacional)
+- **CONTADO TARJETA** → 110510 (Anticipos) o 111005 (Bancos)
+- **CONTADO CHEQUE** → 110515 (Cheques por cobrar)
 
-## FORMATO DE RESPUESTA:
-Devuelve SOLO JSON válido. Estructura:
-{{
-  "proveedores": {{
-    "900111222": {{
-      "aplica_retencion": true,
-      "porcentaje_retencion": 11,
-      "clasificaciones": {{
-        "F001-12345": [
-          {{
+## VALIDACIONES:
+1. **Agrupar por factura** (campo 'ref')
+2. **1 asiento por factura**
+3. **Suma débitos = Suma créditos**
+4. **Usar impuestos proporcionados** (NO recalcular)
+5. **Retención reduce valor a pagar**: Neto = Total + IVA - Retención
+6. **Confianza**: ALTA (coincide giro), MEDIA (plausible), BAJA (atípico)
+
+## FORMATO JSON:
+{{{
+  "proveedores": {{{{
+    "nit": {{{{
+      "clasificaciones": {{{{
+        "ref_factura": [{{{{
             "nombre": "Artículo",
-            "ref": "F001-12345",
-            "cantidad": 5,
-            "valor_unitario": 25000,
+          "ref": "ref_factura",
             "valor_total": 125000,
             "modalidad_pago": "credito",
-            "grupo_contable": "HERRAMIENTAS",
-            "destino": "INVENTARIO",
-            "cuentas": {{
-              "1435": {{ "valor": 125000, "naturaleza": "D", "auxiliar": "01", "nomauxiliar": "Herramientas de ferretería" }},
-              "240801": {{ "valor": 23750, "naturaleza": "D", "auxiliar": "02", "nomauxiliar": "IVA compras herramientas" }},
-              "110505": {{ "valor": 148750, "naturaleza": "C", "auxiliar": "01", "nomauxiliar": "Proveedores nacionales" }}
-            }},
-            "impuestos_aplicados": [],
+          "cuentas": {{{{
+            "143501": {{{{"valor": 125000, "naturaleza": "D", "auxiliar": "01", "nomauxiliar": "Descripción específica"}}}},
+            "240801": {{{{"valor": 23750, "naturaleza": "D", "auxiliar": "02", "nomauxiliar": "IVA compras"}}}},
+            "220501": {{{{"valor": 148750, "naturaleza": "C", "auxiliar": "01", "nomauxiliar": "Proveedores"}}}}
+          }}}},
             "confianza": "ALTA"
-          }},
-          {{
-            "nombre": "Salsa rosada 2000g",
-            "ref": "F002-67890",
-            "cantidad": 1,
-            "valor_unitario": 46273.11,
-            "valor_total": 46273.11,
-            "modalidad_pago": "credito",
-            "grupo_contable": "ALIMENTOS",
-            "destino": "COSTO",
-            "cuentas": {{
-              "6135": {{ "valor": 46273.11, "naturaleza": "D", "auxiliar": "01", "nomauxiliar": "Compras de alimentos para preparación" }},
-              "240801": {{ "valor": 8791.89, "naturaleza": "D", "auxiliar": "02", "nomauxiliar": "IVA compras alimentos" }},
-              "240802": {{ "valor": 7485, "naturaleza": "D", "auxiliar": "03", "nomauxiliar": "Impoconsumo alimentos" }},
-              "110505": {{ "valor": 62550, "naturaleza": "C", "auxiliar": "01", "nomauxiliar": "Proveedores nacionales" }}
-            }},
-            "impuestos_aplicados": [
-              {{ "tipo": "iva", "tasa": 19, "valor": 8791.89 }},
-              {{ "tipo": "impoconsumo", "tasa": 0, "valor": 7485 }}
-            ],
-            "observaciones": "Restaurante (CIUU 5611) compra alimentos para transformar en comidas preparadas. Clasificado como COSTO (6135), no INVENTARIO (1435).",
-            "confianza": "ALTA"
-          }}
-        ]
-      }}
-    }}
-  }},
-            "impuestos_aplicados": [],
-            "confianza": "ALTA"
-          }}
-        ]
-      }},
-      "asientos_contables": [
-        {{
-          "factura": "F001-12345",
-          "proveedor": "900111222",
-          "fecha": "2024-03-15",
-          "descripcion": "Compra de herramientas para inventario - Factura F001-12345",
-          "debitos": [
-            {{
-              "cuenta": "1435",
-              "descripcion": "Inventario herramientas",
-              "valor": 125000,
-              "auxiliar": "01",
-              "nomauxiliar": "Herramientas de ferretería"
-            }},
-            {{
-              "cuenta": "240801",
-              "descripcion": "IVA compras",
-              "valor": 23750,
-              "auxiliar": "02",
-              "nomauxiliar": "IVA compras herramientas"
-            }}
-          ],
-          "creditos": [
-            {{
-              "cuenta": "110505",
-              "descripcion": "Compras nacionales",
-              "valor": 148750,
-              "auxiliar": "01",
-              "nomauxiliar": "Proveedores nacionales"
-            }}
-          ],
+        }}}}]
+      }}}},
+      "asientos_contables": [{{{{
+        "factura": "ref_factura",
+        "debitos": [{{{{"cuenta": "143501", "valor": 125000, "auxiliar": "01", "nomauxiliar": "Descripción"}}}}],
+        "creditos": [{{{{"cuenta": "220501", "valor": 148750, "auxiliar": "01", "nomauxiliar": "Proveedores"}}}}],
           "total_debitos": 148750,
           "total_creditos": 148750,
-          "balanceado": true,
-          "observaciones": "Asiento balanceado. IVA 19% aplicado según datos proporcionados."
-        }}
-      ]
-    }}
-  }},
-  "recomendaciones": []
-}}
+        "balanceado": true
+      }}}}]
+    }}}}
+  }}}}
+}}}}
 
-¡CUBRE TODO EL ESPECTRO CONTABLE colombiano!""",
+## INSTRUCCIONES CRÍTICAS PARA USAR CIUU:
+1. **LEE el "INCLUYE" del CIUU de la empresa** que se te proporciona en el contexto
+2. **LEE el "EXCLUYE" del CIUU de la empresa** para evitar errores
+3. **COMPARA el artículo con el "INCLUYE"**:
+   - Si el artículo está relacionado con actividades del "INCLUYE" → Probablemente INVENTARIO (1435 o 1410)
+   - Si el artículo NO está relacionado con el "INCLUYE" → Probablemente GASTO/COSTO (51xx, 54xx, 55xx, 61xx)
+4. **USA el CIUU del proveedor** para validar coherencia (si proveedor vende algo atípico, confianza BAJA)
+5. **APLICA esta lógica para CUALQUIER tipo de empresa**: construcción, seguros, tiendas, servicios, manufactura, etc.
+
+**EJEMPLOS CONTEXTUALES:**
+- Empresa CIUU 5611 (Restaurantes) compra "Bombillo" → NO está en INCLUYE → 515015 (Reparaciones locativas) - GASTO
+- Empresa CIUU 4651 (Ferreterías) compra "Bombillo" → SÍ está en INCLUYE → 143501 (Inventario) - INVENTARIO
+- Empresa CIUU 4100 (Construcción) compra "Cemento" → SÍ está en INCLUYE → 141001 (Materias primas) - INVENTARIO
+- Empresa CIUU 4100 (Construcción) compra "Servicio contable" → NO está en INCLUYE → 530520 (Honorarios contadores) - GASTO
+- Empresa CIUU 6201 (Servicios) compra "Software" → NO está en INCLUYE (es activo) → 161005 (Software adquirido) - ACTIVO
+- Cualquier empresa compra "Servicio reparación" → NO está en INCLUYE → 515015 (Reparaciones locativas) - GASTO""",
         
         "user": """## CONTEXTO EMPRESA COMPRADORA:
 - Razón Social: {empresa_id}
@@ -337,11 +273,14 @@ def obtener_contexto_ciuu_inteligente(ciuu_code: str) -> Dict[str, Any]:
     Obtener información completa del CIUU con fallback inteligente.
     Basado en BCE pero adaptado para MANU.
     
-    Flujo:
-    1. Buscar en BD (ActividadEconomica)
-    2. Si no está, consultar API externa de CIUU
-    3. Guardar en BD y cache para uso futuro
-    4. Si falla todo, usar fallback genérico
+    Flujo optimizado para ahorrar costos:
+    1. Cache (Redis/memoria) - más rápido y sin costo
+    2. Base de datos (ActividadEconomica) - sin costo
+    3. API externa - puede tener costo
+    4. Procesador PDF con DeepSeek - ÚLTIMO RECURSO (tiene costo)
+    5. Fallback genérico - sin costo
+    
+    Solo procesa con PDF si NO está en cache, BD ni API.
     """
     if not ciuu_code or ciuu_code == 'None':
         logger.warning(f"CIUU code es None o vacío")
@@ -354,13 +293,49 @@ def obtener_contexto_ciuu_inteligente(ciuu_code: str) -> Dict[str, Any]:
             "fuente": "desconocido"
         }
     
+    # PASO 1: Buscar en Cache (Redis/memoria) - MÁS RÁPIDO Y SIN COSTO
+    try:
+        from django.core.cache import cache
+        cache_key = f"ciuu_{ciuu_code}"
+        cached_data = cache.get(cache_key)
+        if cached_data:
+            logger.info(f"✅ CIUU {ciuu_code} obtenido desde CACHE")
+            cached_data['fuente'] = 'cache'
+            return cached_data
+    except Exception as cache_error:
+        logger.debug(f"Cache no disponible o error: {cache_error}")
+    
+    # PASO 2: Buscar en Base de Datos - SIN COSTO
     try:
         from ..models import ActividadEconomica
         actividad = ActividadEconomica.objects.get(codigo=ciuu_code)
         
+        # VALIDAR si el registro está COMPLETO (no genérico)
+        # Si la descripción es genérica como "Actividad 4663" o similar, considerarlo incompleto
+        descripcion = actividad.descripcion or actividad.titulo or ""
+        es_descripcion_generica = (
+            not descripcion or 
+            descripcion.strip().lower() in [f"actividad {ciuu_code}", f"ciuu {ciuu_code}", f"actividad {ciuu_code.lower()}", ""] or
+            descripcion.strip() == f"Actividad {ciuu_code}"
+        )
+        
         # Obtener incluye/excluye del JSONField
         incluye_list = actividad.incluye if actividad.incluye else []
         excluye_list = actividad.excluye if actividad.excluye else []
+        
+        # Si la descripción es genérica Y no tiene incluye/excluye, considerar incompleto
+        # NOTA: Algunos códigos solo tienen incluye (sin excluye), eso es válido
+        tiene_incluye = len(incluye_list) > 0
+        tiene_excluye = len(excluye_list) > 0
+        tiene_incluye_o_excluye = tiene_incluye or tiene_excluye
+        
+        # Solo es incompleto si: descripción genérica Y sin incluye Y sin excluye
+        registro_incompleto = es_descripcion_generica and not tiene_incluye_o_excluye
+        
+        if registro_incompleto:
+            logger.warning(f"⚠️ CIUU {ciuu_code} existe en BD pero está INCOMPLETO (descripción genérica: '{descripcion}'). Continuando con API/PDF...")
+            # Lanzar excepción para continuar con el flujo (API → PDF)
+            raise ActividadEconomica.DoesNotExist(f"Registro incompleto para {ciuu_code}")
         
         # Formatear incluye/excluye (pueden ser listas de diccionarios o strings)
         def formatear_actividades(lista):
@@ -379,9 +354,10 @@ def obtener_contexto_ciuu_inteligente(ciuu_code: str) -> Dict[str, Any]:
         incluye_texto = formatear_actividades(incluye_list)
         excluye_texto = formatear_actividades(excluye_list)
         
-        descripcion = actividad.descripcion or actividad.titulo or f"CIUU {ciuu_code}"
+        if not descripcion:
+            descripcion = f"CIUU {ciuu_code}"
         
-        return {
+        resultado = {
             "codigo": ciuu_code,
             "descripcion": descripcion,
             "incluye": incluye_texto,
@@ -391,10 +367,21 @@ def obtener_contexto_ciuu_inteligente(ciuu_code: str) -> Dict[str, Any]:
             "contexto_completo": f"{descripcion}. INCLUYE: {incluye_texto}. EXCLUYE: {excluye_texto}",
             "fuente": "base_datos"
         }
+        
+        # Guardar en cache para próximas consultas
+        try:
+            from django.core.cache import cache
+            cache_key = f"ciuu_{ciuu_code}"
+            cache.set(cache_key, resultado, timeout=86400 * 7)  # 7 días
+        except Exception:
+            pass  # Si falla el cache, no es crítico
+        
+        return resultado
+        
     except ActividadEconomica.DoesNotExist:
         logger.warning(f"No se encontró CIUU {ciuu_code} en BD, consultando API externa...")
         
-        # Intentar obtener desde API externa
+        # PASO 3: Intentar obtener desde API externa - PUEDE TENER COSTO
         try:
             from .ciiu_service import obtener_o_crear_actividad_economica
             
@@ -428,8 +415,7 @@ def obtener_contexto_ciuu_inteligente(ciuu_code: str) -> Dict[str, Any]:
                 
                 descripcion = actividad.descripcion or actividad.titulo or f"CIUU {ciuu_code}"
                 
-                logger.info(f"✅ CIUU {ciuu_code} obtenido desde API y guardado en BD")
-                return {
+                resultado = {
                     "codigo": ciuu_code,
                     "descripcion": descripcion,
                     "incluye": incluye_texto,
@@ -437,10 +423,99 @@ def obtener_contexto_ciuu_inteligente(ciuu_code: str) -> Dict[str, Any]:
                     "contexto_completo": f"{descripcion}. INCLUYE: {incluye_texto}. EXCLUYE: {excluye_texto}",
                     "fuente": "api_externa"
                 }
+                
+                # Guardar en cache para próximas consultas
+                try:
+                    from django.core.cache import cache
+                    cache_key = f"ciuu_{ciuu_code}"
+                    cache.set(cache_key, resultado, timeout=86400 * 7)  # 7 días
+                except Exception:
+                    pass
+                
+                logger.info(f"✅ CIUU {ciuu_code} obtenido desde API y guardado en BD")
+                return resultado
         except Exception as api_error:
             logger.warning(f"Error consultando API de CIUU para {ciuu_code}: {api_error}")
         
-        # Fallback genérico si todo falla
+        # PASO 4: Procesador PDF con DeepSeek - ÚLTIMO RECURSO (TIENE COSTO)
+        # Solo si NO está en cache, BD ni API
+        try:
+            logger.info(f"🔄 CIUU {ciuu_code} no encontrado en cache/BD/API, intentando procesar desde PDF...")
+            from .ciiu_pdf_processor import CIIUPDFProcessor
+            import os
+            
+            # Buscar PDF en la raíz del proyecto
+            pdf_path = 'CIIU.pdf'
+            if not os.path.exists(pdf_path):
+                # Intentar en la raíz de TNSFULL
+                pdf_path = '../CIIU.pdf'
+                if not os.path.exists(pdf_path):
+                    pdf_path = None
+            
+            if pdf_path and os.path.exists(pdf_path):
+                processor = CIIUPDFProcessor(pdf_path=pdf_path)
+                
+                # Extraer solo el código específico del PDF
+                codigos_extraidos = processor.extraer_codigos_ciuu_del_pdf(target_codigo=ciuu_code)
+                
+                if codigos_extraidos:
+                    # Procesar con DeepSeek (esto tiene costo)
+                    deepseek_results = processor.procesar_lote_con_deepseek(codigos_extraidos)
+                    
+                    if deepseek_results and not any('error' in r for r in deepseek_results):
+                        # Guardar en BD
+                        for result in deepseek_results:
+                            if result.get('codigo') == ciuu_code:
+                                actividad_guardada = processor.guardar_ciiu_en_bd(result)
+                                
+                                if actividad_guardada:
+                                    # Obtener incluye/excluye del JSONField
+                                    incluye_list = actividad_guardada.incluye if actividad_guardada.incluye else []
+                                    excluye_list = actividad_guardada.excluye if actividad_guardada.excluye else []
+                                    
+                                    # Formatear incluye/excluye
+                                    def formatear_actividades(lista):
+                                        if not lista:
+                                            return ""
+                                        textos = []
+                                        for item in lista:
+                                            if isinstance(item, dict):
+                                                desc = item.get('actDescripcion', item.get('descripcion', str(item)))
+                                                textos.append(desc)
+                                            else:
+                                                textos.append(str(item))
+                                        return "\n• ".join(textos) if textos else ""
+                                    
+                                    incluye_texto = formatear_actividades(incluye_list)
+                                    excluye_texto = formatear_actividades(excluye_list)
+                                    
+                                    descripcion = actividad_guardada.descripcion or actividad_guardada.titulo or f"CIUU {ciuu_code}"
+                                    
+                                    resultado = {
+                                        "codigo": ciuu_code,
+                                        "descripcion": descripcion,
+                                        "incluye": incluye_texto,
+                                        "excluye": excluye_texto,
+                                        "incluye_raw": incluye_list,
+                                        "excluye_raw": excluye_list,
+                                        "contexto_completo": f"{descripcion}. INCLUYE: {incluye_texto}. EXCLUYE: {excluye_texto}",
+                                        "fuente": "pdf_deepseek"
+                                    }
+                                    
+                                    # Guardar en cache para próximas consultas
+                                    try:
+                                        from django.core.cache import cache
+                                        cache_key = f"ciuu_{ciuu_code}"
+                                        cache.set(cache_key, resultado, timeout=86400 * 7)  # 7 días
+                                    except Exception:
+                                        pass
+                                    
+                                    logger.info(f"✅ CIUU {ciuu_code} procesado desde PDF con DeepSeek y guardado en BD")
+                                    return resultado
+        except Exception as pdf_error:
+            logger.warning(f"Error procesando CIUU {ciuu_code} desde PDF: {pdf_error}")
+        
+        # PASO 5: Fallback genérico si todo falla - SIN COSTO
         logger.warning(f"Usando fallback genérico para CIUU {ciuu_code}")
         return {
             "codigo": ciuu_code,
@@ -866,6 +941,17 @@ class ClasificadorContableService:
                 {"role": "system", "content": PROMPTS["clasificacion_masiva"]["system"]},
                 {"role": "user", "content": user_content}
             ]
+            
+            # LOGGING COMPLETO DEL PROMPT ENVIADO
+            print("\n" + "="*100)
+            print("🔍 PROMPT COMPLETO ENVIADO A IA")
+            print("="*100)
+            print("\n📋 SYSTEM PROMPT:")
+            print(PROMPTS["clasificacion_masiva"]["system"])
+            print("\n" + "-"*100)
+            print("\n👤 USER PROMPT:")
+            print(user_content)
+            print("\n" + "="*100 + "\n")
             
             data = {
                 "model": "deepseek-chat",

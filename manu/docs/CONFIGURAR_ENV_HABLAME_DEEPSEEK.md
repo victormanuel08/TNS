@@ -9,7 +9,7 @@ Agrega las siguientes variables al archivo `.env` de MANU:
 # ============================================
 # DEEPSEEK API (Para consultas inteligentes)
 # ============================================
-DEEPSEEK_API_KEY=sk-f0ba5a27ac694372aa63ee974237a9b2
+DEEPSEEK_API_KEY=sk
 ```
 
 ### Configuración Hablame (SMS y Llamadas)

@@ -6,7 +6,7 @@ logger = logging.getLogger(__name__)
 
 class DeepSeekIntegrator:
     def __init__(self):
-        self.api_key = getattr(settings, 'DEEPSEEK_API_KEY', 'sk-f0ba5a27ac694372aa63ee974237a9b2')
+        self.api_key = getattr(settings, 'DEEPSEEK_API_KEY', 'sk-xxx')
         self.base_url = "https://api.deepseek.com/chat/completions"
         self.tono_niño = """
         Eres un asistente muy inteligente que trabaja en una empresa de insumos médico-quirúrgicos.

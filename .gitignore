@@ -89,6 +89,10 @@ venv.bak/
 # Modelos de machine learning (no versionar binarios pesados)
 manu/modelos_ml/*.joblib
 
+# PDFs de entrenamiento y procesamiento (no versionar archivos grandes)
+manu/data/**/*.pdf
+!manu/data/.gitkeep
+
 # Carpetas/archivos antiguos o sensibles que no deben ir al VPS
 OLDDATAFONO/
 PASARELADEPAGO/

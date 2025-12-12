@@ -23,6 +23,14 @@ class ScrapingSession(models.Model):
     excel_file = models.FileField(upload_to='dian_exports/', null=True, blank=True)
     json_file = models.FileField(upload_to='dian_exports/', null=True, blank=True)
     zip_file = models.FileField(upload_to='dian_exports/', null=True, blank=True, help_text='ZIP permanente con todos los archivos de la sesión')
+    cliente_api = models.ForeignKey(
+        'sistema_analitico.APIKeyCliente',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='scraping_sessions',
+        help_text='API Key con la que se creó esta sesión'
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     error_message = models.TextField(blank=True)
@@ -195,6 +203,13 @@ class EventoApidianEnviado(models.Model):
         null=True,
         blank=True,
         help_text='Respuesta de la API de APIDIAN si fue exitoso'
+    )
+    cude = models.CharField(
+        max_length=200,
+        blank=True,
+        null=True,
+        db_index=True,
+        help_text='CUDE del acuse recibido de DIAN (si el evento fue exitoso)'
     )
     # Datos del emisor que envió el evento
     emisor_cedula = models.CharField(max_length=20, blank=True)

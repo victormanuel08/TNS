@@ -3,6 +3,7 @@ import re
 import logging
 import os
 import shutil
+import json
 from pathlib import Path
 from rest_framework import viewsets, status
 from rest_framework.decorators import action, permission_classes, authentication_classes
@@ -98,6 +99,20 @@ class ScrapingSessionViewSet(viewsets.ModelViewSet):
     serializer_class = ScrapingSessionSerializer
     permission_classes = [AllowAuthenticatedOrAPIKey]
     
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        
+        # Si hay API Key en el request, filtrar solo las sesiones de esa API Key
+        if hasattr(self.request, 'cliente_api') and self.request.cliente_api:
+            queryset = queryset.filter(cliente_api=self.request.cliente_api)
+            print(f"🔍 [VIEWSET] Filtrando sesiones por API Key: ID={self.request.cliente_api.id}")
+        elif self.request.user.is_authenticated and not self.request.user.is_superuser:
+            # Si es usuario autenticado pero no superusuario, no mostrar nada
+            # (solo superusuarios o API Keys pueden ver sesiones)
+            queryset = queryset.none()
+        
+        return queryset
+    
     @action(detail=True, methods=['post'])
     def start_scraping(self, request, pk=None):
         """Inicia el proceso de scraping para una sesion"""
@@ -118,7 +133,12 @@ class ScrapingSessionViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'])
     def download_excel(self, request, pk=None):
-        """Descarga el archivo Excel generado"""
+        """Descarga el archivo Excel generado, agregando hoja 'Acuses' si hay eventos enviados"""
+        import pandas as pd
+        from openpyxl import load_workbook
+        import io
+        import tempfile
+        
         session = self.get_object()
 
         if not session.excel_file:
@@ -128,11 +148,94 @@ class ScrapingSessionViewSet(viewsets.ModelViewSet):
             )
 
         file_path = session.excel_file.path
-        response = FileResponse(
-            open(file_path, 'rb'),
-            as_attachment=True,
-            filename=f"dian_export_{session.id}.xlsx"
-        )
+        
+        # Verificar si hay eventos enviados para esta sesión
+        eventos = EventoApidianEnviado.objects.filter(session=session).order_by('cufe', 'evento_id')
+        
+        if eventos.exists():
+            # Hay eventos, agregar hoja "Acuses"
+            logger.info(f"📋 [EXCEL] Agregando hoja 'Acuses' con {eventos.count()} eventos")
+            
+            # Leer Excel existente
+            excel_data = pd.read_excel(file_path, sheet_name=None, engine='openpyxl')
+            
+            # Crear estructura de datos para hoja "Acuses"
+            # Obtener todos los CUFEs únicos de los eventos
+            cufes_unicos = sorted(eventos.values_list('cufe', flat=True).distinct())
+            
+            # Crear diccionario: {cufe: {evento_id: resultado}}
+            acuses_data = {}
+            for evento in eventos:
+                cufe = evento.cufe
+                evento_id = evento.evento_id
+                
+                if cufe not in acuses_data:
+                    acuses_data[cufe] = {}
+                
+                # Determinar qué mostrar: CUDE si exitoso, error si fallido
+                if evento.estado == 'exitoso':
+                    # Usar CUDE guardado en el modelo (más rápido que extraer de respuesta_api)
+                    cude = evento.cude
+                    # Si no hay CUDE en el campo, intentar extraer de respuesta_api (backward compatibility)
+                    if not cude and evento.respuesta_api:
+                        if isinstance(evento.respuesta_api, dict):
+                            cude = evento.respuesta_api.get('cude')
+                            if not cude and 'ResponseDian' in evento.respuesta_api:
+                                try:
+                                    result = evento.respuesta_api['ResponseDian']['Envelope']['Body']['SendEventUpdateStatusResponse']['SendEventUpdateStatusResult']
+                                    cude = result.get('XmlDocumentKey') or result.get('cude')
+                                except:
+                                    pass
+                    
+                    acuses_data[cufe][f'Evento {evento_id}'] = cude or '✅ Exitoso (sin CUDE)'
+                else:
+                    # Mostrar mensaje de error
+                    error_msg = evento.error or 'Error desconocido'
+                    # Limitar longitud del error para que quepa en la celda
+                    if len(error_msg) > 200:
+                        error_msg = error_msg[:197] + '...'
+                    acuses_data[cufe][f'Evento {evento_id}'] = f'❌ {error_msg}'
+            
+            # Crear DataFrame para hoja "Acuses"
+            # Columnas: CUFE, Evento 1, Evento 2, ..., Evento 7
+            columnas = ['CUFE'] + [f'Evento {i}' for i in range(1, 8)]
+            filas = []
+            
+            for cufe in cufes_unicos:
+                fila = {'CUFE': cufe}
+                for i in range(1, 8):
+                    fila[f'Evento {i}'] = acuses_data.get(cufe, {}).get(f'Evento {i}', '')
+                filas.append(fila)
+            
+            df_acuses = pd.DataFrame(filas, columns=columnas)
+            
+            # Crear nuevo Excel en memoria con todas las hojas
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                # Escribir hojas existentes
+                for sheet_name, df in excel_data.items():
+                    df.to_excel(writer, sheet_name=sheet_name, index=False)
+                
+                # Agregar hoja "Acuses"
+                df_acuses.to_excel(writer, sheet_name='Acuses', index=False)
+            
+            output.seek(0)
+            response = FileResponse(
+                output,
+                as_attachment=True,
+                filename=f"dian_export_{session.id}.xlsx",
+                content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
+            logger.info(f"✅ [EXCEL] Excel generado con hoja 'Acuses' ({len(filas)} filas)")
+        else:
+            # No hay eventos, descargar Excel original sin modificar
+            response = FileResponse(
+                open(file_path, 'rb'),
+                as_attachment=True,
+                filename=f"dian_export_{session.id}.xlsx"
+            )
+            logger.info(f"📥 [EXCEL] Descargando Excel original (sin eventos)")
+        
         return response
 
     @action(detail=True, methods=['get'])
@@ -204,17 +307,84 @@ class ScrapingSessionViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
         
+        # 🔥 FILTRAR SOLO FACTURAS DE CRÉDITO
+        # Según DIAN: solo se pueden enviar eventos a facturas de crédito
+        # Si hay PaymentMeansCode (10=efectivo, 20=transferencia, 30=cheque, 40=tarjeta, etc.) = CONTADO
+        # Si NO hay PaymentMeans o PaymentMeansCode = CRÉDITO (pago diferido)
+        def es_factura_credito(documento):
+            """Verifica si una factura es de crédito basándose en raw_data"""
+            raw_data = documento.raw_data
+            if not raw_data or not isinstance(raw_data, dict):
+                # Si no hay raw_data, asumir crédito por defecto
+                return True
+            
+            # Buscar PaymentMeansCode en raw_data
+            # Puede estar en diferentes lugares según cómo se parseó el XML
+            payment_means_code = None
+            
+            # Intentar encontrar en diferentes estructuras posibles
+            if 'Metodo de Pago' in raw_data:
+                # Si hay método de pago específico, probablemente es contado
+                metodo = raw_data.get('Metodo de Pago', '')
+                if metodo and metodo.strip():
+                    # Si tiene método de pago específico (efectivo, transferencia, etc.) = CONTADO
+                    return False
+            
+            # Buscar PaymentMeansCode directamente
+            if 'PaymentMeansCode' in raw_data:
+                payment_means_code = raw_data.get('PaymentMeansCode')
+            elif 'payment_method' in raw_data:
+                payment_method = raw_data.get('payment_method')
+                if isinstance(payment_method, dict):
+                    payment_means_code = payment_method.get('code')
+                elif isinstance(payment_method, str):
+                    # Si es string, verificar si es un código numérico
+                    if payment_method.isdigit():
+                        payment_means_code = payment_method
+            
+            # Si hay PaymentMeansCode (10, 20, 30, 40, etc.) = CONTADO
+            # Si NO hay PaymentMeansCode = CRÉDITO
+            if payment_means_code:
+                # Códigos de pago contado: 10=efectivo, 20=transferencia, 30=cheque, 40=tarjeta, etc.
+                codigos_contado = ['10', '20', '30', '40', '41', '42', '2']
+                if str(payment_means_code) in codigos_contado:
+                    return False  # Es contado
+            
+            # Si no hay PaymentMeansCode o no está en la lista de contado = CRÉDITO
+            return True
+        
+        # Filtrar solo facturas de crédito
+        documentos_credito = [doc for doc in documentos if es_factura_credito(doc)]
+        
+        logger.info(f"📊 [ACUSES] Total documentos: {documentos.count()}")
+        logger.info(f"💳 [ACUSES] Documentos de crédito: {len(documentos_credito)}")
+        logger.info(f"💰 [ACUSES] Documentos de contado (filtrados): {documentos.count() - len(documentos_credito)}")
+        
+        if not documentos_credito:
+            return Response(
+                {
+                    'error': 'No se encontraron facturas de crédito en esta sesión. Solo se pueden enviar eventos a facturas de crédito.',
+                    'total_documentos': documentos.count(),
+                    'documentos_credito': 0
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Usar documentos de crédito para el procesamiento
+        documentos_credito_list = documentos_credito
+        
         # 🔥 OBTENER NIT SEGÚN TIPO DE SESIÓN
         # Si es "Received" (recibidos), usar customer_nit
         # Si es "Sent" (enviados), usar supplier_nit
         nit = None
-        primer_documento = documentos.first()
-        if session.tipo == 'Received':
-            nit = primer_documento.customer_nit
-            logger.info(f"📥 [ACUSES] Sesión tipo Received, usando customer_nit: {nit}")
-        else:  # Sent
-            nit = primer_documento.supplier_nit
-            logger.info(f"📤 [ACUSES] Sesión tipo Sent, usando supplier_nit: {nit}")
+        if documentos_credito_list:
+            primer_documento = documentos_credito_list[0]
+            if session.tipo == 'Received':
+                nit = primer_documento.customer_nit
+                logger.info(f"📥 [ACUSES] Sesión tipo Received, usando customer_nit: {nit}")
+            else:  # Sent
+                nit = primer_documento.supplier_nit
+                logger.info(f"📤 [ACUSES] Sesión tipo Sent, usando supplier_nit: {nit}")
         
         if not nit:
             return Response(
@@ -222,101 +392,232 @@ class ScrapingSessionViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # 🔥 OBTENER CREDENCIALES DESDE BCE
-        logger.info(f"🔍 [ACUSES] Obteniendo credenciales para NIT: {nit}")
+        # 🔥 OBTENER CREDENCIALES DIRECTAMENTE DESDE BD APIDIAN (SIN HTTP INTERNO)
+        logger.info(f"🔍 [ACUSES] Obteniendo credenciales directamente desde BD APIDIAN para NIT: {nit}")
+        print("=" * 80)
+        print("🔍 [ACUSES] INICIANDO OBTENCIÓN DE CREDENCIALES")
+        print(f"   NIT: {nit}")
+        print("=" * 80)
+        
+        credenciales_data = None
         try:
-            import requests
-            from django.conf import settings
+            # Importar servicio directamente (sin HTTP)
+            from apidian.services.company_credentials import CompanyCredentialsService
             
-            # URL del backend BCE (configurable)
-            bce_api_url = getattr(settings, 'BCE_API_URL', 'http://localhost:8000')
-            credenciales_url = f"{bce_api_url}/api/dian/obtener-credenciales-por-nit/"
+            service = CompanyCredentialsService()
+            credenciales_data = service.obtener_credenciales_por_nit(nit)
             
-            response_credenciales = requests.post(
-                credenciales_url,
-                json={'nit': nit},
-                timeout=10
-            )
-            
-            if response_credenciales.status_code != 200:
-                logger.warning(f"⚠️ [ACUSES] No se pudieron obtener credenciales desde BCE (status {response_credenciales.status_code})")
-                logger.warning(f"⚠️ [ACUSES] Response text: {response_credenciales.text[:500]}")
+            if not credenciales_data or not credenciales_data.get('encontrado'):
+                logger.warning(f"⚠️ [ACUSES] No se encontraron credenciales para NIT: {nit}")
+                logger.warning(f"⚠️ [ACUSES] Error: {credenciales_data.get('error', 'Desconocido') if credenciales_data else 'Sin respuesta'}")
                 credenciales_data = None
             else:
-                credenciales_data = response_credenciales.json()
-                logger.info(f"✅ [ACUSES] Credenciales obtenidas desde BCE")
+                logger.info(f"✅ [ACUSES] Credenciales obtenidas directamente desde BD APIDIAN")
                 logger.info(f"📋 [ACUSES] Credenciales recibidas (keys): {list(credenciales_data.keys()) if credenciales_data else 'None'}")
-                logger.info(f"📋 [ACUSES] Credenciales completas: {credenciales_data}")
-                # Imprimir literalmente el response de BCE
+                
+                # Imprimir credenciales obtenidas
                 print("=" * 80)
-                print("📥 [ACUSES] RESPONSE EXACTO DE BCE (obtener-credenciales-por-nit):")
-                print(f"Status Code: {response_credenciales.status_code}")
-                print(f"Body: {credenciales_data}")
+                print("📥 [ACUSES] CREDENCIALES OBTENIDAS DESDE BD APIDIAN:")
+                print(f"   - Encontrado: {credenciales_data.get('encontrado')}")
+                print(f"   - NIT: {credenciales_data.get('nit')}")
+                token_raw = credenciales_data.get('token')
+                print(f"   - Token (directo): {'✅' if token_raw else '❌'}")
+                if token_raw:
+                    print(f"      Valor: {token_raw[:30]}... (longitud: {len(token_raw)})")
+                else:
+                    print(f"      Token es None o vacío")
+                if credenciales_data.get('user'):
+                    user = credenciales_data.get('user')
+                    print(f"   - User Name: {user.get('name', 'N/A')}")
+                    print(f"   - User Email: {user.get('email', 'N/A')}")
+                    print(f"   - User Razón Social: {user.get('razon_social', 'N/A')}")
+                    user_token = user.get('apitoken')
+                    print(f"   - User API Token: {'✅' if user_token else '❌'}")
+                    if user_token:
+                        print(f"      Valor: {user_token[:30]}... (longitud: {len(user_token)})")
+                    else:
+                        print(f"      User API Token es None o vacío")
+                else:
+                    print(f"   - User: ❌ (no existe)")
+                if credenciales_data.get('company'):
+                    company = credenciales_data.get('company')
+                    print(f"   - Company Name: {company.get('name', 'N/A')}")
+                    print(f"   - Company ID: {company.get('id', 'N/A')}")
+                print(f"   - Software ID: {credenciales_data.get('softwareidfacturacion', 'N/A')}")
+                print(f"   - Resolutions: {len(credenciales_data.get('resolutions', []))}")
                 print("=" * 80)
+        except ImportError as e:
+            logger.error(f"❌ [ACUSES] Error importando CompanyCredentialsService: {e}")
+            print("=" * 80)
+            print("❌ [ACUSES] ERROR IMPORTANDO SERVICIO:")
+            print(f"   {str(e)}")
+            print("=" * 80)
+            credenciales_data = None
         except Exception as e:
-            logger.warning(f"⚠️ [ACUSES] Error obteniendo credenciales desde BCE: {e}, usando valores por defecto")
+            logger.error(f"❌ [ACUSES] Error obteniendo credenciales: {e}")
+            import traceback
+            traceback.print_exc()
+            print("=" * 80)
+            print("❌ [ACUSES] ERROR OBTENIENDO CREDENCIALES:")
+            print(f"   {str(e)}")
+            print("=" * 80)
             credenciales_data = None
         
-        # 🔥 LLENAR PAYLOAD AUTOMÁTICAMENTE
-        # identification_number: el NIT
-        # first_name: "Pasante"
-        # last_name: u.name recortado a 15 caracteres máximo
-        # organization_department: "CONTABILIDAD"
-        # job_title: "Aux Contable"
+        # 🔥 LLENAR PAYLOAD AUTOMÁTICAMENTE CON DATOS DE EMPRESA/USUARIO
+        # Usar datos de credenciales para llenar automáticamente el payload
+        print("=" * 80)
+        print("👤 [ACUSES] LLENANDO PAYLOAD CON DATOS DE EMPRESA/USUARIO")
+        print("=" * 80)
         
-        user_name = credenciales_data.get('user', {}).get('name', '') if credenciales_data else ''
-        last_name = user_name[:15] if user_name else ''
+        # Extraer datos del usuario desde credenciales
+        user_name = ''
+        user_email = ''
+        user_razon_social = ''
+        if credenciales_data and credenciales_data.get('user'):
+            user = credenciales_data.get('user')
+            user_name = user.get('name', '') or ''
+            user_email = user.get('email', '') or ''
+            user_razon_social = user.get('razon_social', '') or ''
+            logger.info(f"👤 [ACUSES] Datos de usuario obtenidos:")
+            logger.info(f"   - Name: {user_name}")
+            logger.info(f"   - Email: {user_email}")
+            logger.info(f"   - Razón Social: {user_razon_social}")
+            print(f"   👤 Usuario encontrado:")
+            print(f"      - Nombre: {user_name}")
+            print(f"      - Email: {user_email}")
+            print(f"      - Razón Social: {user_razon_social}")
         
+        # Extraer datos de la empresa desde credenciales
+        company_name = ''
+        if credenciales_data and credenciales_data.get('company'):
+            company = credenciales_data.get('company')
+            company_name = company.get('name', '') or ''
+            logger.info(f"🏢 [ACUSES] Datos de empresa obtenidos:")
+            logger.info(f"   - Name: {company_name}")
+            print(f"   🏢 Empresa encontrada:")
+            print(f"      - Nombre: {company_name}")
+        
+        # Procesar nombre del usuario para extraer primer_nombre y segundo_nombre
+        # Si el nombre tiene espacios, dividir en primer y segundo nombre
+        nombres_parts = user_name.strip().split() if user_name else []
+        primer_nombre_auto = nombres_parts[0] if len(nombres_parts) > 0 else ''
+        segundo_nombre_auto = ' '.join(nombres_parts[1:])[:15] if len(nombres_parts) > 1 else ''
+        
+        # Llenar payload con prioridad: datos del request > datos de credenciales > valores por defecto
         cedula = datos.get('cedula') or nit  # Si no se proporciona, usar el NIT
-        primer_nombre = datos.get('primer_nombre') or 'Pasante'
-        segundo_nombre = datos.get('segundo_nombre', '')
+        primer_nombre = datos.get('primer_nombre') or primer_nombre_auto or 'Pasante'
+        segundo_nombre = datos.get('segundo_nombre') or segundo_nombre_auto
         departamento = datos.get('departamento') or 'CONTABILIDAD'
         cargo = datos.get('cargo') or 'Aux Contable'
         
-        # Si se obtuvo last_name desde credenciales, usarlo
-        if credenciales_data and not datos.get('segundo_nombre'):
-            segundo_nombre = last_name
+        logger.info(f"📋 [ACUSES] Payload final (prioridad: request > credenciales > default):")
+        logger.info(f"   - identification_number (cedula): {cedula}")
+        logger.info(f"   - first_name (primer_nombre): {primer_nombre}")
+        logger.info(f"   - last_name (segundo_nombre): {segundo_nombre}")
+        logger.info(f"   - organization_department: {departamento}")
+        logger.info(f"   - job_title (cargo): {cargo}")
         
-                    # 🔥 OBTENER API TOKEN DESDE CREDENCIALES
+        print(f"   📋 Payload final:")
+        print(f"      - identification_number: {cedula}")
+        print(f"      - first_name: {primer_nombre}")
+        print(f"      - last_name: {segundo_nombre}")
+        print(f"      - organization_department: {departamento}")
+        print(f"      - job_title: {cargo}")
+        print("=" * 80)
+        
+        # 🔥 OBTENER API TOKEN DESDE CREDENCIALES (PARA ENVIAR EVENTOS A DIAN)
+        print("=" * 80)
+        print("🔑 [ACUSES] OBTENIENDO API TOKEN PARA EVENTOS DIAN")
+        print("=" * 80)
+        
         api_token = None
         if credenciales_data:
-            api_token = credenciales_data.get('api_token') or credenciales_data.get('token')
-            logger.info(f"🔑 [ACUSES] API Token desde credenciales: {'✅' if api_token else '❌'}")
+            # El servicio CompanyCredentialsService devuelve:
+            # - 'token': user_data.get('apitoken')
+            # - 'user.apitoken': también disponible
+            print(f"   🔍 Buscando token en credenciales_data...")
+            print(f"   📋 Keys disponibles en credenciales_data: {list(credenciales_data.keys())}")
+            
+            # Intentar obtener token desde múltiples ubicaciones posibles
+            api_token = credenciales_data.get('token')  # Primera opción: token directo
+            print(f"   🔍 1. credenciales_data.get('token'): {'✅' if api_token else '❌'}")
             if api_token:
-                logger.info(f"🔑 [ACUSES] API Token (primeros 10 chars): {api_token[:10]}...")
+                print(f"      Valor: {api_token[:30]}... (longitud: {len(api_token)})")
+            
+            if not api_token:
+                # Segunda opción: desde user.apitoken
+                user_data = credenciales_data.get('user')
+                print(f"   🔍 2. Verificando user.apitoken...")
+                print(f"      user existe: {'✅' if user_data else '❌'}")
+                if user_data:
+                    print(f"      Keys en user: {list(user_data.keys())}")
+                    api_token = user_data.get('apitoken')
+                    print(f"      user.apitoken: {'✅' if api_token else '❌'}")
+                    if api_token:
+                        print(f"      Valor: {api_token[:30]}... (longitud: {len(api_token)})")
+                    else:
+                        # Mostrar todos los valores de user para debug
+                        print(f"      Contenido completo de user:")
+                        for key, value in user_data.items():
+                            if key == 'apitoken':
+                                print(f"         - {key}: {value} (longitud: {len(str(value)) if value else 0})")
+                            else:
+                                print(f"         - {key}: {str(value)[:50] if value else None}")
+                else:
+                    print(f"      ⚠️ user es None, no se puede obtener apitoken")
+            
+            # Validar que el token no esté vacío
+            if api_token and isinstance(api_token, str) and api_token.strip():
+                api_token = api_token.strip()
+                logger.info(f"🔑 [ACUSES] API Token obtenido desde credenciales: ✅")
+                logger.info(f"🔑 [ACUSES] API Token (primeros 30 chars): {api_token[:30]}...")
+                logger.info(f"🔑 [ACUSES] API Token (longitud total): {len(api_token)} caracteres")
+                print(f"   ✅ Token obtenido correctamente:")
+                print(f"      - Primeros 30 chars: {api_token[:30]}...")
+                print(f"      - Longitud: {len(api_token)} caracteres")
             else:
-                logger.warning(f"⚠️ [ACUSES] No se encontró api_token en credenciales_data")
+                api_token = None  # Asegurar que sea None si está vacío
+                logger.warning(f"⚠️ [ACUSES] Token obtenido pero está vacío o inválido")
                 logger.warning(f"⚠️ [ACUSES] Keys disponibles en credenciales_data: {list(credenciales_data.keys()) if credenciales_data else 'None'}")
+                if credenciales_data.get('user'):
+                    logger.warning(f"⚠️ [ACUSES] Keys en user: {list(credenciales_data.get('user', {}).keys())}")
+                print(f"   ❌ Token no encontrado o vacío")
+        else:
+            logger.warning(f"⚠️ [ACUSES] credenciales_data es None, no se puede obtener token")
+            print(f"   ❌ credenciales_data es None")
         
         # Si no hay token desde credenciales, usar el del settings
         if not api_token:
             api_token = getattr(settings, 'TOKEN_API_DIAN_BASIC', '')
-            logger.info(f"🔑 [ACUSES] Usando TOKEN_API_DIAN_BASIC del settings: {'✅' if api_token else '❌'}")
+            if api_token and isinstance(api_token, str) and api_token.strip():
+                api_token = api_token.strip()
+                logger.info(f"🔑 [ACUSES] Usando TOKEN_API_DIAN_BASIC del settings: ✅")
+                logger.info(f"🔑 [ACUSES] Token desde settings (primeros 30 chars): {api_token[:30]}...")
+                logger.info(f"🔑 [ACUSES] Token desde settings (longitud): {len(api_token)} caracteres")
+                print(f"   ✅ Token desde settings:")
+                print(f"      - Primeros 30 chars: {api_token[:30]}...")
+                print(f"      - Longitud: {len(api_token)} caracteres")
+            else:
+                api_token = None
+                logger.warning(f"⚠️ [ACUSES] TOKEN_API_DIAN_BASIC del settings está vacío o no existe")
+                print(f"   ❌ Token desde settings: no disponible")
         
-        logger.info(f"🔑 [ACUSES] API Token final: {'✅' if api_token else '❌'}")
-        logger.info(f"👤 [ACUSES] Payload automático:")
-        logger.info(f"   - identification_number: {cedula}")
-        logger.info(f"   - first_name: {primer_nombre}")
-        logger.info(f"   - last_name: {segundo_nombre}")
-        logger.info(f"   - organization_department: {departamento}")
-        logger.info(f"   - job_title: {cargo}")
-        
-        # 🔥 VERIFICAR VENCIMIENTOS Y ENVIAR EMAIL SI ES NECESARIO
-        if credenciales_data:
-            try:
-                # Llamar al método de verificación de vencimientos en BCE
-                email_backend = getattr(settings, 'EMAIL_HOST_USER', None)
-                vencimientos_url = f"{bce_api_url}/api/dian/verificar-vencimientos/"
-                requests.post(
-                    vencimientos_url,
-                    json={
-                        'credenciales': credenciales_data,
-                        'email_backend': email_backend
-                    },
-                    timeout=10
-                )
-            except Exception as e:
-                logger.warning(f"⚠️ [ACUSES] Error verificando vencimientos: {e}")
+        # Validación final del token
+        if not api_token:
+            logger.error(f"❌ [ACUSES] NO HAY TOKEN DISPONIBLE PARA ENVIAR EVENTOS A DIAN")
+            logger.error(f"❌ [ACUSES] Los eventos NO se podrán enviar sin token")
+            print("=" * 80)
+            print("❌ [ACUSES] ERROR CRÍTICO: NO HAY TOKEN DISPONIBLE")
+            print("   Los eventos NO se podrán enviar a DIAN sin un token válido")
+            print("=" * 80)
+        else:
+            logger.info(f"✅ [ACUSES] API Token final validado: ✅ (longitud: {len(api_token)} chars)")
+            print("=" * 80)
+            print(f"✅ [ACUSES] TOKEN FINAL VALIDADO:")
+            print(f"   - Primeros 30 chars: {api_token[:30]}...")
+            print(f"   - Longitud: {len(api_token)} caracteres")
+            print(f"   - Se usará en header: Authorization: Bearer {api_token[:30]}...")
+            print("=" * 80)
         
         # Diccionario de eventos
         eventos_nombres = {
@@ -339,10 +640,10 @@ class ScrapingSessionViewSet(viewsets.ModelViewSet):
         fallidos = 0
         
         logger.info(f"🔄 Iniciando generación de acuses para sesión {session.id}")
-        logger.info(f"📊 Documentos a procesar: {documentos.count()}")
+        logger.info(f"📊 Documentos a procesar: {len(documentos_credito_list)}")
         logger.info(f"📋 Eventos seleccionados: {[eventos_nombres.get(e, f'Evento {e}') for e in eventos_ids]}")
         
-        for documento in documentos:
+        for documento in documentos_credito_list:
             cufe = documento.cufe.strip()
             if not cufe:
                 continue
@@ -351,173 +652,271 @@ class ScrapingSessionViewSet(viewsets.ModelViewSet):
                 total_procesados += 1
                 
                 try:
-                    # Obtener el XML del documento desde el archivo físico
-                    xml_content = None
-                    xml_filename = None
-                    
-                    # Construir ruta esperada del XML en dian_facturas/session_{session_id}/
-                    from pathlib import Path
-                    from django.conf import settings
-                    import os
-                    
-                    facturas_dir = Path(settings.MEDIA_ROOT) / 'dian_facturas' / f'session_{session.id}'
-                    
-                    # Buscar el XML por nombre esperado: {nit_emisor}_{prefijo}_{numero}.xml
-                    supplier_nit = documento.supplier_nit or ''
-                    customer_nit = documento.customer_nit or ''
-                    # Determinar NIT emisor según tipo de sesión
-                    nit_emisor = supplier_nit if session.tipo == 'Received' else customer_nit
-                    
-                    # Intentar construir nombre de archivo desde raw_data
-                    raw_data = documento.raw_data or {}
-                    prefix = raw_data.get('prefix', '')
-                    number = raw_data.get('number', '')
-                    
-                    if prefix and number:
-                        xml_filename_esperado = f"{nit_emisor}_{prefix}_{number}.xml"
-                        xml_path = facturas_dir / xml_filename_esperado
-                        
-                        if xml_path.exists():
-                            try:
-                                with open(xml_path, 'rb') as f:
-                                    xml_content = f.read()
-                                xml_filename = xml_filename_esperado
-                                logger.debug(f"✅ XML encontrado: {xml_filename_esperado}")
-                            except Exception as e:
-                                logger.warning(f"⚠️ Error leyendo XML {xml_filename_esperado}: {e}")
-                    
-                    # Si no se encontró, buscar cualquier XML que contenga el CUFE en el nombre
-                    if not xml_content and facturas_dir.exists():
-                        for xml_file in facturas_dir.glob("*.xml"):
-                            try:
-                                # Leer el XML y verificar si contiene el CUFE
-                                with open(xml_file, 'rb') as f:
-                                    content = f.read()
-                                if cufe.encode('utf-8') in content or cufe[:20].encode('utf-8') in content:
-                                    xml_content = content
-                                    xml_filename = xml_file.name
-                                    logger.debug(f"✅ XML encontrado por CUFE: {xml_filename}")
-                                    break
-                            except Exception as e:
-                                logger.warning(f"⚠️ Error leyendo XML {xml_file.name}: {e}")
-                    
-                    # Si aún no hay XML, intentar desde raw_data (si tiene el XML completo)
-                    if not xml_content and raw_data:
-                        # Algunos sistemas guardan el XML completo en raw_data
-                        xml_str = raw_data.get('xml_content') or raw_data.get('xml')
-                        if xml_str:
-                            xml_content = xml_str.encode('utf-8') if isinstance(xml_str, str) else xml_str
-                            xml_filename = f"documento_{cufe[:20]}.xml"
-                            logger.debug(f"✅ XML obtenido desde raw_data")
-                    
-                    # Si no hay XML, no podemos enviar el evento
-                    if not xml_content:
-                        raise ValueError(f"No se encontró contenido XML para el documento con CUFE {cufe[:20]}... (Buscado en {facturas_dir})")
-                    
-                    # Convertir a base64
-                    import base64
-                    if isinstance(xml_content, str):
-                        xml_base64 = base64.b64encode(xml_content.encode('utf-8')).decode('utf-8')
-                    else:
-                        xml_base64 = base64.b64encode(xml_content).decode('utf-8')
-                    
-                    # Construir payload según formato requerido por APIDIAN
+                    # 🔥 CONSTRUIR PAYLOAD SEGÚN FORMATO DE evento.py (send-event-data)
+                    # NO enviamos XML, solo CUFE y datos del emisor (igual que evento.py)
                     payload = {
-                        "event_id": evento_id,
-                        "allow_cash_documents": False,
-                        "sendmail": False,
-                        "base64_attacheddocument_name": xml_filename or f"documento_{cufe[:20]}.xml",
-                        "base64_attacheddocument": xml_base64,
-                        "type_rejection_id": None,
-                        "resend_consecutive": False
+                        "event_id": str(evento_id),
+                        "document_reference": {
+                            "cufe": cufe
+                        },
+                        "issuer_party": {
+                            "identification_number": cedula,
+                            "first_name": primer_nombre,
+                            "last_name": segundo_nombre,
+                            "organization_department": departamento,
+                            "job_title": cargo
+                        }
                     }
                     
                     logger.info(f"📤 [ACUSES] Enviando evento {evento_id} para CUFE {cufe[:20]}...")
                     
                     # Enviar a APIDIAN usando requests directamente
                     import requests
-                    from django.conf import settings
+                    # settings ya está importado arriba, no reimportar aquí
                     
+                    # 🔥 CONSTRUIR URL CORRECTA: base hasta :81, luego /api/ubl2.1/send-event-data
                     apidian_url = getattr(settings, 'API_DIAN_ROUTE', 'http://45.149.204.184:81')
-                    send_event_url = f"{apidian_url}/api/ubl2.1/send-event"
+                    # Limpiar URL base (solo hasta :81, sin paths adicionales)
+                    apidian_url = apidian_url.rstrip('/')
+                    # Si la URL tiene paths después del puerto, quitarlos (ej: si es http://host:81/api/ubl2.1, dejar solo http://host:81)
+                    if '/api' in apidian_url:
+                        apidian_url = apidian_url.split('/api')[0].rstrip('/')
+                    # Construir endpoint completo: base + /api/ubl2.1/send-event-data
+                    send_event_url = f"{apidian_url}/api/ubl2.1/send-event-data"
                     
-                    # Usar el api_token obtenido desde credenciales
+                    # Usar el api_token obtenido desde credenciales (ya validado arriba)
                     token = api_token
                     
+                    # Validar que el token esté disponible antes de enviar
+                    if not token or not isinstance(token, str) or not token.strip():
+                        error_msg = "❌ No hay token disponible para enviar evento a DIAN"
+                        logger.error(f"{error_msg}")
+                        print("=" * 80)
+                        print(f"❌ [ACUSES] ERROR: {error_msg}")
+                        print(f"   Evento {evento_id} - CUFE: {cufe[:20]}...")
+                        print("=" * 80)
+                        resultados.append({
+                            'documento_id': documento.id,
+                            'cufe': cufe,
+                            'evento_id': evento_id,
+                            'evento_nombre': eventos_nombres.get(evento_id, f'Evento {evento_id}'),
+                            'estado': 'fallido',
+                            'error': error_msg,
+                            'cude': None,
+                            'fecha_envio': None
+                        })
+                        fallidos += 1
+                        continue
+                    
+                    # Construir headers con el token validado
                     headers = {
                         'Content-Type': 'application/json',
-                        'Accept': 'application/json',
-                        'Authorization': f'Bearer {token}' if token else ''
+                        'accept': 'application/json',
+                        'Authorization': f'Bearer {token}'
                     }
                     
                     # 🔥 LOGGING DETALLADO DEL REQUEST
+                    print("=" * 80)
+                    print(f"📤 [ACUSES] REQUEST #{total_procesados} - EVENTO {evento_id} A APIDIAN:")
+                    print(f"🌐 URL: {send_event_url}")
+                    print(f"🔑 Token (primeros 30 chars): {token[:30]}...")
+                    print(f"🔑 Token (longitud): {len(token)} caracteres")
+                    print(f"🔑 Header Authorization: Bearer {token[:30]}...")
+                    print(f"📋 Headers completos:")
+                    print(json.dumps(headers, indent=2, ensure_ascii=False))
+                    print(f"📦 Payload completo:")
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                    print("=" * 80)
+                    
                     logger.info(f"🌐 [ACUSES] URL APIDIAN: {send_event_url}")
-                    logger.info(f"🔑 [ACUSES] Token usado (primeros 10 chars): {token[:10] if token else 'NO HAY TOKEN'}...")
-                    logger.info(f"📋 [ACUSES] Payload enviado (sin base64):")
-                    payload_log = payload.copy()
-                    if 'base64_attacheddocument' in payload_log:
-                        payload_log['base64_attacheddocument'] = f"[BASE64: {len(payload['base64_attacheddocument'])} chars]"
-                    logger.info(f"   {payload_log}")
+                    logger.info(f"🔑 [ACUSES] Token usado (primeros 30 chars): {token[:30]}...")
+                    logger.info(f"🔑 [ACUSES] Token usado (longitud): {len(token)} caracteres")
+                    logger.info(f"📋 [ACUSES] Headers: {headers}")
+                    logger.info(f"📋 [ACUSES] Payload completo:")
+                    logger.info(json.dumps(payload, indent=2, ensure_ascii=False))
                     
                     response = requests.post(
                         send_event_url,
                         json=payload,
                         headers=headers,
-                        timeout=30
+                        timeout=60
                     )
                     
                     # 🔥 LOGGING DETALLADO DEL RESPONSE
+                    print("=" * 80)
+                    print("📥 [ACUSES] RESPONSE COMPLETO DE APIDIAN:")
+                    print(f"Status Code: {response.status_code}")
+                    print(f"Headers: {json.dumps(dict(response.headers), indent=2)}")
+                    print(f"Response Text (primeros 1000 chars): {response.text[:1000]}")
+                    
+                    try:
+                        resultado_api = response.json()
+                        print(f"Response Body (JSON):")
+                        print(json.dumps(resultado_api, indent=2, ensure_ascii=False))
+                    except Exception as e:
+                        resultado_api = {'raw_text': response.text}
+                        print(f"❌ Error parseando JSON: {e}")
+                        print(f"Response Text completo: {response.text}")
+                    
+                    print("=" * 80)
+                    
                     logger.info(f"📥 [ACUSES] Response Status Code: {response.status_code}")
                     logger.info(f"📥 [ACUSES] Response Headers: {dict(response.headers)}")
+                    logger.info(f"📥 [ACUSES] Response Text (primeros 1000 chars): {response.text[:1000]}")
                     
                     try:
                         resultado_api = response.json()
                         logger.info(f"📥 [ACUSES] Response Body (JSON):")
-                        logger.info(f"   {resultado_api}")
+                        logger.info(json.dumps(resultado_api, indent=2, ensure_ascii=False))
                     except Exception as e:
                         resultado_api = {'raw_text': response.text}
                         logger.error(f"❌ [ACUSES] Error parseando JSON del response: {e}")
-                        logger.error(f"❌ [ACUSES] Response Text (primeros 500 chars): {response.text[:500]}")
+                        logger.error(f"❌ [ACUSES] Response Text completo: {response.text}")
                     
-                    # Imprimir el response completo literalmente
-                    print("=" * 80)
-                    print("📥 [ACUSES] RESPONSE EXACTO DE APIDIAN:")
-                    print(f"Status Code: {response.status_code}")
-                    print(f"Headers: {dict(response.headers)}")
-                    print(f"Body: {resultado_api}")
-                    print("=" * 80)
+                    # 🔥 VERIFICAR ÉXITO SEGÚN FORMATO DE evento.py
+                    # evento.py verifica response_data.get('success')
+                    # PERO TAMBIÉN debemos verificar IsValid de DIAN para saber si realmente aceptó el evento
+                    es_exitoso = False
+                    error_msg_dian = None
+                    if response.status_code == 200:
+                        try:
+                            if isinstance(resultado_api, dict):
+                                # Primero verificar que APIDIAN procesó la petición
+                                apidian_success = resultado_api.get('success', False)
+                                
+                                # Luego verificar que DIAN aceptó el evento
+                                dian_is_valid = None
+                                if 'ResponseDian' in resultado_api:
+                                    try:
+                                        result = resultado_api['ResponseDian']['Envelope']['Body']['SendEventUpdateStatusResponse']['SendEventUpdateStatusResult']
+                                        dian_is_valid = result.get('IsValid', None)
+                                        status_code = result.get('StatusCode', 'N/A')
+                                        status_desc = result.get('StatusDescription', 'N/A')
+                                        status_msg = result.get('StatusMessage', 'N/A')
+                                        
+                                        # Capturar mensaje de error si existe
+                                        if 'ErrorMessage' in result:
+                                            error_obj = result.get('ErrorMessage', {})
+                                            if isinstance(error_obj, dict) and 'string' in error_obj:
+                                                error_msg_dian = error_obj.get('string', '')
+                                            elif isinstance(error_obj, str):
+                                                error_msg_dian = error_obj
+                                        
+                                        logger.info(f"🏛️ [ACUSES] Estado DIAN:")
+                                        logger.info(f"   - IsValid: {dian_is_valid}")
+                                        logger.info(f"   - StatusCode: {status_code}")
+                                        logger.info(f"   - StatusDescription: {status_desc}")
+                                        logger.info(f"   - StatusMessage: {status_msg}")
+                                        if error_msg_dian:
+                                            logger.warning(f"   - ErrorMessage: {error_msg_dian}")
+                                        
+                                        print("=" * 80)
+                                        print(f"🏛️ [ACUSES] ESTADO DIAN:")
+                                        print(f"   - IsValid: {dian_is_valid}")
+                                        print(f"   - StatusCode: {status_code}")
+                                        print(f"   - StatusDescription: {status_desc}")
+                                        print(f"   - StatusMessage: {status_msg}")
+                                        if error_msg_dian:
+                                            print(f"   - ErrorMessage: {error_msg_dian}")
+                                        print("=" * 80)
+                                    except Exception as e:
+                                        logger.warning(f"⚠️ [ACUSES] No se pudo extraer IsValid de ResponseDian: {e}")
+                                        print(f"⚠️ [ACUSES] No se pudo extraer IsValid de ResponseDian: {e}")
+                                
+                                # El evento es exitoso SOLO si:
+                                # 1. APIDIAN procesó la petición (success = true)
+                                # 2. DIAN aceptó el evento (IsValid = "true")
+                                if apidian_success:
+                                    if dian_is_valid is not None:
+                                        # Si tenemos respuesta de DIAN, verificar IsValid
+                                        es_exitoso = (dian_is_valid == "true" or dian_is_valid is True)
+                                        if es_exitoso:
+                                            logger.info(f"✅ [ACUSES] Evento {evento_id} exitoso: APIDIAN procesó y DIAN aceptó")
+                                            # Capturar CUDE si existe
+                                            if 'cude' in resultado_api:
+                                                logger.info(f"🔑 [ACUSES] CUDE recibido: {resultado_api['cude']}")
+                                                print(f"🔑 [ACUSES] CUDE recibido: {resultado_api['cude']}")
+                                        else:
+                                            logger.warning(f"⚠️ [ACUSES] Evento {evento_id} rechazado por DIAN: IsValid={dian_is_valid}")
+                                            print(f"⚠️ [ACUSES] Evento {evento_id} rechazado por DIAN: IsValid={dian_is_valid}")
+                                            if error_msg_dian:
+                                                logger.warning(f"💬 [ACUSES] Mensaje de rechazo DIAN: {error_msg_dian}")
+                                                print(f"💬 [ACUSES] Mensaje de rechazo DIAN: {error_msg_dian}")
+                                    else:
+                                        # Si no hay ResponseDian, confiar en success de APIDIAN
+                                        es_exitoso = True
+                                        logger.info(f"✅ [ACUSES] Evento {evento_id} exitoso según campo 'success' (sin ResponseDian)")
+                                        if 'cude' in resultado_api:
+                                            logger.info(f"🔑 [ACUSES] CUDE recibido: {resultado_api['cude']}")
+                                else:
+                                    logger.warning(f"⚠️ [ACUSES] Evento {evento_id} falló según campo 'success': False")
+                                    error_msg = resultado_api.get('message', 'Error desconocido')
+                                    logger.warning(f"💬 [ACUSES] Mensaje de error: {error_msg}")
+                                    print(f"⚠️ [ACUSES] Evento {evento_id} falló según campo 'success': False")
+                                    print(f"💬 [ACUSES] Mensaje de error: {error_msg}")
+                        except Exception as e:
+                            logger.error(f"❌ [ACUSES] Error verificando éxito: {e}")
+                            import traceback
+                            traceback.print_exc()
+                            print(f"❌ [ACUSES] Error verificando éxito: {e}")
                     
                     response.raise_for_status()
                     
-                    # Guardar en BD
-                    EventoApidianEnviado.objects.update_or_create(
-                        session=session,
-                        cufe=cufe,
-                        evento_id=evento_id,
-                        defaults={
-                            'documento': documento,
+                    # Guardar en BD solo si fue exitoso
+                    if es_exitoso:
+                        # Extraer CUDE de la respuesta
+                        cude_recibido = None
+                        if isinstance(resultado_api, dict):
+                            # Intentar obtener CUDE directamente
+                            cude_recibido = resultado_api.get('cude')
+                            # Si no está directamente, buscar en ResponseDian
+                            if not cude_recibido and 'ResponseDian' in resultado_api:
+                                try:
+                                    result = resultado_api['ResponseDian']['Envelope']['Body']['SendEventUpdateStatusResponse']['SendEventUpdateStatusResult']
+                                    cude_recibido = result.get('XmlDocumentKey') or result.get('cude')
+                                except:
+                                    pass
+                        
+                        EventoApidianEnviado.objects.update_or_create(
+                            session=session,
+                            cufe=cufe,
+                            evento_id=evento_id,
+                            defaults={
+                                'documento': documento,
+                                'evento_nombre': eventos_nombres.get(evento_id, f'Evento {evento_id}'),
+                                'estado': 'exitoso',
+                                'error': None,
+                                'respuesta_api': resultado_api,
+                                'cude': cude_recibido,  # Guardar CUDE como campo separado
+                                'emisor_cedula': cedula,
+                                'emisor_primer_nombre': primer_nombre,
+                                'emisor_segundo_nombre': segundo_nombre,
+                                'emisor_departamento': departamento,
+                                'emisor_cargo': cargo,
+                            }
+                        )
+                        
+                        exitosos += 1
+                        resultados.append({
+                            'cufe': cufe,
+                            'evento_id': evento_id,
                             'evento_nombre': eventos_nombres.get(evento_id, f'Evento {evento_id}'),
                             'estado': 'exitoso',
-                            'error': None,
-                            'respuesta_api': resultado_api,
-                            'emisor_cedula': cedula,
-                            'emisor_primer_nombre': primer_nombre,
-                            'emisor_segundo_nombre': segundo_nombre,
-                            'emisor_departamento': departamento,
-                            'emisor_cargo': cargo,
-                        }
-                    )
-                    
-                    exitosos += 1
-                    resultados.append({
-                        'cufe': cufe,
-                        'evento_id': evento_id,
-                        'evento_nombre': eventos_nombres.get(evento_id, f'Evento {evento_id}'),
-                        'estado': 'exitoso',
-                        'respuesta': resultado_api
-                    })
-                    
-                    logger.info(f"✅ Evento {evento_id} enviado exitosamente para CUFE {cufe[:20]}...")
+                            'respuesta': resultado_api
+                        })
+                        
+                        logger.info(f"✅ Evento {evento_id} enviado exitosamente para CUFE {cufe[:20]}...")
+                    else:
+                        # Si no fue exitoso, guardar como fallido
+                        # Priorizar mensaje de error de DIAN si existe
+                        if error_msg_dian:
+                            error_msg = f"DIAN rechazó el evento: {error_msg_dian}"
+                        else:
+                            error_msg = resultado_api.get('message', 'Evento no exitoso según respuesta') if isinstance(resultado_api, dict) else 'Respuesta inesperada'
+                        
+                        logger.error(f"❌ [ACUSES] Evento {evento_id} falló: {error_msg}")
+                        print(f"❌ [ACUSES] Evento {evento_id} falló: {error_msg}")
+                        raise Exception(error_msg)
                     
                     # Pequeña pausa entre envíos para no sobrecargar
                     time.sleep(0.5)
@@ -632,6 +1031,7 @@ class ScrapingSessionViewSet(viewsets.ModelViewSet):
                 'evento_nombre': e.evento_nombre,
                 'estado': e.estado,
                 'error': e.error,
+                'cude': e.cude,  # Agregar CUDE
                 'fecha_envio': e.fecha_envio.isoformat() if e.fecha_envio else None,
                 'emisor': {
                     'cedula': e.emisor_cedula,
@@ -640,6 +1040,72 @@ class ScrapingSessionViewSet(viewsets.ModelViewSet):
                     'cargo': e.emisor_cargo
                 }
             } for e in eventos]
+        })
+    
+    @action(detail=True, methods=['get'])
+    def estadisticas_credito_contado(self, request, pk=None):
+        """
+        Obtiene estadísticas de facturas de crédito vs contado para esta sesión.
+        Retorna conteos y información sobre acuses.
+        """
+        session = self.get_object()
+        
+        # Obtener todos los documentos de la sesión
+        documentos = DocumentProcessed.objects.filter(
+            session=session,
+            cufe__isnull=False
+        ).exclude(cufe='')
+        
+        # Función para determinar si es crédito (misma lógica que en generar_acuses)
+        def es_factura_credito(doc):
+            raw_data = doc.raw_data
+            if not raw_data or not isinstance(raw_data, dict):
+                return True  # Por defecto crédito
+            
+            payment_means_code = None
+            if 'Metodo de Pago' in raw_data:
+                metodo = raw_data.get('Metodo de Pago', '')
+                if metodo and metodo.strip():
+                    return False
+            
+            if 'PaymentMeansCode' in raw_data:
+                payment_means_code = raw_data.get('PaymentMeansCode')
+            elif 'payment_method' in raw_data:
+                payment_method = raw_data.get('payment_method')
+                if isinstance(payment_method, dict):
+                    payment_means_code = payment_method.get('code')
+                elif isinstance(payment_method, str) and payment_method.isdigit():
+                    payment_means_code = payment_method
+            
+            if payment_means_code:
+                codigos_contado = ['10', '20', '30', '40', '41', '42', '2']
+                if str(payment_means_code) in codigos_contado:
+                    return False
+            
+            return True
+        
+        # Clasificar documentos
+        documentos_credito = []
+        documentos_contado = []
+        for doc in documentos:
+            if es_factura_credito(doc):
+                documentos_credito.append(doc)
+            else:
+                documentos_contado.append(doc)
+        
+        # Obtener CUFEs de crédito que tienen acuses
+        cufes_credito = [doc.cufe for doc in documentos_credito]
+        eventos_credito = EventoApidianEnviado.objects.filter(
+            session=session,
+            cufe__in=cufes_credito
+        ).values_list('cufe', flat=True).distinct()
+        
+        return Response({
+            'total_documentos': documentos.count(),
+            'documentos_credito': len(documentos_credito),
+            'documentos_contado': len(documentos_contado),
+            'credito_con_acuses': eventos_credito.count(),
+            'credito_sin_acuses': len(documentos_credito) - eventos_credito.count()
         })
     
     @action(detail=True, methods=['get'])
@@ -708,7 +1174,7 @@ class ScrapingSessionViewSet(viewsets.ModelViewSet):
         print(f"📧 [SEND_EMAIL] Request data: {request.data}")
         
         from django.core.mail import EmailMessage
-        from django.conf import settings
+        # settings ya está importado arriba
         from django.utils import timezone
         from datetime import timedelta
         import zipfile

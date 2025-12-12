@@ -227,6 +227,11 @@ class ScrapingSessionSerializer(serializers.ModelSerializer):
                 traceback.print_exc()
                 raise serializers.ValidationError(f'Error al buscar gap: {str(e)}')
         
+        # Guardar la API Key si está disponible
+        if hasattr(request, 'cliente_api') and request.cliente_api:
+            attrs['cliente_api'] = request.cliente_api
+            print(f"✅ [SERIALIZER] API Key guardada: ID={request.cliente_api.id}")
+        
         print("=" * 80)
         return attrs
 
