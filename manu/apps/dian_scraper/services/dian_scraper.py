@@ -162,89 +162,115 @@ class DianScraperService:
             print(f"📥 Descargando {num_rows} archivos secuencialmente...")
             
             for index in range(num_rows):
-                try:
-                    # Re-obtener las filas y el botón JUSTO ANTES de interactuar
-                    # Esto evita el error "Element is not attached to the DOM"
-                    rows_current = await self.page.query_selector_all("table#tableDocuments tbody tr")
-                    
-                    if index >= len(rows_current):
-                        print(f"⚠️ [{index+1}/{num_rows}] Fila {index} ya no existe en el DOM, saltando...")
-                        continue
-                    
-                    row = rows_current[index]
-                    button = await row.query_selector("button")
-                    
-                    if not button:
-                        print(f"⚠️ [{index+1}/{num_rows}] Botón no encontrado en fila {index}, saltando...")
-                        continue
-                    
-                    # Esperar a que el botón sea visible y clickeable
-                    # Usar un timeout más corto y manejar el error si el elemento se desvincula
+                max_reintentos = 3
+                descarga_exitosa = False
+                
+                for intento in range(max_reintentos):
                     try:
-                        await button.wait_for_element_state("visible", timeout=3000)
-                    except Exception as wait_error:
-                        # Si el elemento se desvinculó, intentar re-obtenerlo una vez más
-                        print(f"⚠️ [{index+1}/{num_rows}] Elemento desvinculado, reintentando...")
+                        # Pequeña espera antes de re-obtener filas para dar tiempo a que el DOM se estabilice
+                        if intento > 0:
+                            await asyncio.sleep(0.3)  # Esperar un poco más en reintentos
+                        
+                        # Re-obtener las filas y el botón JUSTO ANTES de interactuar
+                        # Esto evita el error "Element is not attached to the DOM"
                         rows_current = await self.page.query_selector_all("table#tableDocuments tbody tr")
+                        
                         if index >= len(rows_current):
-                            print(f"⚠️ [{index+1}/{num_rows}] Fila {index} ya no existe después del reintento, saltando...")
-                            continue
+                            if intento < max_reintentos - 1:
+                                print(f"⚠️ [{index+1}/{num_rows}] Intento {intento+1}/{max_reintentos}: Fila {index} no existe, reintentando...")
+                                continue
+                            else:
+                                print(f"⚠️ [{index+1}/{num_rows}] Fila {index} ya no existe después de {max_reintentos} intentos, saltando...")
+                                break
+                        
                         row = rows_current[index]
                         button = await row.query_selector("button")
+                        
                         if not button:
-                            print(f"⚠️ [{index+1}/{num_rows}] Botón no encontrado después del reintento, saltando...")
-                            continue
-                        await button.wait_for_element_state("visible", timeout=3000)
+                            if intento < max_reintentos - 1:
+                                print(f"⚠️ [{index+1}/{num_rows}] Intento {intento+1}/{max_reintentos}: Botón no encontrado en fila {index}, reintentando...")
+                                continue
+                            else:
+                                print(f"⚠️ [{index+1}/{num_rows}] Botón no encontrado después de {max_reintentos} intentos, saltando...")
+                                break
+                        
+                        # Esperar a que el botón sea visible y clickeable
+                        # Usar un timeout más corto y manejar el error si el elemento se desvincula
+                        try:
+                            await button.wait_for_element_state("visible", timeout=3000)
+                        except Exception as wait_error:
+                            # Si el elemento se desvinculó, intentar re-obtenerlo
+                            if intento < max_reintentos - 1:
+                                print(f"⚠️ [{index+1}/{num_rows}] Intento {intento+1}/{max_reintentos}: Elemento desvinculado, reintentando...")
+                                continue
+                            else:
+                                print(f"⚠️ [{index+1}/{num_rows}] Elemento desvinculado después de {max_reintentos} intentos, saltando...")
+                                break
                     
-                    # Registrar el evento de descarga ANTES del click
-                    async with self.page.expect_download(timeout=30_000) as download_info:
-                        # Hacer click y esperar la descarga
-                        await button.click()
-                    
-                    # Obtener el objeto de descarga
-                    download = await download_info.value
-                    
-                    # Generar nombre único basado en el índice y contador
-                    original_filename = download.suggested_filename
-                    download_counter[0] += 1
-                    unique_id = download_counter[0]
-                    
-                    # Usar timestamp + contador para garantizar unicidad
-                    timestamp_ms = int(time.time() * 1000000)  # Microsegundos
-                    base_name = original_filename.replace('.zip', '')
-                    # Formato: p{page}_i{index}_{timestamp}_{counter}_{original}.zip
-                    unique_filename = f"p{current_page:02d}_i{index:03d}_{timestamp_ms}_{unique_id:04d}_{base_name}.zip"
-                    file_path = self.download_dir / unique_filename
-                    
-                    # Verificar si ya existe (muy improbable pero por seguridad)
-                    counter = 1
-                    while file_path.exists():
-                        unique_filename = f"p{current_page:02d}_i{index:03d}_{timestamp_ms}_{unique_id:04d}_{counter}_{base_name}.zip"
+                        # Registrar el evento de descarga ANTES del click
+                        async with self.page.expect_download(timeout=30_000) as download_info:
+                            # Hacer click y esperar la descarga
+                            await button.click()
+                        
+                        # Obtener el objeto de descarga
+                        download = await download_info.value
+                        
+                        # Generar nombre único basado en el índice y contador
+                        original_filename = download.suggested_filename
+                        download_counter[0] += 1
+                        unique_id = download_counter[0]
+                        
+                        # Usar timestamp + contador para garantizar unicidad
+                        timestamp_ms = int(time.time() * 1000000)  # Microsegundos
+                        base_name = original_filename.replace('.zip', '')
+                        # Formato: p{page}_i{index}_{timestamp}_{counter}_{original}.zip
+                        unique_filename = f"p{current_page:02d}_i{index:03d}_{timestamp_ms}_{unique_id:04d}_{base_name}.zip"
                         file_path = self.download_dir / unique_filename
-                        counter += 1
+                        
+                        # Verificar si ya existe (muy improbable pero por seguridad)
+                        counter = 1
+                        while file_path.exists():
+                            unique_filename = f"p{current_page:02d}_i{index:03d}_{timestamp_ms}_{unique_id:04d}_{counter}_{base_name}.zip"
+                            file_path = self.download_dir / unique_filename
+                            counter += 1
+                        
+                        # Guardar el archivo
+                        await download.save_as(file_path)
+                        
+                        # Verificar que el archivo se guardó correctamente
+                        if file_path.exists():
+                            file_size = file_path.stat().st_size
+                            print(f"⬇️ [{index+1}/{num_rows}] Archivo descargado: {original_filename} -> {unique_filename} ({file_size} bytes)")
+                            total_documents += 1
+                            descarga_exitosa = True
+                            break  # Salir del bucle de reintentos, descarga exitosa
+                        else:
+                            print(f"⚠️ [{index+1}/{num_rows}] ERROR: Archivo no se guardó: {unique_filename}")
+                            if intento < max_reintentos - 1:
+                                print(f"⚠️ [{index+1}/{num_rows}] Reintentando descarga...")
+                                continue
+                            else:
+                                break
                     
-                    # Guardar el archivo
-                    await download.save_as(file_path)
-                    
-                    # Verificar que el archivo se guardó correctamente
-                    if file_path.exists():
-                        file_size = file_path.stat().st_size
-                        print(f"⬇️ [{index+1}/{num_rows}] Archivo descargado: {original_filename} -> {unique_filename} ({file_size} bytes)")
-                        total_documents += 1
-                    else:
-                        print(f"⚠️ [{index+1}/{num_rows}] ERROR: Archivo no se guardó: {unique_filename}")
-                    
-                    # Pequeña pausa entre descargas para asegurar que cada una se complete
-                    # y dar tiempo a que el DOM se estabilice
-                    await asyncio.sleep(1.0)
-                    
-                except Exception as exc:
-                    print(f"⚠️ [{index+1}/{num_rows}] Error descargando archivo: {exc}")
-                    import traceback
-                    traceback.print_exc()
-                    # Pequeña pausa antes de continuar con el siguiente archivo
+                    except Exception as exc:
+                        if intento < max_reintentos - 1:
+                            print(f"⚠️ [{index+1}/{num_rows}] Intento {intento+1}/{max_reintentos} falló: {exc}, reintentando...")
+                            await asyncio.sleep(0.3)  # Pequeña pausa antes de reintentar
+                            continue
+                        else:
+                            print(f"⚠️ [{index+1}/{num_rows}] Error descargando archivo después de {max_reintentos} intentos: {exc}")
+                            import traceback
+                            traceback.print_exc()
+                            break
+                
+                # Si la descarga fue exitosa, hacer una pausa más corta
+                # Si falló después de todos los reintentos, pausa más larga
+                if descarga_exitosa:
+                    # Pausa más corta cuando la descarga fue exitosa
                     await asyncio.sleep(0.5)
-                    continue
+                else:
+                    # Pausa más larga cuando falló para dar más tiempo al DOM
+                    await asyncio.sleep(0.8)
 
             next_button = await self.page.query_selector("#tableDocuments_next")
             if not next_button:
