@@ -15,18 +15,22 @@ Estas cuentas están mencionadas en el prompt pero **NO EXISTEN** en el modelo P
 
 | Código | Descripción en Prompt | Observación |
 |--------|----------------------|-------------|
-| **2001** | Cuenta base (rango 152001-152098) | ❌ ERROR: Debería ser **1520**, no 2001 |
-| **4100** | Construcción | ⚠️ Este es un código **CIUU**, no una cuenta PUC |
-| **4651** | Ferreterías | ⚠️ Este es un código **CIUU**, no una cuenta PUC |
-| **5420** | Arrendamientos (Oficinas, locales, vehículos) | ❌ **NO EXISTE** en el PUC |
-| **5425** | Seguros (Vida, salud, vehículos, inmuebles) | ❌ **NO EXISTE** en el PUC |
-| **5475** | Vigilancia/seguridad | ❌ **NO EXISTE** en el PUC |
-| **5480** | Aseo/limpieza | ❌ **NO EXISTE** en el PUC |
-| **5505** | Publicidad | ❌ **NO EXISTE** en el PUC |
-| **5611** | Restaurantes | ⚠️ Este es un código **CIUU**, no una cuenta PUC |
-| **6201** | Servicios | ⚠️ Este es un código **CIUU**, no una cuenta PUC |
+| **2001** | Cuenta base (rango 152001-152098) | ❌ ERROR TIPOGRÁFICO: Debería ser **1520**, no 2001 |
+| **4100** | Construcción | ✅ **CORRECTO** - Es código **CIUU** usado para contexto, NO es cuenta PUC |
+| **4651** | Ferreterías | ✅ **CORRECTO** - Es código **CIUU** usado para contexto, NO es cuenta PUC |
+| **5420** | Arrendamientos (Oficinas, locales, vehículos) | ❌ **NO EXISTE** en el PUC - Buscar cuenta correcta |
+| **5425** | Seguros (Vida, salud, vehículos, inmuebles) | ❌ **NO EXISTE** en el PUC - Buscar cuenta correcta |
+| **5475** | Vigilancia/seguridad | ❌ **NO EXISTE** en el PUC - Buscar cuenta correcta |
+| **5480** | Aseo/limpieza | ❌ **NO EXISTE** en el PUC - Buscar cuenta correcta |
+| **5505** | Publicidad | ❌ **NO EXISTE** en el PUC - Buscar cuenta correcta |
+| **5611** | Restaurantes | ✅ **CORRECTO** - Es código **CIUU** usado para contexto, NO es cuenta PUC |
+| **6201** | Servicios | ✅ **CORRECTO** - Es código **CIUU** usado para contexto, NO es cuenta PUC |
 
-**⚠️ NOTA:** Los códigos 4100, 4651, 5611, 6201 son códigos **CIUU** (actividades económicas), no cuentas PUC. No deberían estar en el prompt como cuentas PUC.
+**✅ ACLARACIÓN:** Los códigos 4100, 4651, 5611, 6201 son códigos **CIUU** (Clasificación Industrial Internacional Uniforme) que el prompt usa para **entender el contexto/giro de la empresa**. NO son cuentas PUC y NO deben ser validadas como tal. El prompt los usa correctamente en ejemplos como:
+- "Empresa CIUU 5611 (Restaurantes) compra..."
+- "Empresa CIUU 4100 (Construcción) compra..."
+
+Estos códigos CIUU ayudan al LLM a entender el giro de la empresa y clasificar correctamente según el contexto.
 
 ---
 
@@ -108,11 +112,11 @@ Estas cuentas existen y son correctas, solo tienen variaciones en la nomenclatur
 
 ### 🔴 CRÍTICO - Corregir inmediatamente:
 
-1. **Eliminar códigos CIUU del prompt** (4100, 4651, 5611, 6201)
-2. **Corregir cuenta 5205** - Buscar la cuenta correcta para "Servicios públicos"
-3. **Corregir cuentas 530505-530525** - Buscar las cuentas correctas para honorarios profesionales
-4. **Corregir cuenta 6135** - Buscar la cuenta correcta para "Costo de ventas"
-5. **Corregir cuentas 110510 y 110515** - Verificar descripciones correctas
+1. ✅ **NO eliminar códigos CIUU** - Están correctamente usados para contexto (4100, 4651, 5611, 6201 son CIUU, no PUC)
+2. **Corregir cuenta 5205** - Buscar la cuenta correcta para "Servicios públicos" (actualmente dice "GASTOS DE PERSONAL")
+3. **Corregir cuentas 530505-530525** - Buscar las cuentas correctas para honorarios profesionales (actualmente tienen descripciones incorrectas)
+4. **Corregir cuenta 6135** - Buscar la cuenta correcta para "Costo de ventas" (actualmente dice "COMERCIO AL POR MAYOR Y AL POR MENOR")
+5. **Corregir cuentas 110510 y 110515** - Verificar descripciones correctas (actualmente dicen "CAJAS MENORES" y "MONEDA EXTRANJERA")
 
 ### ⚠️ MEDIO - Revisar y corregir:
 
