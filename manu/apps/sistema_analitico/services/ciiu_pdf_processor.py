@@ -345,7 +345,27 @@ Responde SOLO con JSON válido (array de objetos, uno por código)."""
             }
             
             try:
+                # Log del payload antes de enviar (solo tamaño y estructura, no el contenido completo)
+                logger.info(f"📤 Enviando petición a DeepSeek (intento {intento + 1}/{max_retries})")
+                logger.info(f"   - Modelo: {payload.get('model')}")
+                logger.info(f"   - Max tokens: {payload.get('max_tokens')}")
+                logger.info(f"   - Tamaño del system prompt: {len(payload['messages'][0]['content'])} caracteres")
+                logger.info(f"   - Tamaño del user prompt: {len(payload['messages'][1]['content'])} caracteres")
+                
                 response = requests.post(self.base_url, json=payload, headers=headers, timeout=90)
+                
+                # Si hay error, capturar y mostrar el mensaje de DeepSeek
+                if response.status_code != 200:
+                    error_msg = f"Status {response.status_code}: {response.text[:500]}"
+                    logger.error(f"❌ Error en respuesta de DeepSeek: {error_msg}")
+                    try:
+                        error_json = response.json()
+                        if 'error' in error_json:
+                            error_detail = error_json['error']
+                            logger.error(f"   Detalle del error: {error_detail}")
+                    except:
+                        pass
+                
                 response.raise_for_status()
                 
                 # Éxito: trackear petición exitosa (como el clasificador)
