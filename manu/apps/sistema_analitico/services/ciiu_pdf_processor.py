@@ -201,40 +201,29 @@ class CIIUPDFProcessor:
         except Exception as e:
             logger.error(f"   ❌ Error guardando respuesta cruda: {e}")
     
-    def procesar_lote_con_deepseek(self, codigos_lote: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _calcular_tamanio_prompt(self, codigos_lote: List[Dict[str, Any]], system_prompt: str) -> int:
         """
-        Procesa un lote de códigos CIUU con DeepSeek.
-        Retorna lista de diccionarios con información estructurada.
+        Calcula el tamaño aproximado del prompt que se enviará a DeepSeek.
+        Retorna el tamaño en caracteres.
         """
-        # Construir prompt con todos los códigos del lote
         prompt_codigos = ""
         for codigo_info in codigos_lote:
-            # Asegurar que enviamos TODO el texto completo, incluyendo "Esta clase incluye:" y "Esta clase excluye:"
-            texto_completo = codigo_info['texto_completo']
-            
-            # Truncamiento inteligente: NO cortar en medio de secciones importantes
-            # Límite más generoso: 5000 chars por código (vs 3000 anterior)
-            # Priorizar mantener las secciones "incluye" y "excluye" COMPLETAS
+            texto_completo = codigo_info.get('texto_completo', '')
+            # Aplicar el mismo truncamiento que se usa en procesar_lote_con_deepseek
             if len(texto_completo) > 5000:
-                # Buscar "Esta clase excluye:" para asegurar que esté completo
                 idx_excluye = texto_completo.find('Esta clase excluye:')
                 if idx_excluye > 0:
-                    # Buscar el final de la sección excluye (hasta el siguiente código de 4 dígitos o fin)
                     siguiente_codigo = re.search(r'\n(\d{4})\s+', texto_completo[idx_excluye + 100:])
                     if siguiente_codigo:
-                        # Cortar justo antes del siguiente código
                         fin_excluye = idx_excluye + 100 + siguiente_codigo.start()
                         texto_completo = texto_completo[:fin_excluye]
                     else:
-                        # Si no hay siguiente código, tomar hasta 2000 chars después de "excluye:"
                         texto_completo = texto_completo[:idx_excluye + 2000]
                 else:
-                    # Si no tiene "excluye:", buscar "incluye:" y tomar hasta 4000 chars después
                     idx_incluye = texto_completo.find('Esta clase incluye:')
                     if idx_incluye > 0:
                         texto_completo = texto_completo[:idx_incluye + 4000]
                     else:
-                        # Fallback: truncar a 5000 chars
                         texto_completo = texto_completo[:5000]
             
             prompt_codigos += f"""
@@ -246,6 +235,74 @@ TEXTO COMPLETO (incluye secciones "Esta clase incluye:" y "Esta clase excluye:")
 ---
 """
         
+        user_prompt = f"""Extrae la información estructurada de estos códigos CIUU:
+
+{prompt_codigos}
+
+Responde SOLO con JSON válido (array de objetos, uno por código)."""
+        
+        # Tamaño total aproximado (system + user)
+        return len(system_prompt) + len(user_prompt)
+    
+    def _dividir_lote_inteligente(self, codigos_lote: List[Dict[str, Any]], system_prompt: str, limite_caracteres: int = 80000) -> List[List[Dict[str, Any]]]:
+        """
+        Divide un lote de códigos en sub-lotes más pequeños si el tamaño total excede el límite.
+        Retorna lista de sub-lotes.
+        """
+        if not codigos_lote:
+            return []
+        
+        # Si el lote es pequeño, verificar si cabe
+        tamanio_actual = self._calcular_tamanio_prompt(codigos_lote, system_prompt)
+        
+        if tamanio_actual <= limite_caracteres:
+            # Cabe todo, retornar como está
+            return [codigos_lote]
+        
+        # No cabe, dividir en sub-lotes
+        logger.warning(f"⚠️  El lote de {len(codigos_lote)} códigos es muy grande ({tamanio_actual:,} caracteres). Dividiendo...")
+        
+        sub_lotes = []
+        lote_actual = []
+        tamanio_lote_actual = len(system_prompt)  # Empezar con el system prompt
+        
+        for codigo_info in codigos_lote:
+            # Calcular tamaño aproximado de este código
+            texto_completo = codigo_info.get('texto_completo', '')
+            if len(texto_completo) > 5000:
+                texto_completo = texto_completo[:5000]  # Aproximación
+            
+            tamanio_codigo = len(f"""
+CÓDIGO CIUU: {codigo_info['codigo']}
+DESCRIPCIÓN: {codigo_info['descripcion']}
+TEXTO COMPLETO (incluye secciones "Esta clase incluye:" y "Esta clase excluye:"):
+{texto_completo}
+
+---
+""")
+            
+            # Si agregar este código excedería el límite, guardar el lote actual y empezar uno nuevo
+            if lote_actual and (tamanio_lote_actual + tamanio_codigo) > limite_caracteres:
+                sub_lotes.append(lote_actual)
+                lote_actual = [codigo_info]
+                tamanio_lote_actual = len(system_prompt) + tamanio_codigo
+            else:
+                lote_actual.append(codigo_info)
+                tamanio_lote_actual += tamanio_codigo
+        
+        # Agregar el último lote si tiene elementos
+        if lote_actual:
+            sub_lotes.append(lote_actual)
+        
+        logger.info(f"   📦 Lote dividido en {len(sub_lotes)} sub-lotes: {[len(sl) for sl in sub_lotes]}")
+        return sub_lotes
+    
+    def procesar_lote_con_deepseek(self, codigos_lote: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Procesa un lote de códigos CIUU con DeepSeek.
+        Si el lote es muy grande, lo divide automáticamente en sub-lotes más pequeños.
+        Retorna lista de diccionarios con información estructurada.
+        """
         system_prompt = """Eres un experto en clasificación de actividades económicas CIIU.
 Tu tarea es extraer información estructurada de códigos CIUU del PDF.
 
@@ -296,7 +353,68 @@ Responde SOLO con JSON válido, un objeto por código CIUU:
 }
 
 Si hay múltiples códigos, retorna un array de objetos JSON."""
+        
+        # Verificar si el lote necesita dividirse
+        sub_lotes = self._dividir_lote_inteligente(codigos_lote, system_prompt, limite_caracteres=80000)
+        
+        # Si se dividió, procesar cada sub-lote por separado
+        if len(sub_lotes) > 1:
+            logger.info(f"📦 Procesando {len(codigos_lote)} códigos divididos en {len(sub_lotes)} sub-lotes...")
+            todos_los_resultados = []
+            for i, sub_lote in enumerate(sub_lotes, 1):
+                logger.info(f"   🔄 Procesando sub-lote {i}/{len(sub_lotes)} ({len(sub_lote)} códigos)...")
+                resultados_sub_lote = self._procesar_lote_simple(sub_lote, system_prompt)
+                todos_los_resultados.extend(resultados_sub_lote)
+            return todos_los_resultados
+        else:
+            # No se dividió, procesar normalmente
+            return self._procesar_lote_simple(codigos_lote, system_prompt)
+    
+    def _procesar_lote_simple(self, codigos_lote: List[Dict[str, Any]], system_prompt: str) -> List[Dict[str, Any]]:
+        """
+        Procesa un lote simple de códigos CIUU con DeepSeek (sin división).
+        Retorna lista de diccionarios con información estructurada.
+        """
+        # Construir prompt con todos los códigos del lote
+        prompt_codigos = ""
+        for codigo_info in codigos_lote:
+            # Asegurar que enviamos TODO el texto completo, incluyendo "Esta clase incluye:" y "Esta clase excluye:"
+            texto_completo = codigo_info['texto_completo']
+            
+            # Truncamiento inteligente: NO cortar en medio de secciones importantes
+            # Límite más generoso: 5000 chars por código (vs 3000 anterior)
+            # Priorizar mantener las secciones "incluye" y "excluye" COMPLETAS
+            if len(texto_completo) > 5000:
+                # Buscar "Esta clase excluye:" para asegurar que esté completo
+                idx_excluye = texto_completo.find('Esta clase excluye:')
+                if idx_excluye > 0:
+                    # Buscar el final de la sección excluye (hasta el siguiente código de 4 dígitos o fin)
+                    siguiente_codigo = re.search(r'\n(\d{4})\s+', texto_completo[idx_excluye + 100:])
+                    if siguiente_codigo:
+                        # Cortar justo antes del siguiente código
+                        fin_excluye = idx_excluye + 100 + siguiente_codigo.start()
+                        texto_completo = texto_completo[:fin_excluye]
+                    else:
+                        # Si no hay siguiente código, tomar hasta 2000 chars después de "excluye:"
+                        texto_completo = texto_completo[:idx_excluye + 2000]
+                else:
+                    # Si no tiene "excluye:", buscar "incluye:" y tomar hasta 4000 chars después
+                    idx_incluye = texto_completo.find('Esta clase incluye:')
+                    if idx_incluye > 0:
+                        texto_completo = texto_completo[:idx_incluye + 4000]
+                    else:
+                        # Fallback: truncar a 5000 chars
+                        texto_completo = texto_completo[:5000]
+            
+            prompt_codigos += f"""
+CÓDIGO CIUU: {codigo_info['codigo']}
+DESCRIPCIÓN: {codigo_info['descripcion']}
+TEXTO COMPLETO (incluye secciones "Esta clase incluye:" y "Esta clase excluye:"):
+{texto_completo}
 
+---
+"""
+        
         user_prompt = f"""Extrae la información estructurada de estos códigos CIUU:
 
 {prompt_codigos}
@@ -341,7 +459,7 @@ Responde SOLO con JSON válido (array de objetos, uno por código)."""
                     {"role": "user", "content": user_prompt}
                 ],
                 "temperature": 0.1,  # Baja temperatura para respuestas más consistentes
-                "max_tokens": 8192  # Máximo permitido por DeepSeek (rango válido: [1, 8192])
+                "max_tokens": 6000  # Valor original - el lote se divide dinámicamente si es muy grande
             }
             
             try:
