@@ -553,12 +553,12 @@ Responde SOLO con JSON válido (array de objetos, uno por código)."""
                     contenido = contenido[:-3]
                 contenido = contenido.strip()
                 
-                # Intentar parsear JSON con manejo mejorado de errores
+                # Intentar parsear JSON - si falla, dividir y procesar código por código
                 try:
                     datos_estructurados = json.loads(contenido)
                 except json.JSONDecodeError as json_err:
                     # Log detallado del error
-                    logger.error(f"❌ Error parseando JSON (intento {intento + 1}/{max_retries}): {json_err}")
+                    logger.error(f"❌ Error parseando JSON: {json_err}")
                     logger.error(f"   Posición del error: línea {json_err.lineno}, columna {json_err.colno}")
                     logger.error(f"   Longitud del contenido: {len(contenido)} caracteres")
                     
@@ -569,44 +569,12 @@ Responde SOLO con JSON válido (array de objetos, uno por código)."""
                         contexto = contenido[inicio:fin]
                         logger.error(f"   Contexto del error (pos {json_err.pos}): ...{contexto}...")
                     
-                    # Intentar reparar JSON truncado (si termina abruptamente)
-                    contenido_reparado = self._intentar_reparar_json_truncado(contenido)
-                    if contenido_reparado != contenido:
-                        logger.warning("   🔧 Intentando reparar JSON truncado...")
-                        try:
-                            datos_estructurados = json.loads(contenido_reparado)
-                            logger.info("   ✅ JSON reparado exitosamente")
-                        except json.JSONDecodeError as err2:
-                            logger.error(f"   ❌ No se pudo reparar: {err2}")
-                            # Guardar respuesta cruda para debugging
-                            self._guardar_respuesta_cruda(contenido_original, json_err, intento)
-                            raise json_err  # Re-lanzar el error original
-                    else:
-                        # Guardar respuesta cruda para debugging
-                        self._guardar_respuesta_cruda(contenido_original, json_err, intento)
-                        raise json_err
-                
-                # Si es un solo objeto, convertirlo a lista
-                if isinstance(datos_estructurados, dict):
-                    datos_estructurados = [datos_estructurados]
-                
-                logger.info(f"✅ Procesados {len(datos_estructurados)} códigos con DeepSeek")
-                return datos_estructurados  # Retornar aquí si fue exitoso
-                
-            except json.JSONDecodeError as e:
-                last_error = e
-                logger.error(f"Error parseando JSON de DeepSeek: {e}")
-                if intento < max_retries - 1:
-                    wait_time = retry_delay * (2 ** intento)
-                    time.sleep(wait_time)
-                else:
-                    logger.error(f"Error parseando JSON después de {max_retries} intentos")
-                    if api_key_usada:
-                        api_key_usada.incrementar_peticion(exitosa=False, es_rate_limit=False)
+                    # Guardar respuesta cruda para debugging
+                    self._guardar_respuesta_cruda(contenido_original, json_err, intento)
                     
                     # Si el lote tiene más de 1 código, dividir y procesar uno a uno
                     if len(codigos_lote) > 1:
-                        logger.warning(f"⚠️  El lote de {len(codigos_lote)} códigos falló. Dividiendo en códigos individuales...")
+                        logger.warning(f"⚠️  El lote de {len(codigos_lote)} códigos falló al parsear JSON. Dividiendo y procesando código por código...")
                         todos_los_resultados = []
                         for codigo_info in codigos_lote:
                             logger.info(f"   🔄 Procesando código individual: {codigo_info['codigo']}")
@@ -623,9 +591,26 @@ Responde SOLO con JSON válido (array de objetos, uno por código)."""
                         logger.info(f"✅ Procesados {len(todos_los_resultados)} códigos individualmente (de {len(codigos_lote)} originales)")
                         return todos_los_resultados
                     else:
-                        # Si ya es un solo código y falló, retornar lista vacía
-                        logger.error(f"❌ No se pudo procesar el código {codigos_lote[0]['codigo']} después de {max_retries} intentos")
-                        return []
+                        # Si ya es un solo código y falló, lanzar el error para que se maneje en el except externo
+                        raise json_err
+                
+                # Si es un solo objeto, convertirlo a lista
+                if isinstance(datos_estructurados, dict):
+                    datos_estructurados = [datos_estructurados]
+                
+                logger.info(f"✅ Procesados {len(datos_estructurados)} códigos con DeepSeek")
+                return datos_estructurados  # Retornar aquí si fue exitoso
+                
+            except json.JSONDecodeError as e:
+                # Este except solo se ejecuta si ya es un solo código y falló
+                # (porque si tiene más de 1 código, ya se dividió y procesó en el except interno)
+                last_error = e
+                logger.error(f"❌ Error parseando JSON de DeepSeek para código individual: {e}")
+                if api_key_usada:
+                    api_key_usada.incrementar_peticion(exitosa=False, es_rate_limit=False)
+                # Si ya es un solo código y falló, retornar lista vacía
+                logger.error(f"❌ No se pudo procesar el código {codigos_lote[0]['codigo']}")
+                return []
                 
             except requests.exceptions.HTTPError as e:
                 last_error = e
