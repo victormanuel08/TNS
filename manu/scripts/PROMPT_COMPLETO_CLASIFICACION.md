@@ -216,9 +216,348 @@ El prompt usa códigos CIUU (4100, 4651, 5611, 6201, 5630, 4711, 4771, 1071) par
 
 ---
 
+## 📋 ANÁLISIS DETALLADO DE ERRORES
+
+### 1. ❌ **5205** - Servicios públicos (ERROR CRÍTICO)
+
+**Estado actual en el prompt:**
+```
+- **Servicios públicos** → 5205 (Energía, agua, gas, internet, telefonía)
+```
+
+**Estado real en el modelo PUC:**
+- **5205**: "GASTOS DE PERSONAL" (nivel 4)
+- **Problema**: El prompt asigna servicios públicos a una cuenta de gastos de personal, lo cual es completamente incorrecto.
+
+**Cuentas correctas encontradas en el PUC:**
+- **5235**: "SERVICIOS" (nivel 4) - Cuenta principal para servicios
+- **523525**: "ACUEDUCTO Y ALCANTARILLADO" (nivel 6)
+- **523530**: "ENERGIA ELECTRICA" (nivel 6)
+- **523535**: "TELEFONO" (nivel 6)
+- **523540**: "CORREO, PORTES Y TELEGRAMAS" (nivel 6)
+
+**Cómo debe quedar:**
+```
+- **Servicios públicos** → 5235 (Servicios - cuenta principal) o específicamente:
+  - **Acueducto y alcantarillado** → 523525
+  - **Energía eléctrica** → 523530
+  - **Teléfono** → 523535
+  - **Correo, portes y telegramas** → 523540
+```
+
+**Por qué:** La cuenta 5205 es para "GASTOS DE PERSONAL", no para servicios públicos. Los servicios públicos están en la cuenta 5235 y sus subcuentas específicas (523525, 523530, 523535, 523540).
+
+---
+
+### 2. ❌ **530505-530525** - Honorarios profesionales (ERROR CRÍTICO)
+
+**Estado actual en el prompt:**
+```
+- **Honorarios directores** → 530505 | **Auditores** → 530510 | **Abogados** → 530515 | **Contadores** → 530520 | **Otros** → 530525
+```
+
+**Estado real en el modelo PUC:**
+- **530505**: "GASTOS BANCARIOS" (nivel 6)
+- **530510**: "REAJUSTE MONETARIO - UPAC" (nivel 6)
+- **530515**: "COMISIONES" (nivel 6)
+- **530520**: "INTERESES" (nivel 6)
+- **530525**: "DIFERENCIA EN CAMBIO" (nivel 6)
+- **Problema**: Todas estas cuentas tienen descripciones completamente diferentes a honorarios profesionales.
+
+**Cuentas correctas encontradas en el PUC:**
+- **5210**: "HONORARIOS" (nivel 4) - Cuenta principal para honorarios
+- **521005**: "JUNTA DIRECTIVA" (nivel 6)
+- **521010**: "REVISORIA FISCAL" (nivel 6)
+- **521015**: "AUDITORIA EXTERNA" (nivel 6)
+- **521020**: "AVALUOS" (nivel 6)
+- **521025**: "ASESORIA JURIDICA" (nivel 6) - Para abogados
+- **521035**: "ASESORIA TECNICA" (nivel 6)
+- **521095**: "OTROS" (nivel 6)
+
+**También existe:**
+- **5110**: "HONORARIOS" (nivel 4) - Otra cuenta de honorarios
+- **511005**: "JUNTA DIRECTIVA" (nivel 6)
+- **511015**: "AUDITORIA EXTERNA" (nivel 6)
+- **511020**: "AVALUOS" (nivel 6)
+- **511025**: "ASESORIA JURIDICA" (nivel 6)
+- **511030**: "ASESORIA FINANCIERA" (nivel 6)
+- **511035**: "ASESORIA TECNICA" (nivel 6)
+- **511095**: "OTROS" (nivel 6)
+
+**Cómo debe quedar:**
+```
+- **Honorarios profesionales** → 5210 (Honorarios - cuenta principal) o específicamente:
+  - **Junta directiva** → 521005
+  - **Revisoría fiscal** → 521010
+  - **Auditoría externa** → 521015 (para auditores)
+  - **Avalúos** → 521020
+  - **Asesoría jurídica** → 521025 (para abogados)
+  - **Asesoría técnica** → 521035
+  - **Asesoría financiera** → 511030 (si existe en 5110xx)
+  - **Otros honorarios** → 521095
+```
+
+**Por qué:** Las cuentas 530505-530525 son para gastos financieros (bancarios, intereses, comisiones, diferencias de cambio), NO para honorarios profesionales. Los honorarios están en las cuentas 5210xx o 5110xx.
+
+---
+
+### 3. ❌ **6135** - Costo de ventas (ERROR CRÍTICO)
+
+**Estado actual en el prompt:**
+```
+- Si el artículo está en el "INCLUYE" pero se CONSUME inmediatamente (no se almacena) → 6135 (Costo de ventas)
+- **Cuenta**: 6135 (4 dígitos - sin subcuentas específicas)
+```
+
+**Estado real en el modelo PUC:**
+- **6135**: "COMERCIO AL POR MAYOR Y AL POR MENOR" (nivel 4)
+- **Problema**: El prompt asigna "Costo de ventas" a una cuenta de actividad económica (comercio).
+
+**Cuenta correcta encontrada en el PUC:**
+- **61**: "COSTO DE VENTAS Y DE PRESTACION DE SERVICIOS" (nivel 2) - Cuenta principal
+- **6105**: "AGRICULTURA, GANADERIA, CAZA Y SILVICULTURA" (nivel 4)
+- **6110**: "PESCA" (nivel 4)
+- **6115**: "EXPLOTACION DE MINAS Y CANTERAS" (nivel 4)
+- **6120**: "INDUSTRIAS MANUFACTURERAS" (nivel 4)
+- **6135**: "COMERCIO AL POR MAYOR Y AL POR MENOR" (nivel 4) - Esta es una subcuenta específica, NO el costo general
+
+**Cómo debe quedar:**
+```
+- Si el artículo está en el "INCLUYE" pero se CONSUME inmediatamente (no se almacena) → 61 (Costo de ventas y de prestación de servicios) o específicamente según actividad:
+  - **Comercio** → 6135 (Comercio al por mayor y al por menor)
+  - **Agricultura** → 6105
+  - **Pesca** → 6110
+  - **Minería** → 6115
+  - **Manufactura** → 6120
+- **Cuenta**: 61 (nivel 2) o subcuentas específicas según actividad económica
+```
+
+**Por qué:** La cuenta 6135 es específica para "COMERCIO AL POR MAYOR Y AL POR MENOR", no es el costo de ventas general. El costo de ventas general es la cuenta 61 (nivel 2), y luego hay subcuentas específicas según la actividad económica.
+
+---
+
+### 4. ⚠️ **110510** y **110515** - Modalidades de pago (ERROR MEDIO)
+
+**Estado actual en el prompt:**
+```
+- **CONTADO TARJETA** → 110510 (Anticipos) o 111005 (Bancos)
+- **CONTADO CHEQUE** → 110515 (Cheques por cobrar)
+```
+
+**Estado real en el modelo PUC:**
+- **110510**: "CAJAS MENORES" (nivel 6)
+- **110515**: "MONEDA EXTRANJERA" (nivel 6)
+- **Problema**: Las descripciones no coinciden con lo que el prompt dice.
+
+**Cuentas correctas encontradas en el PUC (1105xx):**
+- **110505**: "CAJA GENERAL" (nivel 6)
+- **110510**: "CAJAS MENORES" (nivel 6)
+- **110515**: "MONEDA EXTRANJERA" (nivel 6)
+
+**Cómo debe quedar:**
+```
+- **CONTADO TARJETA** → 111005 (Bancos - moneda nacional) o 110510 (Cajas menores) si es efectivo en caja menor
+- **CONTADO CHEQUE** → 111005 (Bancos - moneda nacional) - Los cheques se depositan en bancos, no en "cheques por cobrar"
+```
+
+**Por qué:** 
+- **110510** es "CAJAS MENORES", no "Anticipos". Los anticipos podrían estar en otra cuenta (ej: 1705xx).
+- **110515** es "MONEDA EXTRANJERA", no "Cheques por cobrar". Los cheques se depositan en bancos (111005), no hay una cuenta específica de "cheques por cobrar" en 1105xx.
+
+---
+
+### 5. ❌ **5420, 5425, 5475, 5480, 5505** - Cuentas que NO EXISTEN
+
+#### 5.1. **5420** - Arrendamientos
+
+**Estado actual en el prompt:**
+```
+- **Arrendamientos** → 5420 (Oficinas, locales, vehículos)
+```
+
+**Estado real en el modelo PUC:**
+- **5420**: ❌ NO EXISTE
+
+**Cuenta correcta encontrada en el PUC:**
+- **5220**: "ARRENDAMIENTOS" (nivel 4) - Cuenta principal
+- **415505**: "ARRENDAMIENTOS DE BIENES INMUEBLES" (nivel 6)
+- **615505**: "ARRENDAMIENTOS DE BIENES INMUEBLES" (nivel 6)
+
+**Cómo debe quedar:**
+```
+- **Arrendamientos** → 5220 (Arrendamientos - cuenta principal) o específicamente:
+  - **Arrendamientos de bienes inmuebles** → 415505 o 615505 según contexto
+```
+
+**Por qué:** La cuenta 5420 no existe en el PUC. Los arrendamientos están en la cuenta 5220 (nivel 4).
+
+---
+
+#### 5.2. **5425** - Seguros
+
+**Estado actual en el prompt:**
+```
+- **Seguros** → 5425 (Vida, salud, vehículos, inmuebles)
+```
+
+**Estado real en el modelo PUC:**
+- **5425**: ❌ NO EXISTE
+
+**Cuenta correcta encontrada en el PUC:**
+- **5230**: "SEGUROS" (nivel 4) - Cuenta principal
+- **5130**: "SEGUROS" (nivel 4) - Otra cuenta de seguros
+- **520554**: "SEGUROS" (nivel 6)
+
+**Cómo debe quedar:**
+```
+- **Seguros** → 5230 (Seguros - cuenta principal) o 5130 según contexto
+```
+
+**Por qué:** La cuenta 5425 no existe en el PUC. Los seguros están en la cuenta 5230 (nivel 4).
+
+---
+
+#### 5.3. **5475** - Vigilancia/seguridad
+
+**Estado actual en el prompt:**
+```
+- **Vigilancia/seguridad** → 5475
+```
+
+**Estado real en el modelo PUC:**
+- **5475**: ❌ NO EXISTE
+
+**Cuenta correcta encontrada en el PUC:**
+- **513505**: "ASEO Y VIGILANCIA" (nivel 6)
+- **523505**: "ASEO Y VIGILANCIA" (nivel 6)
+
+**Cómo debe quedar:**
+```
+- **Vigilancia/seguridad** → 513505 o 523505 (Aseo y vigilancia)
+```
+
+**Por qué:** La cuenta 5475 no existe en el PUC. La vigilancia está combinada con aseo en las cuentas 513505 o 523505.
+
+---
+
+#### 5.4. **5480** - Aseo/limpieza
+
+**Estado actual en el prompt:**
+```
+- **Aseo/limpieza** → 5480
+```
+
+**Estado real en el modelo PUC:**
+- **5480**: ❌ NO EXISTE
+
+**Cuenta correcta encontrada en el PUC:**
+- **513505**: "ASEO Y VIGILANCIA" (nivel 6)
+- **523505**: "ASEO Y VIGILANCIA" (nivel 6)
+
+**Cómo debe quedar:**
+```
+- **Aseo/limpieza** → 513505 o 523505 (Aseo y vigilancia)
+```
+
+**Por qué:** La cuenta 5480 no existe en el PUC. El aseo está combinado con vigilancia en las cuentas 513505 o 523505.
+
+---
+
+#### 5.5. **5505** - Publicidad
+
+**Estado actual en el prompt:**
+```
+- **Publicidad** → 5505
+```
+
+**Estado real en el modelo PUC:**
+- **5505**: ❌ NO EXISTE
+
+**Cuenta correcta encontrada en el PUC:**
+- **523560**: "PUBLICIDAD, PROPAGANDA Y PROMOCION" (nivel 6)
+- **415555**: "PUBLICIDAD" (nivel 6)
+- **615555**: "PUBLICIDAD" (nivel 6)
+
+**Cómo debe quedar:**
+```
+- **Publicidad** → 523560 (Publicidad, propaganda y promoción) o 415555/615555 según contexto
+```
+
+**Por qué:** La cuenta 5505 no existe en el PUC. La publicidad está en la cuenta 523560 (nivel 6).
+
+---
+
+### 6. ⚠️ **2001** - Error tipográfico
+
+**Estado actual en el prompt:**
+```
+- **Maquinaria** → 152001 (rango 152001-152098)
+```
+
+**Problema detectado:** En el análisis se encontró referencia a "2001" como cuenta base, pero debería ser "1520".
+
+**Cómo debe quedar:**
+```
+- **Maquinaria** → 152001 (rango 152001-152098) - Cuenta base: 1520 (no 2001)
+```
+
+**Por qué:** Error tipográfico. La cuenta base es 1520, no 2001.
+
+---
+
+## 📝 PROMPT ORIGINAL CON SUGERENCIAS DE CORRECCIÓN
+
+A continuación se muestra el prompt original con las correcciones sugeridas entre paréntesis en cada línea problemática:
+
+```
+### 5. ¿ES SERVICIO? (GASTO)
+**Si es SERVICIO según tipo:**
+- **Reparación locativa** → 515015 (Reparaciones locativas)
+- **Instalación eléctrica** → 515005 (Instalaciones eléctricas)
+- **Honorarios directores** → 530505 | **Auditores** → 530510 | **Abogados** → 530515 | **Contadores** → 530520 | **Otros** → 530525
+  [CORRECCIÓN: → 521005 (Junta directiva) | 521015 (Auditoría externa) | 521025 (Asesoría jurídica) | 521035 (Asesoría técnica) | 521095 (Otros) - Las cuentas 530505-530525 son para gastos financieros, NO honorarios]
+- **Servicios públicos** → 5205 (Energía, agua, gas, internet, telefonía)
+  [CORRECCIÓN: → 5235 (Servicios) o específicamente 523525 (Acueducto), 523530 (Energía), 523535 (Teléfono) - La cuenta 5205 es "GASTOS DE PERSONAL", no servicios públicos]
+- **Arrendamientos** → 5420 (Oficinas, locales, vehículos)
+  [CORRECCIÓN: → 5220 (Arrendamientos) - La cuenta 5420 NO EXISTE]
+- **Seguros** → 5425 (Vida, salud, vehículos, inmuebles)
+  [CORRECCIÓN: → 5230 (Seguros) - La cuenta 5425 NO EXISTE]
+- **Vigilancia/seguridad** → 5475
+  [CORRECCIÓN: → 513505 o 523505 (Aseo y vigilancia) - La cuenta 5475 NO EXISTE]
+- **Aseo/limpieza** → 5480
+  [CORRECCIÓN: → 513505 o 523505 (Aseo y vigilancia) - La cuenta 5480 NO EXISTE]
+- **Publicidad** → 5505
+  [CORRECCIÓN: → 523560 (Publicidad, propaganda y promoción) - La cuenta 5505 NO EXISTE]
+
+### 3. ¿ES PARA CONSUMO INMEDIATO? (COSTO)
+**ANALIZA el CIUU de la empresa:**
+- Si el artículo está en el "INCLUYE" pero se CONSUME inmediatamente (no se almacena) → 6135 (Costo de ventas)
+  [CORRECCIÓN: → 61 (Costo de ventas y de prestación de servicios) o específicamente según actividad (ej: 6135 para comercio) - La cuenta 6135 es específica para "COMERCIO AL POR MAYOR Y AL POR MENOR", no el costo general]
+- Si el artículo NO está en el "INCLUYE" del CIUU → Probablemente 6135 (Costo) o 51xx/54xx/55xx (Gasto)
+  [CORRECCIÓN: → Probablemente 61 (Costo) o 51xx/52xx/53xx (Gasto) - Corregir referencia a 54xx/55xx que no existen]
+- **Cuenta**: 6135 (4 dígitos - sin subcuentas específicas)
+  [CORRECCIÓN: → 61 (nivel 2) con subcuentas específicas según actividad económica]
+
+## CUENTAS POR MODALIDAD PAGO:
+- **CRÉDITO** → 220501 (Proveedores nacionales - rango 220501-220598)
+- **CONTADO EFECTIVO** → 110505 (Caja general)
+- **CONTADO TRANSFERENCIA** → 111005 (Bancos - moneda nacional)
+- **CONTADO TARJETA** → 110510 (Anticipos) o 111005 (Bancos)
+  [CORRECCIÓN: → 111005 (Bancos) o 110510 (Cajas menores) si es efectivo - La cuenta 110510 es "CAJAS MENORES", no "Anticipos"]
+- **CONTADO CHEQUE** → 110515 (Cheques por cobrar)
+  [CORRECCIÓN: → 111005 (Bancos - moneda nacional) - Los cheques se depositan en bancos. La cuenta 110515 es "MONEDA EXTRANJERA", no "Cheques por cobrar"]
+```
+
+---
+
 ## 🎯 CONCLUSIÓN
 
 El prompt está **bien diseñado** en cuanto al uso de códigos CIUU para contexto. Los errores están en:
 - Cuentas PUC inexistentes o con descripciones incorrectas
 - NO en el uso de códigos CIUU (que es correcto)
+
+**Impacto de los errores:**
+- ❌ **CRÍTICO**: Errores en 5205, 530505-530525, 6135 causarían clasificaciones completamente incorrectas
+- ⚠️ **MEDIO**: Errores en 110510, 110515 causarían confusión en modalidades de pago
+- ⚠️ **MEDIO**: Cuentas inexistentes (5420, 5425, 5475, 5480, 5505) causarían errores al intentar clasificar estos conceptos
 
