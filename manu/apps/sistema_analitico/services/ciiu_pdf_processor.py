@@ -603,7 +603,29 @@ Responde SOLO con JSON válido (array de objetos, uno por código)."""
                     logger.error(f"Error parseando JSON después de {max_retries} intentos")
                     if api_key_usada:
                         api_key_usada.incrementar_peticion(exitosa=False, es_rate_limit=False)
-                    return []
+                    
+                    # Si el lote tiene más de 1 código, dividir y procesar uno a uno
+                    if len(codigos_lote) > 1:
+                        logger.warning(f"⚠️  El lote de {len(codigos_lote)} códigos falló. Dividiendo en códigos individuales...")
+                        todos_los_resultados = []
+                        for codigo_info in codigos_lote:
+                            logger.info(f"   🔄 Procesando código individual: {codigo_info['codigo']}")
+                            try:
+                                resultado_individual = self._procesar_lote_simple([codigo_info], system_prompt)
+                                todos_los_resultados.extend(resultado_individual)
+                            except Exception as err_individual:
+                                logger.error(f"   ❌ Error procesando {codigo_info['codigo']} individualmente: {err_individual}")
+                                # Agregar un resultado de error para mantener el tracking
+                                todos_los_resultados.append({
+                                    'codigo': codigo_info['codigo'],
+                                    'error': f"Error al procesar individualmente: {str(err_individual)}"
+                                })
+                        logger.info(f"✅ Procesados {len(todos_los_resultados)} códigos individualmente (de {len(codigos_lote)} originales)")
+                        return todos_los_resultados
+                    else:
+                        # Si ya es un solo código y falló, retornar lista vacía
+                        logger.error(f"❌ No se pudo procesar el código {codigos_lote[0]['codigo']} después de {max_retries} intentos")
+                        return []
                 
             except requests.exceptions.HTTPError as e:
                 last_error = e
