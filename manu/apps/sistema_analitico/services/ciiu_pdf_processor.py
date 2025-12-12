@@ -493,6 +493,22 @@ Responde SOLO con JSON válido (array de objetos, uno por código)."""
                 status_code = e.response.status_code if hasattr(e, 'response') and e.response else None
                 es_rate_limit = (status_code == 429)
                 
+                # Capturar mensaje de error de DeepSeek
+                error_detail = ""
+                if hasattr(e, 'response') and e.response:
+                    try:
+                        error_json = e.response.json()
+                        if 'error' in error_json:
+                            error_obj = error_json['error']
+                            if isinstance(error_obj, dict):
+                                error_detail = f" - {error_obj.get('message', error_obj.get('type', str(error_obj)))}"
+                            else:
+                                error_detail = f" - {error_obj}"
+                        else:
+                            error_detail = f" - {e.response.text[:300]}"
+                    except:
+                        error_detail = f" - {str(e)}"
+                
                 # Trackear petición fallida (como el clasificador)
                 if api_key_usada:
                     api_key_usada.incrementar_peticion(exitosa=False, es_rate_limit=es_rate_limit)
@@ -504,9 +520,20 @@ Responde SOLO con JSON válido (array de objetos, uno por código)."""
                         logger.warning(f"⏳ [RATE_LIMIT] Intento {intento + 1}/{max_retries}: Esperando {wait_time}s antes de reintentar...")
                         time.sleep(wait_time)
                         continue
+                elif status_code == 400:
+                    # Error 400: Bad Request - probablemente el payload es muy grande o inválido
+                    logger.error(f"❌ [HTTP_ERROR] Error 400 Bad Request{error_detail}")
+                    logger.error(f"   Esto generalmente indica que el payload es demasiado grande o tiene formato inválido")
+                    logger.error(f"   Tamaño del user prompt: {len(payload['messages'][1]['content'])} caracteres")
+                    logger.error(f"   Considera reducir el tamaño del lote (actualmente: {len(codigos_lote)} códigos)")
+                    
+                    # No reintentar con el mismo payload si es 400
+                    if api_key_usada:
+                        api_key_usada.incrementar_peticion(exitosa=False, es_rate_limit=False)
+                    raise ValueError(f"Error 400 Bad Request de DeepSeek{error_detail}. El payload puede ser demasiado grande. Intenta procesar menos códigos por lote.")
                 else:
                     # Otro error HTTP, no reintentar
-                    logger.error(f"❌ [HTTP_ERROR] Error {status_code}: {e}")
+                    logger.error(f"❌ [HTTP_ERROR] Error {status_code}{error_detail}")
                     raise
                     
             except requests.exceptions.RequestException as e:
