@@ -20,6 +20,8 @@ class ScrapingSession(models.Model):
     ejecutado_hasta = models.DateField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     documents_downloaded = models.IntegerField(default=0)
+    current_page = models.IntegerField(default=0, help_text='Página actual siendo procesada durante el scraping')
+    last_update = models.DateTimeField(null=True, blank=True, help_text='Última actualización del progreso')
     excel_file = models.FileField(upload_to='dian_exports/', null=True, blank=True)
     json_file = models.FileField(upload_to='dian_exports/', null=True, blank=True)
     zip_file = models.FileField(upload_to='dian_exports/', null=True, blank=True, help_text='ZIP permanente con todos los archivos de la sesión')

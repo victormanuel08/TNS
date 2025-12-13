@@ -26,6 +26,11 @@ class ScrapingSessionSerializer(serializers.ModelSerializer):
     costo_estimado_total_usd = serializers.SerializerMethodField()
     costo_estimado_total_cop = serializers.SerializerMethodField()
     tiempo_total_clasificacion_segundos = serializers.SerializerMethodField()
+    # Campos de progreso en tiempo real
+    tiempo_transcurrido_segundos = serializers.SerializerMethodField()
+    velocidad_archivos_por_segundo = serializers.SerializerMethodField()
+    tipo_display = serializers.SerializerMethodField()
+    rango_fechas = serializers.SerializerMethodField()
 
     class Meta:
         model = ScrapingSession
@@ -140,6 +145,37 @@ class ScrapingSessionSerializer(serializers.ModelSerializer):
             session_dian_id=obj.id
         ).aggregate(total=Sum('tiempo_procesamiento_segundos'))
         return float(resultado['total'] or 0)
+    
+    def get_tiempo_transcurrido_segundos(self, obj):
+        """Tiempo transcurrido desde que inició la sesión en segundos"""
+        from django.utils import timezone
+        if not obj.created_at:
+            return 0
+        tiempo_transcurrido = timezone.now() - obj.created_at
+        return int(tiempo_transcurrido.total_seconds())
+    
+    def get_velocidad_archivos_por_segundo(self, obj):
+        """Velocidad de descarga en archivos por segundo"""
+        tiempo_transcurrido = self.get_tiempo_transcurrido_segundos(obj)
+        if tiempo_transcurrido == 0 or obj.documents_downloaded == 0:
+            return 0.0
+        return round(obj.documents_downloaded / tiempo_transcurrido, 2)
+    
+    def get_tipo_display(self, obj):
+        """Tipo de consulta en formato legible"""
+        tipo_map = {
+            'Received': 'Facturas Recibidas',
+            'Sent': 'Facturas Enviadas'
+        }
+        return tipo_map.get(obj.tipo, obj.tipo)
+    
+    def get_rango_fechas(self, obj):
+        """Rango de fechas en formato legible"""
+        if obj.ejecutado_desde and obj.ejecutado_hasta:
+            return f"{obj.ejecutado_desde.strftime('%d/%m/%Y')} a {obj.ejecutado_hasta.strftime('%d/%m/%Y')}"
+        elif obj.fecha_desde and obj.fecha_hasta:
+            return f"{obj.fecha_desde.strftime('%d/%m/%Y')} a {obj.fecha_hasta.strftime('%d/%m/%Y')}"
+        return "N/A"
 
     def validate(self, attrs):
         print("=" * 80)

@@ -2,6 +2,7 @@ import asyncio
 import time
 from pathlib import Path
 from typing import Optional
+from django.utils import timezone
 
 from django.conf import settings
 from playwright.async_api import (
@@ -144,6 +145,9 @@ class DianScraperService:
 
         while has_next_page:
             print(f"📄 Página {current_page}")
+            
+            # Actualizar página actual en la sesión
+            self._update_session_progress(current_page, total_documents)
 
             await self.page.wait_for_selector("#tableDocuments_wrapper")
             await asyncio.sleep(4)
@@ -242,6 +246,8 @@ class DianScraperService:
                             file_size = file_path.stat().st_size
                             print(f"⬇️ [{index+1}/{num_rows}] Archivo descargado: {original_filename} -> {unique_filename} ({file_size} bytes)")
                             total_documents += 1
+                            # Actualizar progreso después de cada descarga exitosa
+                            self._update_session_progress(current_page, total_documents)
                             descarga_exitosa = True
                             break  # Salir del bucle de reintentos, descarga exitosa
                         else:
@@ -287,7 +293,22 @@ class DianScraperService:
                 await asyncio.sleep(3)
 
         print(f"✅ Descargas completadas: {total_documents} archivos")
+        # Actualizar progreso final
+        self._update_session_progress(current_page, total_documents)
         return total_documents
+    
+    def _update_session_progress(self, current_page: int, documents_downloaded: int):
+        """Actualiza el progreso de la sesión en la base de datos"""
+        try:
+            from .models import ScrapingSession
+            ScrapingSession.objects.filter(id=self.session_id).update(
+                current_page=current_page,
+                documents_downloaded=documents_downloaded,
+                last_update=timezone.now()
+            )
+        except Exception as e:
+            # No fallar el scraping si hay error al actualizar progreso
+            print(f"⚠️ Error actualizando progreso: {e}")
 
     async def _close_browser(self):
         print("🧹 [SCRAPER] Cerrando navegador/contexto")
