@@ -6,15 +6,12 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('dian_scraper', '0008_scrapingsession_cliente_api'),
+        ('dian_scraper', '0009_eventoapidianenviado_cude'),  # Depende de la migración 0009 del servidor
     ]
 
     operations = [
-        migrations.AddField(
-            model_name='eventoapidianenviado',
-            name='cude',
-            field=models.CharField(blank=True, db_index=True, help_text='CUDE del acuse recibido de DIAN (si el evento fue exitoso)', max_length=200, null=True),
-        ),
+        # Nota: El campo 'cude' ya fue agregado en 0009_eventoapidianenviado_cude del servidor
+        # Solo agregamos los campos nuevos de ScrapingSession
         migrations.AddField(
             model_name='scrapingsession',
             name='current_page',
